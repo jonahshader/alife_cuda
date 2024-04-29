@@ -45,7 +45,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/Fluid.cu
         src/systems/Fluid.cuh
         src/screens/FluidTest.cu
-        src/screens/FluidTest.cuh)
+        src/screens/FluidTest.cuh
+)
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)
 target_link_libraries(${PROJECT_NAME} SDL2)

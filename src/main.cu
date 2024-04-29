@@ -95,7 +95,8 @@ int main() {
     game.getResources().window = window;
     game.resize(viewport_width, viewport_height);
     //    game.pushScreen(std::make_shared<MainMenu>(game));
-    game.pushScreen(std::make_shared<FluidTest>(game));
+//    game.pushScreen(std::make_shared<FluidTest>(game));
+    game.pushScreen(std::make_shared<TreeTest>(game));
 
     float time = 0;
     SDL_Event event;

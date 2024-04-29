@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <vector>
+
 #include "systems/Screen.h"
 #include "systems/Game.cuh"
+#include "systems/Trees.cuh"
 #include "graphics/ExtendViewport.h"
 
 class TreeTest : public Screen {
@@ -21,5 +24,7 @@ public:
 private:
     Game& game;
     ExtendViewport vp{720, 720};
+
+    std::vector<TreeNode> tree{};
 
 };
