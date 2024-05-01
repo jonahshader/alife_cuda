@@ -27,7 +27,7 @@ private:
     Game& game;
     ExtendViewport vp{720, 720};
 
-    Tree read_tree{}, write_tree{};
+    TreeBatch read_tree{}, write_tree{};
     float total_energy{0.0f};
 
     bool mixing{false};

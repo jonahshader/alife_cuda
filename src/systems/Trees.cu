@@ -6,7 +6,7 @@
 #include "graphics/renderers/LineRenderer.h"
 
 namespace trees {
-    std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand) {
+    std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand, glm::vec2 start_pos) {
 //    std::cout << "Building tree with " << num_nodes << " nodes" << std::endl;
         std::uniform_real_distribution<float> length_dist(16.0f, 32.0f);
         std::normal_distribution<float> rot_dist(0.0f, 0.2f);
@@ -19,6 +19,7 @@ namespace trees {
                 .core=BranchCore{
                     // note: length of first node isn't used
                         .abs_rot=M_PI/2,
+                        .pos=start_pos,
                 },
                 .stats=BranchStats{
 //                    .energy = static_cast<float>(num_nodes)
@@ -59,8 +60,43 @@ namespace trees {
         return nodes;
     }
 
-    std::vector<BranchNode> build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand) {
-        return strip_nav(sort_tree(build_tree(num_nodes, rand)));
+    std::vector<BranchNode> build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos) {
+        return strip_nav(sort_tree(build_tree(num_nodes, rand, start_pos)));
+    }
+
+    TreeBatch concatenate_trees(const std::vector<Tree> &trees) {
+        TreeBatch batch{};
+        // reserve the exact amount of mem needed to store the concatenated tree
+        uint32_t total_size = 0;
+        for (const auto& tree : trees) {
+            total_size += tree.size();
+        }
+        batch.trees.reserve(total_size);
+
+        // first part of the tree batch is just the first tree
+        batch.tree_shapes.emplace_back(BranchShape{
+            .start=0,
+            .count=static_cast<uint32_t>(trees[0].size()),
+        });
+        batch.trees = trees[0];
+        for (int i = 1; i < trees.size(); ++i) {
+            auto tree = trees[i];
+            const auto offset = batch.tree_shapes.back().start + batch.tree_shapes.back().count;
+            // offset parent and children start fields
+            for (auto& node : tree) {
+                node.core.parent += offset;
+                node.ch.start += offset;
+            }
+            // insert a shape for this new tree
+            batch.tree_shapes.emplace_back(BranchShape{
+                .start = offset,
+                .count = static_cast<uint32_t>(tree.size()),
+            });
+            // append the tree to the batch
+            batch.trees.insert(batch.trees.end(), tree.begin(), tree.end());
+        }
+
+        return batch;
     }
 
 
@@ -75,8 +111,11 @@ namespace trees {
             } else {
                 line_renderer.add_line(parent.core.pos.x, parent.core.pos.y, node.core.pos.x, node.core.pos.y, 2, 0, glm::vec4(1, 1, 1, energy * 0.5f), glm::vec4(1, 1, 1, energy * 0.5f));
             }
-
         }
+    }
+
+    void render_tree(LineRenderer &line_renderer, const TreeBatch& batch, std::default_random_engine& rand) {
+        render_tree(line_renderer, batch.trees, rand);
     }
 
     void mutate_and_update(std::vector<BranchNodeFull>& nodes, std::default_random_engine& rand, float noise) {
@@ -129,6 +168,16 @@ namespace trees {
             auto& core = nodes[i].core;
             core.abs_rot = nodes[core.parent].core.abs_rot + core.rel_rot;
             core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
+        }
+    }
+
+    void update_tree(TreeBatch& batch) {
+        for (int i = 0; i < batch.trees.size(); ++i) {
+            auto& core = batch.trees[i].core;
+            if (i != core.parent) {
+                core.abs_rot = batch.trees[core.parent].core.abs_rot + core.rel_rot;
+                core.pos = batch.trees[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
+            }
         }
     }
 
@@ -226,7 +275,8 @@ namespace trees {
             float sum = read_node.stats.energy;
             float weight_sum = 1.0f;
 
-            if (read_node.core.parent != 0 || i != 0) {
+            // if parent id equals node id, that indicates it is a root
+            if (read_node.core.parent != i) {
                 sum += read_nodes[read_node.core.parent].stats.energy;
                 weight_sum += 1.0f;
             }

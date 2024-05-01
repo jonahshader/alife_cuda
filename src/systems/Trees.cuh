@@ -52,8 +52,10 @@ namespace trees {
     };
 
 
-    std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand);
-    Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand);
+    std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand, glm::vec2 start_pos=glm::vec2{});
+    Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos=glm::vec2{});
+
+    TreeBatch concatenate_trees(const std::vector<Tree> &trees);
 
 /**
  * Render a tree using the LineRenderer. Assumes the LineRenderer has already been set up.
@@ -61,6 +63,7 @@ namespace trees {
  * @param nodes The nodes of the tree
  */
     void render_tree(LineRenderer &line_renderer, const Tree& nodes, std::default_random_engine& rand);
+    void render_tree(LineRenderer &line_renderer, const TreeBatch& batch, std::default_random_engine& rand);
 
 /**
  * Mutate a tree by changing the length and rotation of the nodes scaled by the noise parameter. Propagates the changes through the tree.
@@ -85,6 +88,7 @@ namespace trees {
  */
     void update_tree(std::vector<BranchNodeFull>& nodes);
     void update_tree(Tree& nodes);
+    void update_tree(TreeBatch& batch);
 
 /**
  * Sort the tree so that the parent of each node is before the node in the vector.

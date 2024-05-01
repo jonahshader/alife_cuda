@@ -35,7 +35,7 @@ public:
     void end();
     void set_transform(glm::mat4 transform);
     void add_text(float x, float y, float size, std::string text, glm::vec4 color);
-    void add_text(float x, float y, float targetWidth, std::string text, glm::vec4 color, HAlign hAlign);
+    void add_text(float x, float y, float targetWidth, const std::string& text, glm::vec4 color, HAlign hAlign);
     float get_length(float size, std::string text); // get length of string in pixels/units idk
     void render();
 

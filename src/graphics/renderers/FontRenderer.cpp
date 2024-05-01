@@ -281,7 +281,7 @@ float FontRenderer::get_length(float size, std::string text) {
     return length;
 }
 
-void FontRenderer::add_text(float x, float y, float targetWidth, std::string text, glm::vec4 color,
+void FontRenderer::add_text(float x, float y, float targetWidth, const std::string& text, glm::vec4 color,
                             HAlign hAlign) {
     float l = get_length(1, text);
     float size = targetWidth / l;

@@ -8,12 +8,21 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 2<<15;
+constexpr uint32_t NUM_NODES = 2<<7;
+constexpr uint32_t NUM_TREES = 2<<8;
+
+TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
+    std::vector<Tree> trees;
+    for (int i = 0; i < NUM_TREES; ++i) {
+        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(i * 64, 0)));
+    }
+
+    return concatenate_trees(trees);
+}
 
 TreeTest::TreeTest(Game &game) : game(game) {
-    read_tree = build_tree_optimized(NUM_NODES, game.getResources().generator);
+    read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
     write_tree = read_tree;
-    total_energy = compute_total_energy(read_tree);
 }
 
 void TreeTest::show() {
@@ -46,16 +55,10 @@ void TreeTest::render(float dt) {
 //        mutate(tree, game.getResources().generator, 0.002f);
 //    }
 
-    if (mixing) {
-//        for (int i = 0; i < 64; ++i) {
-//            mix_node_contents(read_tree, write_tree, 2.0f, total_energy);
-//            read_tree.swap(write_tree);
-//            mix_node_contents(read_tree, write_tree, 1.0f, total_energy);
-//            read_tree.swap(write_tree);
-//        }
-        mix_node_contents(read_tree, write_tree, 1.0f, total_energy);
-        read_tree.swap(write_tree);
-    }
+//    if (mixing) {
+//        mix_node_contents(read_tree, write_tree, 1.0f, total_energy);
+//        read_tree.swap(write_tree);
+//    }
 
     auto end = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
@@ -71,7 +74,7 @@ void TreeTest::render(float dt) {
 //    std::cout << "Total energy: " << compute_total_energy(read_tree) << std::endl;
 //    std::cout << "Min/max energy: " << get_min_energy(read_tree) << ',' << get_max_energy(read_tree) << std::endl;
 
-    bold.add_text(0, (vp.get_height() / 2.0f) + 240, 500, "Min/Max Energy: " + std::to_string(get_min_energy(read_tree)) + ',' + std::to_string(get_max_energy(read_tree)), glm::vec4(0.75), FontRenderer::HAlign::LEFT);
+//    bold.add_text(0, (vp.get_height() / 2.0f) + 240, 500, "Min/Max Energy: " + std::to_string(get_min_energy(read_tree)) + ',' + std::to_string(get_max_energy(read_tree)), glm::vec4(0.75), FontRenderer::HAlign::LEFT);
 
 
     bold.end();
@@ -98,7 +101,7 @@ void TreeTest::handleInput(SDL_Event event) {
         if (event.key.keysym.sym == SDLK_ESCAPE) {
             game.stopGame();
         } else if (event.key.keysym.sym == SDLK_r) {
-            read_tree = build_tree_optimized(NUM_NODES, game.getResources().generator);
+            read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
             write_tree = read_tree;
         } else if (event.key.keysym.sym == SDLK_SPACE) {
             mixing = !mixing;
