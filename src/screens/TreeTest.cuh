@@ -11,6 +11,8 @@
 #include "systems/Trees.cuh"
 #include "graphics/ExtendViewport.h"
 
+using namespace trees;
+
 class TreeTest : public Screen {
 public:
     explicit TreeTest(Game &game);
@@ -25,6 +27,9 @@ private:
     Game& game;
     ExtendViewport vp{720, 720};
 
-    std::vector<TreeNode> tree{};
+    Tree read_tree{}, write_tree{};
+    float total_energy{0.0f};
+
+    bool mixing{false};
 
 };
