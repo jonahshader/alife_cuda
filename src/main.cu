@@ -7,6 +7,7 @@
 #include <thrust/sort.h>
 #include <thrust/copy.h>
 #include <thrust/random.h>
+#include <iostream>
 #include "systems/Game.cuh"
 #include "screens/TreeTest.cuh"
 #include "screens/FluidTest.cuh"
@@ -85,6 +86,21 @@ void init_screen(const char * caption) {
 }
 
 int main() {
+    cudaDeviceProp cuda_prop;
+    cudaGetDeviceProperties(&cuda_prop, 0);
+    // print the compute capability, max number of threads per block, max number of blocks, number of SMs, max number of threads per SM,
+    // number of registers per block, number of registers per SM, shared memory per block, shared memory per SM, warp size, number of floating point units
+    std::cout << "Compute capability: " << cuda_prop.major << "." << cuda_prop.minor << std::endl;
+    std::cout << "Max threads per block: " << cuda_prop.maxThreadsPerBlock << std::endl;
+    std::cout << "Max blocks: " << cuda_prop.maxGridSize[0] << std::endl;
+    std::cout << "Number of SMs: " << cuda_prop.multiProcessorCount << std::endl;
+    std::cout << "Max threads per SM: " << cuda_prop.maxThreadsPerMultiProcessor << std::endl;
+    std::cout << "Number of registers per block: " << cuda_prop.regsPerBlock << std::endl;
+    std::cout << "Number of registers per SM: " << cuda_prop.regsPerMultiprocessor << std::endl;
+    std::cout << "Shared memory per block: " << cuda_prop.sharedMemPerBlock << " bytes" << std::endl;
+    std::cout << "Shared memory per SM: " << cuda_prop.sharedMemPerMultiprocessor << " bytes" << std::endl;
+    std::cout << "Warp size: " << cuda_prop.warpSize << std::endl;
+    std::cout << "Number of floating point units: " << cuda_prop.multiProcessorCount * cuda_prop.maxThreadsPerMultiProcessor << std::endl;
     init_screen("OpenGL 4.3");
 
     //    jl_init();

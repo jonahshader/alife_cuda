@@ -3,6 +3,9 @@ project(alife_cuda CUDA C CXX)
 
 set(CMAKE_CUDA_STANDARD 20)
 
+#set(CMAKE_CXX_FLAGS "-O3")
+set(CMAKE_CUDA_FLAGS "-openmp")
+
 set(LibraryRoot "F:/Programming/C++ Libraries/")
 
 include_directories("${LibraryRoot}SDL2-devel-2.30.1-VC/SDL2-2.30.1/include")

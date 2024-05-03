@@ -8,13 +8,19 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 2<<7;
-constexpr uint32_t NUM_TREES = 2<<8;
+constexpr uint32_t NUM_NODES = 1<<6;
+constexpr uint32_t NUM_TREES = 1<<12;
 
 TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
     std::vector<Tree> trees;
+    constexpr auto row_size = 64;
+    std::normal_distribution<float> spawn_dist(0, row_size);
+    std::uniform_int_distribution<int> num_nodes_dist(NUM_NODES / 2, 3 * NUM_NODES / 2);
     for (int i = 0; i < NUM_TREES; ++i) {
-        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(i * 64, 0)));
+        int x = i % row_size;
+        int y = i / row_size;
+        trees.push_back(build_tree_optimized((x * NUM_NODES) / (row_size/2), rand, glm::vec2(x * 128, y * 128)));
+//        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(spawn_dist(rand), spawn_dist(rand))));
     }
 
     return concatenate_trees(trees);
@@ -60,15 +66,22 @@ void TreeTest::render(float dt) {
 //        read_tree.swap(write_tree);
 //    }
 
+    if (mixing) {
+        mix_node_contents(read_tree, write_tree, 1.0f);
+        // TODO: write a swap function for TreeBatch struct
+        read_tree.trees.swap(write_tree.trees);
+        read_tree.tree_shapes.swap(write_tree.tree_shapes);
+    }
+
     auto end = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    bold.add_text(0, (vp.get_height() / 2.0f), 500, "Mutate Time: " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::LEFT);
+    bold.add_text(0, (vp.get_height() / 2.0f), 500, "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::LEFT);
 
     start = std::chrono::steady_clock::now();
     update_tree(read_tree);
     end = std::chrono::steady_clock::now();
     elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-//    bold.add_text(0, (vp.get_height() / 2.0f) + 120, 500, "Update Time: " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::CENTER);
+    bold.add_text(0, (vp.get_height() / 2.0f) + 120, 500, "Update Time (CPU): " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::CENTER);
 
     render_tree(line, read_tree, game.getResources().generator);
 //    std::cout << "Total energy: " << compute_total_energy(read_tree) << std::endl;

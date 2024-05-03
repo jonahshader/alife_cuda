@@ -1,29 +1,22 @@
 #include "Trees.cuh"
 #include <cmath>
-#include <iostream>
 #include <stack>
 #include <glm/glm.hpp>
 #include "graphics/renderers/LineRenderer.h"
 
 namespace trees {
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand, glm::vec2 start_pos) {
-//    std::cout << "Building tree with " << num_nodes << " nodes" << std::endl;
         std::uniform_real_distribution<float> length_dist(16.0f, 32.0f);
         std::normal_distribution<float> rot_dist(0.0f, 0.2f);
-        std::uniform_real_distribution<float> energy_dist(0.0f, 1.0f);
 
         std::vector<BranchNodeFull> nodes;
         nodes.reserve(num_nodes);
 
         nodes.emplace_back(BranchNodeFull{
                 .core=BranchCore{
-                    // note: length of first node isn't used
                         .abs_rot=M_PI/2,
                         .pos=start_pos,
                 },
-                .stats=BranchStats{
-//                    .energy = static_cast<float>(num_nodes)
-                }
         });
 
         for (int i = 1; i < num_nodes; i++) {
@@ -44,9 +37,6 @@ namespace trees {
                             .abs_rot=absolute_rotation,
                             .pos=position,
                             .parent=parent
-                    },
-                    .stats=BranchStats{
-//                        .energy = energy_dist(rand)
                     },
                     .nav=BranchNav{
                             .id=static_cast<uint32_t>(i)
@@ -99,12 +89,9 @@ namespace trees {
         return batch;
     }
 
-
     void render_tree(LineRenderer &line_renderer, const std::vector<BranchNode>& nodes, std::default_random_engine& rand) {
-        std::uniform_real_distribution<float> dither(-1/255.0f, 1/255.0f);
         for (const auto& node : nodes) {
             auto& parent = nodes[node.core.parent];
-//            float energy = std::max(std::min(node.stats.energy + dither(rand), 1.0f), 0.0f);
             float energy = std::max(std::min(node.stats.energy, 1.0f), 0.0f);
             if (energy == 0) {
                 line_renderer.add_line(parent.core.pos.x, parent.core.pos.y, node.core.pos.x, node.core.pos.y, 2, 0, glm::vec4(1, 0, 0, 1), glm::vec4(1, 0, 0, 1));
@@ -115,7 +102,18 @@ namespace trees {
     }
 
     void render_tree(LineRenderer &line_renderer, const TreeBatch& batch, std::default_random_engine& rand) {
-        render_tree(line_renderer, batch.trees, rand);
+        std::uniform_real_distribution<float> rand_color(0, 1);
+        std::default_random_engine rand_const(1);
+        for (const auto& shape : batch.tree_shapes) {
+            glm::vec4 color(rand_color(rand_const), rand_color(rand_const), rand_color(rand_const), 1);
+            const BranchNode* tree = &batch.trees[shape.start];
+            for (int i = 0; i < shape.count; ++i) {
+                const auto& node = batch.trees[i + shape.start];
+                color.a = std::min(1.0f, std::max(0.0f, node.stats.energy));
+                const auto& parent = batch.trees[node.core.parent];
+                line_renderer.add_line(parent.core.pos.x, parent.core.pos.y, node.core.pos.x, node.core.pos.y, 2, 0, color, color);
+            }
+        }
     }
 
     void mutate_and_update(std::vector<BranchNodeFull>& nodes, std::default_random_engine& rand, float noise) {
@@ -172,11 +170,15 @@ namespace trees {
     }
 
     void update_tree(TreeBatch& batch) {
-        for (int i = 0; i < batch.trees.size(); ++i) {
-            auto& core = batch.trees[i].core;
-            if (i != core.parent) {
-                core.abs_rot = batch.trees[core.parent].core.abs_rot + core.rel_rot;
-                core.pos = batch.trees[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
+#pragma omp parallel for
+        for (int j = 0; j < batch.tree_shapes.size(); ++j) {
+            const auto& shape = batch.tree_shapes[j];
+            for (auto i = shape.start; i < shape.start + shape.count; ++i) {
+                auto& core = batch.trees[i].core;
+                if (i != core.parent) {
+                    core.abs_rot = batch.trees[core.parent].core.abs_rot + core.rel_rot;
+                    core.pos = batch.trees[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
+                }
             }
         }
     }
@@ -300,14 +302,77 @@ namespace trees {
         }
     }
 
+    void mix_node_contents(const BranchNode read_nodes[], BranchNode write_nodes[], size_t start, size_t node_count, float interp, float total_energy) {
+        for (auto i = start; i < start + node_count; ++i) {
+            auto& read_node = read_nodes[i];
+            auto& write_node = write_nodes[i];
+
+            float sum = read_node.stats.energy;
+            float weight_sum = 1.0f;
+
+            // if parent id equals node id, that indicates it is a root
+            if (read_node.core.parent != i) {
+                sum += read_nodes[read_node.core.parent].stats.energy;
+                weight_sum += 1.0f;
+            }
+
+            auto child_start_index = read_node.ch.start;
+            for (uint32_t j = 0; j < read_node.ch.count; ++j) {
+                auto& child = read_nodes[j + child_start_index];
+                sum += child.stats.energy;
+                weight_sum += 1.0f;
+            }
+
+            float avg_energy = sum / weight_sum;
+            write_node.stats.energy = (1 - interp) * write_nodes[i].stats.energy + interp * avg_energy;
+        }
+
+        float new_total_energy = compute_total_energy(&write_nodes[start], node_count);
+        float scale_factor = total_energy / new_total_energy;
+
+        for (auto i = start; i < start + node_count; ++i) {
+            auto& node = write_nodes[i];
+            node.stats.energy *= scale_factor;
+        }
+    }
+
     void mix_node_contents(const std::vector<BranchNode>& read_nodes, std::vector<BranchNode>& write_nodes, float interp) {
         float total_energy = compute_total_energy(read_nodes);
         mix_node_contents(read_nodes, write_nodes, interp, total_energy);
     }
 
+    void mix_node_contents(const TreeBatch& read_batch, TreeBatch& write_batch, float interp, const std::vector<float>& total_energies) {
+        // TODO: try pragma omp parallel for
+        for (int i = 0; i < read_batch.tree_shapes.size(); ++i) {
+            const BranchShape& shape = read_batch.tree_shapes[i];
+            const auto total_energy = total_energies[i];
+            mix_node_contents(read_batch.trees.data(), write_batch.trees.data(), shape.start, shape.count, interp, total_energy);
+        }
+    }
+
+    void mix_node_contents(const TreeBatch& read_batch, TreeBatch& write_batch, float interp) {
+        // TODO: try pragma omp parallel for
+#pragma omp parallel for
+        for (int i = 0; i < read_batch.tree_shapes.size(); ++i) {
+            const BranchShape& shape = read_batch.tree_shapes[i];
+            const BranchNode* read_tree = &read_batch.trees[shape.start];
+            const auto total_energy = compute_total_energy(read_tree, shape.count);
+            mix_node_contents(read_batch.trees.data(), write_batch.trees.data(), shape.start, shape.count, interp, total_energy);
+        }
+    }
+
     float compute_total_energy(const std::vector<BranchNode>& nodes) {
         float sum = 0;
         for (auto& node : nodes) {
+            sum += node.stats.energy;
+        }
+        return sum;
+    }
+
+    float compute_total_energy(const BranchNode nodes[], size_t node_count) {
+        float sum = 0;
+        for (int i = 0; i < node_count; ++i) {
+            const auto& node = nodes[i];
             sum += node.stats.energy;
         }
         return sum;
@@ -335,12 +400,3 @@ namespace trees {
         return max;
     }
 }
-
-
-
-/*
- * TODO: i think i can actually do cuda trees if children of a branch are contiguous.
- * the main issue was having a variable length array of pointers to children, but
- * instead, if the children are contiguous, i can just store pointer to first child and
- * number of children.
- */

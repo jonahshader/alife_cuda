@@ -12,6 +12,7 @@ namespace trees {
         float length{1};
         float rel_rot{0};
         float abs_rot{0};
+
         glm::vec2 pos{};
         std::uint32_t parent{};
     };
@@ -46,8 +47,14 @@ namespace trees {
 
     using Tree = std::vector<BranchNode>;
 
+    // "singleton" data, as in one per tree
+    struct TreeData {
+        float total_energy{};
+    };
+
     struct TreeBatch {
         std::vector<BranchShape> tree_shapes{};
+        std::vector<TreeData> tree_data{};
         Tree trees{};
     };
 
@@ -89,6 +96,7 @@ namespace trees {
     void update_tree(std::vector<BranchNodeFull>& nodes);
     void update_tree(Tree& nodes);
     void update_tree(TreeBatch& batch);
+//    void update_tree_forward_parallel(const TreeBatch& read_batch, TreeBatch& write_batch); // TODO:
 
 /**
  * Sort the tree so that the parent of each node is before the node in the vector.
@@ -102,11 +110,20 @@ namespace trees {
 
 
     void mix_node_contents(const Tree& read_nodes, Tree& write_nodes, float interp, float total_energy);
+    void mix_node_contents(const BranchNode read_nodes[], BranchNode write_nodes[], size_t start, size_t node_count, float interp, float total_energy);
     void mix_node_contents(const Tree& read_nodes, Tree& write_nodes, float interp);
+    void mix_node_contents(const TreeBatch& read_batch, TreeBatch& write_batch, float interp, const std::vector<float>& total_energies);
+    void mix_node_contents(const TreeBatch& read_batch, TreeBatch& write_batch, float interp);
 
     float compute_total_energy(const Tree& nodes);
+    float compute_total_energy(const BranchNode nodes[], size_t node_count);
     float get_min_energy(const Tree& nodes);
     float get_max_energy(const Tree& nodes);
+
+
+    // CUDA kernels
+//    __global__
+//    void update_
 
 }
 
