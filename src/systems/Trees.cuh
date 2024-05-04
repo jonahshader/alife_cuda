@@ -9,7 +9,7 @@
 
 namespace trees {
     struct BranchCore {
-        float length{1};
+        float length{0};
         float rel_rot{0};
         float abs_rot{0};
 
@@ -31,6 +31,8 @@ namespace trees {
         float energy{0.0f};
         float max_energy{0.0f};
         float mix_rate{0.1f};
+
+        float thickness{1.0f};
     };
 
     struct BranchNodeFull {
@@ -86,8 +88,10 @@ namespace trees {
  * @param rand The random number generator to use
  * @param noise The noise to apply to the mutations
  */
-    void mutate(std::vector<BranchNodeFull>& nodes, std::default_random_engine& rand, float noise);
-    void mutate(Tree& nodes, std::default_random_engine& rand, float noise);
+    void mutate_len_rot(std::vector<BranchNodeFull>& nodes, std::default_random_engine& rand, float noise);
+    void mutate_len_rot(Tree & nodes, std::default_random_engine & rand, float noise);
+    void mutate_len_rot(TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise);
+    void mutate_pos(TreeBatch &batch, std::default_random_engine &rand, float noise);
 
 /**
  * Propagate orientation and position changes through the tree
@@ -97,6 +101,7 @@ namespace trees {
     void update_tree(Tree& nodes);
     void update_tree(TreeBatch& batch);
 //    void update_tree_forward_parallel(const TreeBatch& read_batch, TreeBatch& write_batch); // TODO:
+    void update_tree_parallel(TreeBatch& read_batch, TreeBatch& write_batch);
 
 /**
  * Sort the tree so that the parent of each node is before the node in the vector.
@@ -120,10 +125,9 @@ namespace trees {
     float get_min_energy(const Tree& nodes);
     float get_max_energy(const Tree& nodes);
 
+    glm::vec2 get_length_vec(const BranchCore &core);
 
-    // CUDA kernels
-//    __global__
-//    void update_
+
 
 }
 

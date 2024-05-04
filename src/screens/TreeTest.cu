@@ -29,6 +29,7 @@ TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_rand
 TreeTest::TreeTest(Game &game) : game(game) {
     read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
     write_tree = read_tree;
+
 }
 
 void TreeTest::show() {
@@ -48,46 +49,72 @@ void TreeTest::render(float dt) {
     rect.begin();
     line.begin();
 
-//    bold.add_text(0, (vp.get_height() / 2.0f) - 120, 600, "Tree Test", glm::vec4(0.5), FontRenderer::HAlign::CENTER);
-//    rect.add_rect(0, 0, 32, 24, 8, glm::vec4(1));
-//    rect.add_rect(0, -100, 128, 32, 16, glm::vec4(1, 0, 1, 1));
-    auto start = std::chrono::steady_clock::now();
-//    mutate(tree, game.getResources().generator, 0.002f);
+    std::string mix_time, mutate_time, update_time, mutate_pos_time, update_parallel_time;
 
-// TODO: get mutation working again
-//    if (!stripped_tree.empty()) {
-//        mutate(stripped_tree, game.getResources().generator, 0.002f);
-//    } else {
-//        mutate(tree, game.getResources().generator, 0.002f);
-//    }
-
-//    if (mixing) {
-//        mix_node_contents(read_tree, write_tree, 1.0f, total_energy);
-//        read_tree.swap(write_tree);
-//    }
 
     if (mixing) {
+        auto start = std::chrono::steady_clock::now();
         mix_node_contents(read_tree, write_tree, 1.0f);
         // TODO: write a swap function for TreeBatch struct
         read_tree.trees.swap(write_tree.trees);
         read_tree.tree_shapes.swap(write_tree.tree_shapes);
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
     }
 
-    auto end = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    bold.add_text(0, (vp.get_height() / 2.0f), 500, "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::LEFT);
+    if (mutating_len_rot) {
+        auto start = std::chrono::steady_clock::now();
+        mutate_len_rot(read_tree, game.getResources().generator, 0.0f, 0.01f);
+        write_tree.trees = read_tree.trees;
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        mutate_time = "Mutate Time (CPU): " + std::to_string(elapsed.count()) + "us";
+    }
 
-    start = std::chrono::steady_clock::now();
-    update_tree(read_tree);
-    end = std::chrono::steady_clock::now();
-    elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    bold.add_text(0, (vp.get_height() / 2.0f) + 120, 500, "Update Time (CPU): " + std::to_string(elapsed.count()) + "us", glm::vec4(0.75), FontRenderer::HAlign::CENTER);
+    if (mutating_pos) {
+        auto start = std::chrono::steady_clock::now();
+        mutate_pos(read_tree, game.getResources().generator, 1.0f);
+        write_tree.trees = read_tree.trees;
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        mutate_pos_time = "Mutate Pos Time (CPU): " + std::to_string(elapsed.count()) + "us";
+    }
+
+
+    if (updating_parallel) {
+        auto start = std::chrono::steady_clock::now();
+//        update_tree(read_tree);
+        update_tree_parallel(read_tree, write_tree);
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        update_time = "Update Time (CPU): " + std::to_string(elapsed.count()) + "us";
+    }
+
 
     render_tree(line, read_tree, game.getResources().generator);
-//    std::cout << "Total energy: " << compute_total_energy(read_tree) << std::endl;
-//    std::cout << "Min/max energy: " << get_min_energy(read_tree) << ',' << get_max_energy(read_tree) << std::endl;
 
-//    bold.add_text(0, (vp.get_height() / 2.0f) + 240, 500, "Min/Max Energy: " + std::to_string(get_min_energy(read_tree)) + ',' + std::to_string(get_max_energy(read_tree)), glm::vec4(0.75), FontRenderer::HAlign::LEFT);
+
+    bold.end();
+    rect.end();
+    line.end();
+
+    bold.render();
+    rect.render();
+    line.render();
+
+    bold.set_transform(hud_vp.get_transform());
+    rect.set_transform(hud_vp.get_transform());
+    line.set_transform(hud_vp.get_transform());
+    bold.begin();
+    rect.begin();
+    line.begin();
+
+    constexpr int padding = 10;
+
+    bold.add_text(hud_vp.get_left() + padding, hud_vp.get_bottom() + padding + 120, 300, mix_time, glm::vec4(0.75), FontRenderer::HAlign::RIGHT);
+    bold.add_text(hud_vp.get_left() + padding, hud_vp.get_bottom() + padding + 60, 300, mutate_time, glm::vec4(0.75), FontRenderer::HAlign::RIGHT);
+    bold.add_text(hud_vp.get_left() + padding, hud_vp.get_bottom() + padding, 300, update_time, glm::vec4(0.75), FontRenderer::HAlign::RIGHT);
 
 
     bold.end();
@@ -103,6 +130,7 @@ void TreeTest::render(float dt) {
 
 void TreeTest::resize(int width, int height) {
     vp.update(width, height);
+    hud_vp.update(width, height);
 }
 
 void TreeTest::hide() {
@@ -118,6 +146,18 @@ void TreeTest::handleInput(SDL_Event event) {
             write_tree = read_tree;
         } else if (event.key.keysym.sym == SDLK_SPACE) {
             mixing = !mixing;
+        } else if (event.key.keysym.sym == SDLK_m) {
+            mutating_len_rot = !mutating_len_rot;
+        } else if (event.key.keysym.sym == SDLK_u) {
+            updating_parallel = true;
+        } else if (event.key.keysym.sym == SDLK_j) {
+            mutating_pos = true;
+        }
+    } else if (event.type == SDL_KEYUP) {
+        if (event.key.keysym.sym == SDLK_u) {
+            updating_parallel = false;
+        } else if (event.key.keysym.sym == SDLK_j) {
+            mutating_pos = false;
         }
     } else if (event.type == SDL_MOUSEWHEEL) {
         vp.handle_scroll(event.wheel.y);

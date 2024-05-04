@@ -26,10 +26,13 @@ public:
 private:
     Game& game;
     ExtendViewport vp{720, 720};
+    ExtendViewport hud_vp{720, 720};
 
     TreeBatch read_tree{}, write_tree{};
-    float total_energy{0.0f};
 
     bool mixing{false};
+    bool mutating_len_rot{false};
+    bool updating_parallel{false};
+    bool mutating_pos{false};
 
 };
