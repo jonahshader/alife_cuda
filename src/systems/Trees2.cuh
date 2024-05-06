@@ -7,6 +7,7 @@
 namespace trees2 {
     using bid_t = uint32_t;
 
+
 #define FOR_BRANCH_CORE(N, D) \
     D(float, length, 0)       \
     D(float, current_rel_rot, 0) \
@@ -67,5 +68,53 @@ namespace trees2 {
     DEFINE_STRUCTS(BranchShape, FOR_BRANCH_SHAPE)
     DEFINE_STRUCTS(BranchStats, FOR_BRANCH_STATS)
     DEFINE_STRUCTS(TreeData, FOR_TREE_DATA)
+
+
+
+#undef FOR_BRANCH_CORE
+#undef FOR_BRANCH_SHAPE
+#undef FOR_BRANCH_STATS
+#undef FOR_TREE_DATA
+#undef DEFINE_STRUCT
+#undef DEFINE_SOA_STRUCT
+#undef DEFINE_DEVICE_SOA_STRUCT
+#undef DEFINE_STRUCTS
+
+// TODO: can probably use a macro to define these
+    struct BranchNode {
+        BranchCore core{};
+        BranchStats stats{};
+        BranchShape ch{};
+    };
+
+    struct BranchNodeSoA {
+        BranchCoreSoA core{};
+        BranchStatsSoA stats{};
+        BranchShapeSoA ch{};
+
+        void push_back(const BranchNode& single) {
+            core.push_back(single.core);
+            stats.push_back(single.stats);
+            ch.push_back(single.ch);
+        }
+
+        void swap_all(BranchNodeSoA &s) {
+            core.swap_all(s.core);
+            stats.swap_all(s.stats);
+            ch.swap_all(s.ch);
+        }
+    };
+
+    struct BranchNodeSoADevice {
+        BranchCoreSoADevice core{};
+        BranchStatsSoADevice stats{};
+        BranchShapeSoADevice ch{};
+    };
+
+    struct TreeBatch {
+        BranchShapeSoA tree_shapes{};
+        TreeDataSoA tree_data{};
+        BranchNodeSoA trees{};
+    };
 
 }
