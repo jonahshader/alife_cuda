@@ -1,6 +1,9 @@
 // https://bcmpinc.wordpress.com/2015/08/18/creating-an-opengl-4-5-context-using-sdl2-and-glad/
 
 #define SDL_MAIN_HANDLED
+//#define GLM_FORCE_CUDA
+//#define GLM_COMPILER_CUDA
+#include <glm/glm.hpp>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <thrust/generate.h>

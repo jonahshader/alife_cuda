@@ -19,6 +19,7 @@ set(GLAD_SOURCES "${LibraryRoot}glad_opengl46/src/glad.c")
 set(GLAD_HEADERS "${LibraryRoot}glad_opengl46/include/glad/glad.h" "${LibraryRoot}glad_opengl46/include/KHR/khrplatform.h")
 
 
+
 add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/graphics/ExtendViewport.cpp
         src/graphics/ExtendViewport.h
@@ -49,6 +50,10 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/Fluid.cuh
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
+        src/systems/TreesSoA.cu
+        src/systems/TreesSoA.cuh
+        src/systems/Trees2.cu
+        src/systems/Trees2.cuh
 )
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)

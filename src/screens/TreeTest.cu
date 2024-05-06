@@ -84,8 +84,14 @@ void TreeTest::render(float dt) {
 
     if (updating_parallel) {
         auto start = std::chrono::steady_clock::now();
-//        update_tree(read_tree);
+        update_tree_cuda(read_tree, write_tree);
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        update_time = "Update Time (CUDA): " + std::to_string(elapsed.count()) + "us";
+    } else if (updating_cpu) {
+        auto start = std::chrono::steady_clock::now();
         update_tree_parallel(read_tree, write_tree);
+//        update_tree_cuda(read_tree, write_tree);
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         update_time = "Update Time (CPU): " + std::to_string(elapsed.count()) + "us";
@@ -152,12 +158,16 @@ void TreeTest::handleInput(SDL_Event event) {
             updating_parallel = true;
         } else if (event.key.keysym.sym == SDLK_j) {
             mutating_pos = true;
+        } else if (event.key.keysym.sym == SDLK_i) {
+            updating_cpu = true;
         }
     } else if (event.type == SDL_KEYUP) {
         if (event.key.keysym.sym == SDLK_u) {
             updating_parallel = false;
         } else if (event.key.keysym.sym == SDLK_j) {
             mutating_pos = false;
+        } else if (event.key.keysym.sym == SDLK_i) {
+            updating_cpu = false;
         }
     } else if (event.type == SDL_MOUSEWHEEL) {
         vp.handle_scroll(event.wheel.y);

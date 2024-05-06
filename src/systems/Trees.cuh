@@ -6,14 +6,21 @@
 #include <glm/glm.hpp>
 #include <vector>
 #include "systems/Game.cuh"
+#include <thrust/device_vector.h>
 
 namespace trees {
     struct BranchCore {
         float length{0};
-        float rel_rot{0};
+        float current_rel_rot{0};
+        float target_rel_rot{0};
+        float rot_vel{0};
+        float rot_acc{0};
+
         float abs_rot{0};
 
         glm::vec2 pos{};
+        glm::vec2 vel{};
+        glm::vec2 acc{};
         std::uint32_t parent{};
     };
 
@@ -61,6 +68,7 @@ namespace trees {
     };
 
 
+
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine& rand, glm::vec2 start_pos=glm::vec2{});
     Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos=glm::vec2{});
 
@@ -102,6 +110,7 @@ namespace trees {
     void update_tree(TreeBatch& batch);
 //    void update_tree_forward_parallel(const TreeBatch& read_batch, TreeBatch& write_batch); // TODO:
     void update_tree_parallel(TreeBatch& read_batch, TreeBatch& write_batch);
+    void update_tree_cuda(TreeBatch& read_batch, TreeBatch& write_batch);
 
 /**
  * Sort the tree so that the parent of each node is before the node in the vector.
@@ -125,6 +134,7 @@ namespace trees {
     float get_min_energy(const Tree& nodes);
     float get_max_energy(const Tree& nodes);
 
+    __host__ __device__
     glm::vec2 get_length_vec(const BranchCore &core);
 
 

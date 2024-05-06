@@ -40,7 +40,8 @@ namespace trees {
             nodes.emplace_back(BranchNodeFull{
                     .core=BranchCore{
                             .length=length_dist(rand),
-                            .rel_rot=relative_rotation,
+                            .current_rel_rot=relative_rotation,
+                            .target_rel_rot=relative_rotation,
                             .abs_rot=absolute_rotation,
                             .pos=position,
                             .parent=parent
@@ -142,8 +143,8 @@ namespace trees {
             core.length += length_dist(rand) * scale;
             // ensure length is positive
             core.length = std::max(0.0f, core.length);
-            core.rel_rot += rot_dist(rand) * scale;
-            core.abs_rot = nodes[core.parent].core.abs_rot + core.rel_rot;
+            core.current_rel_rot += rot_dist(rand) * scale;
+            core.abs_rot = nodes[core.parent].core.abs_rot + core.current_rel_rot;
             core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
         }
     }
@@ -158,7 +159,7 @@ namespace trees {
             core.length += length_dist(rand) * scale;
             // ensure length is positive
             core.length = std::max(0.0f, core.length);
-            core.rel_rot += rot_dist(rand) * scale;
+            core.current_rel_rot += rot_dist(rand) * scale;
         }
     }
 
@@ -172,7 +173,7 @@ namespace trees {
             core.length += length_dist(rand) * scale;
             // ensure length is positive
             core.length = std::max(0.0f, core.length);
-            core.rel_rot += rot_dist(rand) * scale;
+            core.current_rel_rot += rot_dist(rand) * scale;
         }
     }
 
@@ -187,7 +188,7 @@ namespace trees {
 //            }
             core.length += length_dist(rand);
             core.length = std::max(0.0f, core.length);
-            core.rel_rot += rot_dist(rand);
+            core.current_rel_rot += rot_dist(rand);
         }
     }
 
@@ -203,7 +204,7 @@ namespace trees {
     void update_tree(std::vector<BranchNodeFull>& nodes) {
         for (auto i = 1; i < nodes.size(); ++i) {
             auto& core = nodes[i].core;
-            core.abs_rot = nodes[core.parent].core.abs_rot + core.rel_rot;
+            core.abs_rot = nodes[core.parent].core.abs_rot + core.current_rel_rot;
             core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
         }
     }
@@ -211,7 +212,7 @@ namespace trees {
     void update_tree(std::vector<BranchNode>& nodes) {
         for (auto i = 1; i < nodes.size(); ++i) {
             auto& core = nodes[i].core;
-            core.abs_rot = nodes[core.parent].core.abs_rot + core.rel_rot;
+            core.abs_rot = nodes[core.parent].core.abs_rot + core.current_rel_rot;
             core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
         }
     }
@@ -223,7 +224,7 @@ namespace trees {
             for (auto i = shape.start; i < shape.start + shape.count; ++i) {
                 auto& core = batch.trees[i].core;
                 if (i != core.parent) {
-                    core.abs_rot = batch.trees[core.parent].core.abs_rot + core.rel_rot;
+                    core.abs_rot = batch.trees[core.parent].core.abs_rot + core.current_rel_rot;
                     core.pos = batch.trees[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
                 }
             }
@@ -288,10 +289,25 @@ namespace trees {
             const auto& parent = read_batch.trees[read.core.parent];
             auto& write = write_batch.trees[i];
             if (read.core.parent != i) {
-                write.core.abs_rot = read.core.rel_rot + parent.core.abs_rot;
+                write.core.abs_rot = read.core.current_rel_rot + parent.core.abs_rot;
             }
         }
     }
+
+    __global__
+    void update_rot_kernel(const BranchNode* read_nodes, BranchNode* write_nodes, size_t node_count) {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= node_count) {
+            return;
+        }
+        const auto& read = read_nodes[i];
+        const auto& parent = read_nodes[read.core.parent];
+        auto& write = write_nodes[i];
+        if (read.core.parent != i) {
+            write.core.abs_rot = read.core.current_rel_rot + parent.core.abs_rot;
+        }
+    }
+
 
     void fix_pos_parallel(const TreeBatch& read_batch, TreeBatch& write_batch) {
 #pragma omp parallel for
@@ -328,8 +344,9 @@ namespace trees {
 
             // shrink line to match length
             if (has_parent) {
+//                write.core.abs_rot = new_angle;
 //                write.core.rel_rot = (new_angle - parent.core.abs_rot) * .5f + read.core.rel_rot * .5f;
-                write.core.rel_rot = new_angle - parent.core.abs_rot;
+                write.core.current_rel_rot = new_angle - parent.core.abs_rot;
                 auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
                 auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read.core.length / 2.0f;
                 write.core.pos = new_start;
@@ -341,11 +358,104 @@ namespace trees {
         }
     }
 
+    __global__
+    void fix_pos_kernel(const BranchNode* read_nodes, BranchNode* write_nodes, size_t node_count) {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= node_count) {
+            return;
+        }
+        const auto& read = read_nodes[i];
+        const auto& parent = read_nodes[read.core.parent];
+        const bool has_parent = read.core.parent != i;
+        auto& write = write_nodes[i];
+
+        glm::vec2 avg_start_pos = read.core.pos;
+        glm::vec2 avg_end_pos = read.core.pos + get_length_vec(read.core);
+
+        // iterate through parent's children. add up their end positions then divide to get average
+        if (has_parent) {
+            avg_start_pos += parent.core.pos + get_length_vec(parent.core);
+            for (auto j = parent.ch.start; j < parent.ch.start + parent.ch.count; ++j) {
+                const auto& parent_child = read_nodes[j];
+                if (j != i) {
+                    avg_start_pos += parent_child.core.pos;
+                }
+            }
+            avg_start_pos /= (1 + parent.ch.count);
+        }
+
+        // iterate through children. add up their start positions then divide to get average
+        for (auto j = read.ch.start; j < read.ch.start + read.ch.count; ++j) {
+            avg_end_pos += read_nodes[j].core.pos;
+        }
+        avg_end_pos /= (1 + read.ch.count);
+
+        // compute new angle
+        const float new_angle = std::atan2(avg_end_pos.y - avg_start_pos.y, avg_end_pos.x - avg_start_pos.x);
+        write.core.abs_rot = new_angle;
+
+        // shrink line to match length
+        if (has_parent) {
+            write.core.current_rel_rot = new_angle - parent.core.abs_rot;
+            auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
+            auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read.core.length / 2.0f;
+            write.core.pos = new_start;
+        } else {
+            // this is the root, so we want to keep the start position the same
+            write.core.pos = read.core.pos;
+        }
+    }
+
+    void calc_accel_parallel(const TreeBatch& read_batch, TreeBatch& write_batch) {
+        // for now, just add gravity
+        for (int i = 0; i < read_batch.trees.size(); ++i) {
+            auto& write = write_batch.trees[i];
+            write.core.acc = glm::vec2(0, -9.8f);
+        }
+    }
+
+    void integrate_accel_parallel(TreeBatch& read_batch, TreeBatch& write_batch, float dt) {
+        // we want to integrate accel to vel, then vel to pos
+
+        for (int i = 0; i < read_batch.trees.size(); ++i) {
+            const auto& read = read_batch.trees[i];
+            auto& write = write_batch.trees[i];
+            write.core.vel = read.core.vel + read.core.acc * dt;
+            write.core.pos = read.core.pos + read.core.vel * dt;
+        }
+    }
+
     void update_tree_parallel(TreeBatch& read_batch, TreeBatch& write_batch) {
         update_rot_parallel(read_batch, write_batch);
         fix_pos_parallel(write_batch, read_batch);
 //        read_batch.trees = write_batch.trees;
         write_batch.trees = read_batch.trees;
+
+    }
+
+    void update_tree_cuda(TreeBatch& read_batch, TreeBatch& write_batch) {
+        const size_t node_count = read_batch.trees.size();
+        const size_t node_size = node_count * sizeof(BranchNode);
+        BranchNode* d_read_nodes;
+        BranchNode* d_write_nodes;
+        cudaMalloc(&d_read_nodes, node_size);
+        cudaMalloc(&d_write_nodes, node_size);
+        cudaMemcpy(d_read_nodes, read_batch.trees.data(), node_size, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_write_nodes, write_batch.trees.data(), node_size, cudaMemcpyHostToDevice);
+
+        dim3 block(256);
+        dim3 grid((node_count + block.x - 1) / block.x);
+        update_rot_kernel<<<grid, block>>>(d_read_nodes, d_write_nodes, node_count);
+        cudaDeviceSynchronize();
+        fix_pos_kernel<<<grid, block>>>(d_write_nodes, d_read_nodes, node_count);
+        cudaDeviceSynchronize();
+
+        cudaMemcpy(write_batch.trees.data(), d_read_nodes, node_size, cudaMemcpyDeviceToHost);
+        cudaFree(d_read_nodes);
+        cudaFree(d_write_nodes);
+
+        read_batch.trees = write_batch.trees;
+
 
     }
 
@@ -614,6 +724,7 @@ namespace trees {
         return max;
     }
 
+    __host__ __device__
     glm::vec2 get_length_vec(const BranchCore &core) {
         return glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
     }

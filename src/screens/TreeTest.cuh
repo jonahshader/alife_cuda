@@ -32,6 +32,7 @@ private:
 
     bool mixing{false};
     bool mutating_len_rot{false};
+    bool updating_cpu{false};
     bool updating_parallel{false};
     bool mutating_pos{false};
 
