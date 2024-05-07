@@ -11,7 +11,6 @@
 #include "systems/Trees.cuh"
 #include "graphics/ExtendViewport.h"
 
-using namespace trees;
 
 class TreeTest : public Screen {
 public:
@@ -28,7 +27,7 @@ private:
     ExtendViewport vp{720, 720};
     ExtendViewport hud_vp{720, 720};
 
-    TreeBatch read_tree{}, write_tree{};
+    trees2::TreeBatch read_tree{}, write_tree{};
 
     bool mixing{false};
     bool mutating_len_rot{false};

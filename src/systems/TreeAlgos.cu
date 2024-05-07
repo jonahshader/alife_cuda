@@ -1,5 +1,9 @@
 #include "TreeAlgos.cuh"
 
-namespace trees2 {
+#include <iostream>
 
+namespace trees2 {
+    void hi() {
+        std::cout << "hi" << std::endl;
+    }
 }

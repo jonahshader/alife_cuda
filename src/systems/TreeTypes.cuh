@@ -44,6 +44,12 @@ namespace trees2 {
              MacroName(PUSH_BACK_SINGLE, PUSH_BACK_SINGLE)  \
         }                                                   \
                                                             \
+        void push_back(const std::vector<StructName>& vec) {\
+            for (const auto& s : vec) {                     \
+                push_back(s);                               \
+            }                                               \
+        }                                                   \
+                                                            \
         void swap_all(StructName##SoA &s) {                 \
              MacroName(SWAP, SWAP)                          \
         }                                                   \
@@ -98,6 +104,12 @@ namespace trees2 {
             core.push_back(single.core);
             stats.push_back(single.stats);
             ch.push_back(single.ch);
+        }
+
+        void push_back(const std::vector<BranchNode> &vec) {
+            for (const auto& s : vec) {
+                push_back(s);
+            }
         }
 
         void swap_all(BranchNodeSoA &s) {

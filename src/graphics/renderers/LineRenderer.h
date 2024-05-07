@@ -18,6 +18,7 @@ public:
     void render();
     void add_line(float x1, float y1, float x2, float y2, float radius, const glm::vec4 &color);
     void add_line(float x1, float y1, float x2, float y2, float r1, float r2, const glm::vec4 &color1, const glm::vec4 &color2);
+    void add_line(const glm::vec2 &v1, const glm::vec2 &v2, float r1, float r2, const glm::vec4 &color1, const glm::vec4 &color2);
     void set_transform(glm::mat4 transform);
 
 private:

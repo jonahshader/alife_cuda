@@ -136,6 +136,10 @@ LineRenderer::add_line(float x1, float y1, float x2, float y2, float r1, float r
     add_vertex(bl.x, bl.y, -radius, -radius, line_len, r1, color1);
 }
 
+void LineRenderer::add_line(const glm::vec2 &v1, const glm::vec2 &v2, float r1, float r2, const glm::vec4 &color1, const glm::vec4 &color2) {
+    add_line(v1.x, v1.y, v2.x, v2.y, r1, r2, color1, color2);
+}
+
 void LineRenderer::add_vertex(float x, float y, float tx, float ty, float length,  float radius,
                               const glm::vec4 &color) {
     add_vertex(x, y, tx, ty, length, radius, color.r * 255, color.g * 255, color.b * 255, color.a * 255);
