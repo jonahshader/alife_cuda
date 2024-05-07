@@ -8,20 +8,20 @@ namespace trees2 {
     using bid_t = uint32_t;
 
 
-#define FOR_BRANCH_CORE(N, D) \
-    D(float, length, 0)       \
-    D(float, current_rel_rot, 0) \
-    D(float, target_rel_rot, 0)  \
-    D(float, rot_vel, 0)      \
-    D(float, rot_acc, 0)      \
-    D(float, abs_rot, 0)      \
-    N(glm::vec2, pos)         \
-    N(glm::vec2, vel)         \
-    N(glm::vec2, acc)         \
+#define FOR_BRANCH_CORE(N, D)       \
+    D(float, length, 0)             \
+    D(float, current_rel_rot, 0)    \
+    D(float, target_rel_rot, 0)     \
+    D(float, rot_vel, 0)            \
+    D(float, rot_acc, 0)            \
+    D(float, abs_rot, 0)            \
+    N(glm::vec2, pos)               \
+    N(glm::vec2, vel)               \
+    N(glm::vec2, acc)               \
     D(bid_t, parent, 0)
 
-#define FOR_BRANCH_SHAPE(N, D) \
-    D(bid_t, start, 0) \
+#define FOR_BRANCH_SHAPE(N, D)  \
+    D(bid_t, start, 0)          \
     D(bid_t, count, 0)
 
 #define FOR_BRANCH_STATS(N, D) \
@@ -36,17 +36,17 @@ namespace trees2 {
 #define DEFINE_STRUCT(StructName, MacroName) \
     struct StructName { MacroName(DEF_SCALAR, DEF_SCALAR_WITH_INIT) };
 
-#define DEFINE_SOA_STRUCT(StructName, MacroName) \
-    struct StructName##SoA {                     \
-        MacroName(DEF_VECTOR, DEF_VECTOR)        \
-                                                 \
-        void push_back(const StructName& single) { \
-             MacroName(PUSH_BACK_SINGLE, PUSH_BACK_SINGLE)                                    \
-        }                                        \
-                                                 \
-        void swap_all(StructName##SoA &s) {          \
-             MacroName(SWAP, SWAP)                                    \
-        }\
+#define DEFINE_SOA_STRUCT(StructName, MacroName)            \
+    struct StructName##SoA {                                \
+        MacroName(DEF_VECTOR, DEF_VECTOR)                   \
+                                                            \
+        void push_back(const StructName& single) {          \
+             MacroName(PUSH_BACK_SINGLE, PUSH_BACK_SINGLE)  \
+        }                                                   \
+                                                            \
+        void swap_all(StructName##SoA &s) {                 \
+             MacroName(SWAP, SWAP)                          \
+        }                                                   \
     };
 
 #define DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
@@ -65,10 +65,12 @@ namespace trees2 {
 #define SWAP(type, name, ...) name.swap(s.name);
 
     DEFINE_STRUCTS(BranchCore, FOR_BRANCH_CORE)
-    DEFINE_STRUCTS(BranchShape, FOR_BRANCH_SHAPE)
-    DEFINE_STRUCTS(BranchStats, FOR_BRANCH_STATS)
-    DEFINE_STRUCTS(TreeData, FOR_TREE_DATA)
 
+    DEFINE_STRUCTS(BranchShape, FOR_BRANCH_SHAPE)
+
+    DEFINE_STRUCTS(BranchStats, FOR_BRANCH_STATS)
+
+    DEFINE_STRUCTS(TreeData, FOR_TREE_DATA)
 
 
 #undef FOR_BRANCH_CORE
@@ -80,7 +82,7 @@ namespace trees2 {
 #undef DEFINE_DEVICE_SOA_STRUCT
 #undef DEFINE_STRUCTS
 
-// TODO: can probably use a macro to define these
+    // TODO: can probably use a macro to define these
     struct BranchNode {
         BranchCore core{};
         BranchStats stats{};
@@ -92,7 +94,7 @@ namespace trees2 {
         BranchStatsSoA stats{};
         BranchShapeSoA ch{};
 
-        void push_back(const BranchNode& single) {
+        void push_back(const BranchNode &single) {
             core.push_back(single.core);
             stats.push_back(single.stats);
             ch.push_back(single.ch);
@@ -116,5 +118,4 @@ namespace trees2 {
         TreeDataSoA tree_data{};
         BranchNodeSoA trees{};
     };
-
 }
