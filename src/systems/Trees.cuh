@@ -46,7 +46,6 @@ namespace trees {
      * @param line_renderer The LineRenderer to use
      * @param batch The nodes of the trees
      */
-    void render_tree(LineRenderer &line_renderer, const TreeBatch &batch, std::default_random_engine &rand);
     void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand);
 
 
@@ -57,11 +56,7 @@ namespace trees {
      * @param length_noise The amount of noise to apply to the length of the branches
      * @param rot_noise The amount of noise to apply to the rotation of the branches
      */
-    void mutate_len_rot(TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise);
-
     void mutate_len_rot(trees2::TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise);
-
-    void mutate_pos(TreeBatch &batch, std::default_random_engine &rand, float noise);
 
     void mutate_pos(trees2::TreeBatch &batch, std::default_random_engine &rand, float noise);
 
@@ -71,11 +66,7 @@ namespace trees {
      */
     void update_tree(TreeBatch &batch);
 
-    void update_tree_parallel(TreeBatch &read_batch, TreeBatch &write_batch);
-
     void update_tree_parallel(trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch);
-
-    void update_tree_cuda(TreeBatch &read_batch, TreeBatch &write_batch);
 
     void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device);
 
@@ -88,26 +79,22 @@ namespace trees {
 
     Tree strip_nav(const std::vector<BranchNodeFull> &nodes);
 
-    std::vector<BranchNodeFull> unstrip_nav(const Tree &nodes);
-
-
-    void mix_node_contents(const Tree &read_nodes, Tree &write_nodes, float interp, float total_energy);
-
     void mix_node_contents(const trees2::BranchNode read_nodes[], trees2::BranchNode write_nodes[], size_t start,
                            size_t node_count, float interp, float total_energy);
-
-    void mix_node_contents(const Tree &read_nodes, Tree &write_nodes, float interp);
 
     void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp,
                            const std::vector<float> &total_energies);
 
     void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp);
 
-    // void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float inter);
+    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float interp);
+
 
     float compute_total_energy(const Tree &nodes);
 
     float compute_total_energy(const trees2::BranchNode nodes[], size_t node_count);
+
+    float compute_total_energy(const float energies[], size_t node_count);
 
     float get_min_energy(const Tree &nodes);
 

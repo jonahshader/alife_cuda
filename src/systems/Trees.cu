@@ -101,26 +101,6 @@ namespace trees {
         return batch;
     }
 
-    void render_tree(LineRenderer &line_renderer, const TreeBatch &batch, std::default_random_engine &rand) {
-        std::uniform_real_distribution<float> rand_color(0, 1);
-        std::default_random_engine rand_const(1);
-        for (const auto &shape: batch.tree_shapes) {
-            glm::vec4 color(rand_color(rand_const), rand_color(rand_const), rand_color(rand_const), 1);
-            const trees2::BranchNode *tree = &batch.trees[shape.start];
-            for (auto i = shape.start; i < shape.start + shape.count; ++i) {
-                const auto &node = batch.trees[i];
-                color.a = std::min(1.0f, std::max(0.0f, node.stats.energy));
-                const auto &parent = batch.trees[node.core.parent];
-                //                line_renderer.add_line(parent.core.pos.x, parent.core.pos.y, node.core.pos.x, node.core.pos.y, 2, 0, color, color);
-                auto end_pos = node.core.pos + get_length_vec(node.core);
-                float parent_thickness = parent.stats.thickness;
-                float thickness = node.stats.thickness;
-                line_renderer.add_line(node.core.pos.x, node.core.pos.y, end_pos.x, end_pos.y, parent_thickness,
-                                       thickness, color, color);
-            }
-        }
-    }
-
     void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand) {
         std::uniform_real_distribution<float> rand_color(0, 1);
         std::default_random_engine rand_const(1);
@@ -144,19 +124,6 @@ namespace trees {
         }
     }
 
-
-    void mutate_len_rot(TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise) {
-        std::normal_distribution<float> length_dist(0.0f, length_noise);
-        std::normal_distribution<float> rot_dist(0.0f, rot_noise);
-
-        for (auto i = 0; i < batch.trees.size(); ++i) {
-            auto &core = batch.trees[i].core;
-            core.length += length_dist(rand);
-            core.length = std::max(0.0f, core.length);
-            core.current_rel_rot += rot_dist(rand);
-        }
-    }
-
     void mutate_len_rot(trees2::TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise) {
         std::normal_distribution<float> length_dist(0.0f, length_noise);
         std::normal_distribution<float> rot_dist(0.0f, rot_noise);
@@ -166,15 +133,6 @@ namespace trees {
             length += length_dist(rand);
             length = std::max(0.0f, length);
             batch.trees.core.current_rel_rot[i] += rot_dist(rand);
-        }
-    }
-
-    void mutate_pos(TreeBatch &batch, std::default_random_engine &rand, float noise) {
-        std::normal_distribution<float> pos_dist(0.0f, noise);
-        for (auto &tree: batch.trees) {
-            auto &core = tree.core;
-            core.pos.x += pos_dist(rand);
-            core.pos.y += pos_dist(rand);
         }
     }
 
@@ -218,56 +176,6 @@ namespace trees {
             }
         }
     }
-
-    //    void update_tree_parallel(const TreeBatch& read_batch, TreeBatch& write_batch) {
-    //        for (int i = 0; i < read_batch.trees.size(); ++i) {
-    //            const auto& read_core = read_batch.trees[i].core;
-    //            const auto& read_children = read_batch.trees[i].ch;
-    //
-    //            // compute new abs_rot
-    //            float new_abs_rot = read_core
-    //
-    //            // compute average end pos
-    //            glm::vec2 avg_end = read_core.pos + get_length_vec(read_core);
-    //            // iterate through children, add up positions
-    //            for (int j = read_children.start; j < read_children.start + read_children.count; ++j) {
-    //                const auto& read_child_core = read_batch.trees[j].core;
-    //                avg_end += read_child_core.pos;
-    //            }
-    //            avg_end /= (1 + read_children.count);
-    //
-    //            // compute average start pos
-    //            glm::vec2 avg_start = read_core.pos;
-    //            if (i != read_core.parent) {
-    //                const auto& parent = read_batch.trees[read_core.parent];
-    //                avg_start += get_length_vec(parent.core) + parent.core.pos;
-    //                // iterate through parent's children, add their start positions
-    //                for (int j = parent.ch.start; j < parent.ch.start + parent.ch.count; ++j) {
-    //                    if (i != j) {
-    //                        avg_start += read_batch.trees[j].core.pos;
-    //                    }
-    //                }
-    //                avg_start /= (1 + parent.ch.count);
-    //            }
-    //
-    //            // calculate new rot
-    //            glm::vec2 new_vec = avg_end - avg_start;
-    //            float new_rot = std::atan2(new_vec.y, new_vec.x);
-    //
-    //            // we want the line to have the same length, but it has the new_rot.
-    //            // make the center position pass through the average between the start and end
-    //            // then calculate the new start position
-    //            glm::vec2 avg_center = (avg_start + avg_end) / 2.0f;
-    //            glm::vec2 new_start = avg_center - glm::vec2(std::cos(new_rot), std::sin(new_rot)) * read_core.length / 2.0f;
-    //
-    //            // update the core
-    //            auto& write_core = write_batch.trees[i].core;
-    //            write_core.abs_rot = new_rot;
-    //            write_core.pos = new_start;
-    //
-    //
-    //        }
-    //    }
 
     // PRIVATE FUNCTIONS
     void update_rot_parallel(const TreeBatch &read_batch, TreeBatch &write_batch) {
@@ -531,42 +439,11 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
         }
     }
 
-    void update_tree_parallel(TreeBatch &read_batch, TreeBatch &write_batch) {
-        update_rot_parallel(read_batch, write_batch);
-        fix_pos_parallel(write_batch, read_batch);
-        //        read_batch.trees = write_batch.trees;
-        write_batch.trees = read_batch.trees;
-    }
-
     void update_tree_parallel(trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch) {
         update_rot_parallel(read_batch, write_batch);
         fix_pos_parallel(write_batch, read_batch);
         //        read_batch.trees = write_batch.trees;
         write_batch.trees = read_batch.trees;
-    }
-
-    void update_tree_cuda(TreeBatch &read_batch, TreeBatch &write_batch) {
-        const size_t node_count = read_batch.trees.size();
-        const size_t node_size = node_count * sizeof(trees2::BranchNode);
-        trees2::BranchNode *d_read_nodes;
-        trees2::BranchNode *d_write_nodes;
-        cudaMalloc(&d_read_nodes, node_size);
-        cudaMalloc(&d_write_nodes, node_size);
-        cudaMemcpy(d_read_nodes, read_batch.trees.data(), node_size, cudaMemcpyHostToDevice);
-        cudaMemcpy(d_write_nodes, write_batch.trees.data(), node_size, cudaMemcpyHostToDevice);
-
-        dim3 block(256);
-        dim3 grid((node_count + block.x - 1) / block.x);
-        update_rot_kernel<<<grid, block>>>(d_read_nodes, d_write_nodes, node_count);
-        cudaDeviceSynchronize();
-        fix_pos_kernel<<<grid, block>>>(d_write_nodes, d_read_nodes, node_count);
-        cudaDeviceSynchronize();
-
-        cudaMemcpy(write_batch.trees.data(), d_read_nodes, node_size, cudaMemcpyDeviceToHost);
-        cudaFree(d_read_nodes);
-        cudaFree(d_write_nodes);
-
-        read_batch.trees = write_batch.trees;
     }
 
     // write to write_batch_device, but swaps written vectors with read_batch_device vectors,
@@ -673,68 +550,6 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
         return stripped;
     }
 
-    std::vector<BranchNodeFull> unstrip_nav(const std::vector<trees2::BranchNode> &nodes) {
-        std::vector<BranchNodeFull> unstripped;
-        unstripped.reserve(nodes.size());
-        for (auto i = 0; i < nodes.size(); ++i) {
-            auto &node = nodes[i];
-            unstripped.push_back(BranchNodeFull{
-                .core = node.core,
-                .nav = BranchNav{
-                    .id = static_cast<uint32_t>(i)
-                }
-            });
-        }
-
-        // recalculate children
-        // TODO: this can be done a little faster by using info form BranchChildren struct instead of recomputing
-        for (auto &node: unstripped) {
-            node.nav.children.clear();
-        }
-
-        for (int i = 1; i < unstripped.size(); ++i) {
-            auto &node = unstripped[i];
-            auto &parent = unstripped[node.core.parent];
-            parent.nav.children.push_back(node.nav.id);
-        }
-
-        return unstripped;
-    }
-
-    void mix_node_contents(const std::vector<trees2::BranchNode> &read_nodes,
-                           std::vector<trees2::BranchNode> &write_nodes, float interp, float total_energy) {
-        for (auto i = 0; i < read_nodes.size(); ++i) {
-            auto &read_node = read_nodes[i];
-            auto &write_node = write_nodes[i];
-
-            float sum = read_node.stats.energy;
-            float weight_sum = 1.0f;
-
-            // if parent id equals node id, that indicates it is a root
-            if (read_node.core.parent != i) {
-                sum += read_nodes[read_node.core.parent].stats.energy;
-                weight_sum += 1.0f;
-            }
-
-            auto child_start_index = read_node.ch.start;
-            for (uint32_t j = 0; j < read_node.ch.count; ++j) {
-                auto &child = read_nodes[j + child_start_index];
-                sum += child.stats.energy;
-                weight_sum += 1.0f;
-            }
-
-            float avg_energy = sum / weight_sum;
-            write_node.stats.energy = (1 - interp) * write_nodes[i].stats.energy + interp * avg_energy;
-        }
-
-        float new_total_energy = compute_total_energy(write_nodes);
-        float scale_factor = total_energy / new_total_energy;
-
-        for (auto &node: write_nodes) {
-            node.stats.energy *= scale_factor;
-        }
-    }
-
     void mix_node_contents(const trees2::BranchNode read_nodes[], trees2::BranchNode write_nodes[], size_t start,
                            size_t node_count, float interp, float total_energy) {
         for (auto i = start; i < start + node_count; ++i) {
@@ -758,7 +573,7 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
             }
 
             float avg_energy = sum / weight_sum;
-            write_node.stats.energy = (1 - interp) * write_nodes[i].stats.energy + interp * avg_energy;
+            write_node.stats.energy = (1 - interp) * read_nodes[i].stats.energy + interp * avg_energy;
         }
 
         float new_total_energy = compute_total_energy(&write_nodes[start], node_count);
@@ -770,11 +585,53 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
         }
     }
 
-    void mix_node_contents(const std::vector<trees2::BranchNode> &read_nodes,
-                           std::vector<trees2::BranchNode> &write_nodes, float interp) {
-        float total_energy = compute_total_energy(read_nodes);
-        mix_node_contents(read_nodes, write_nodes, interp, total_energy);
+    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch,
+        size_t start, size_t node_count,float interp, float total_energy) {
+        const auto& read_energy = read_batch.trees.stats.energy;
+        auto& write_energy = write_batch.trees.stats.energy;
+
+        for (auto i = start; i < start + node_count; ++i) {
+            float sum = read_energy[i];
+            float weight_sum = 1.0f;
+
+            // if parent id equals node id, that indicates it is a root.
+            // that means it doesn't have a parent so skip
+            auto parent_id = read_batch.trees.core.parent[i];
+            if (parent_id != i) {
+                sum += read_energy[parent_id];
+                weight_sum += 1.0f;
+            }
+
+            auto child_start_index = read_batch.trees.ch.start[i];
+            for (auto j = 0; j < read_batch.trees.ch.count[i]; ++j) {
+                sum += read_energy[j + child_start_index];
+                weight_sum += 1.0f;
+            }
+
+            float avg_energy = sum / weight_sum;
+            write_energy[i] = (1 - interp) * read_energy[i] + interp * avg_energy;
+        }
+
+        float new_total_energy = compute_total_energy(&write_energy[start], node_count);
+        float scale_factor = total_energy / new_total_energy;
+
+        for (auto i = start; i < start + node_count; ++i) {
+            write_energy[i] *= scale_factor;
+        }
     }
+
+    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float interp) {
+#pragma omp parallel for
+        for (int i = 0; i < read_batch.tree_shapes.start.size(); ++i) {
+            const auto start = read_batch.tree_shapes.start[i];
+            const auto count = read_batch.tree_shapes.count[i];
+            const float *energies = &read_batch.trees.stats.energy[start];
+            const auto total_energy = compute_total_energy(energies, count);
+            mix_node_contents(read_batch, write_batch, start, count, interp, total_energy);
+        }
+    }
+
+
 
     void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp,
                            const std::vector<float> &total_energies) {
@@ -815,6 +672,15 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
         }
         return sum;
     }
+
+    float compute_total_energy(const float energy[], size_t count) {
+        float sum = 0;
+        for (auto i = 0; i < count; ++i) {
+            sum += energy[i];
+        }
+        return sum;
+    }
+
 
     float get_min_energy(const std::vector<trees2::BranchNode> &nodes) {
         float min = std::numeric_limits<float>::max();

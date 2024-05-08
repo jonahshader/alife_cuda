@@ -76,16 +76,16 @@ void TreeTest::render(float dt) {
 
 
     // TODO: fix
-    // if (mixing) {
-    //     auto start = std::chrono::steady_clock::now();
-    //     trees::mix_node_contents(read_tree, write_tree, 1.0f);
-    //     // TODO: write a swap function for TreeBatch struct
-    //     read_tree.trees.swap_all(write_tree.trees);
-    //     read_tree.tree_shapes.swap_all(write_tree.tree_shapes);
-    //     auto end = std::chrono::steady_clock::now();
-    //     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    //     mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
-    // }
+    if (mixing) {
+        auto start = std::chrono::steady_clock::now();
+        trees::mix_node_contents(read_tree, write_tree, 1.0f);
+        // TODO: write a swap function for TreeBatch struct
+        read_tree.trees.swap_all(write_tree.trees);
+        read_tree.tree_shapes.swap_all(write_tree.tree_shapes);
+        auto end = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
+    }
 
     if (mutating_len_rot) {
         auto start = std::chrono::steady_clock::now();
