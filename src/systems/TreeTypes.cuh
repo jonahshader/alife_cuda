@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <glm/glm.hpp>
+#include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 
 namespace trees2 {
@@ -56,7 +57,18 @@ namespace trees2 {
     };
 
 #define DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
-    struct StructName##SoADevice { MacroName(DEF_DEVICE_VECTOR, DEF_DEVICE_VECTOR) };
+    struct StructName##SoADevice {                      \
+        MacroName(DEF_DEVICE_VECTOR, DEF_DEVICE_VECTOR) \
+                                                        \
+    void copy_from_host(const StructName##SoA& host) {  \
+        MacroName(COPY_FROM_HOST, COPY_FROM_HOST)       \
+    }                                                   \
+                                                        \
+    void copy_to_host(StructName##SoA& host) const {    \
+        MacroName(COPY_TO_HOST, COPY_TO_HOST)           \
+    }                                                   \
+                                                        \
+};
 
 #define DEFINE_STRUCTS(StructName, MacroName) \
     DEFINE_STRUCT(StructName, MacroName)      \
@@ -65,10 +77,13 @@ namespace trees2 {
 
 #define DEF_SCALAR(type, name) type name{};
 #define DEF_SCALAR_WITH_INIT(type, name, init) type name{init};
-#define DEF_VECTOR(type, name, ...) std::vector<type> name{};
+#define DEF_VECTOR(type, name, ...) thrust::host_vector<type> name{};
 #define DEF_DEVICE_VECTOR(type, name, ...) thrust::device_vector<type> name{};
 #define PUSH_BACK_SINGLE(type, name, ...) name.push_back(single.name);
 #define SWAP(type, name, ...) name.swap(s.name);
+// TODO: avoid reallocating vectors?
+#define COPY_FROM_HOST(type, name, ...) name = host.name;
+#define COPY_TO_HOST(type, name, ...) host.name = name;
 
     DEFINE_STRUCTS(BranchCore, FOR_BRANCH_CORE)
 
@@ -123,6 +138,18 @@ namespace trees2 {
         BranchCoreSoADevice core{};
         BranchStatsSoADevice stats{};
         BranchShapeSoADevice ch{};
+
+        void copy_from_host(const BranchNodeSoA &host) {
+            core.copy_from_host(host.core);
+            stats.copy_from_host(host.stats);
+            ch.copy_from_host(host.ch);
+        }
+
+        void copy_to_host(BranchNodeSoA &host) {
+            core.copy_to_host(host.core);
+            stats.copy_to_host(host.stats);
+            ch.copy_to_host(host.ch);
+        }
     };
 
     struct TreeBatch {
@@ -130,4 +157,23 @@ namespace trees2 {
         TreeDataSoA tree_data{};
         BranchNodeSoA trees{};
     };
+
+    struct TreeBatchDevice {
+        BranchShapeSoADevice tree_shapes{};
+        TreeDataSoADevice tree_data{};
+        BranchNodeSoADevice trees{};
+
+        void copy_from_host(const TreeBatch &host) {
+            tree_shapes.copy_from_host(host.tree_shapes);
+            tree_data.copy_from_host(host.tree_data);
+            trees.copy_from_host(host.trees);
+        }
+
+        void copy_to_host(TreeBatch &host) {
+            tree_shapes.copy_to_host(host.tree_shapes);
+            tree_data.copy_to_host(host.tree_data);
+            trees.copy_to_host(host.trees);
+        }
+    };
+
 }

@@ -51,6 +51,8 @@ TreeTest::TreeTest(Game &game) : game(game) {
     read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
     write_tree = read_tree;
 
+    read_tree_device.copy_from_host(read_tree);
+    write_tree_device.copy_from_host(write_tree);
 }
 
 void TreeTest::show() {
@@ -73,43 +75,57 @@ void TreeTest::render(float dt) {
     std::string mix_time, mutate_time, update_time, mutate_pos_time, update_parallel_time;
 
 
-    if (mixing) {
-        auto start = std::chrono::steady_clock::now();
-        trees::mix_node_contents(read_tree, write_tree, 1.0f);
-        // TODO: write a swap function for TreeBatch struct
-        read_tree.trees.swap_all(write_tree.trees);
-        read_tree.tree_shapes.swap_all(write_tree.tree_shapes);
-        auto end = std::chrono::steady_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
-    }
+    // TODO: fix
+    // if (mixing) {
+    //     auto start = std::chrono::steady_clock::now();
+    //     trees::mix_node_contents(read_tree, write_tree, 1.0f);
+    //     // TODO: write a swap function for TreeBatch struct
+    //     read_tree.trees.swap_all(write_tree.trees);
+    //     read_tree.tree_shapes.swap_all(write_tree.tree_shapes);
+    //     auto end = std::chrono::steady_clock::now();
+    //     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    //     mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
+    // }
 
     if (mutating_len_rot) {
         auto start = std::chrono::steady_clock::now();
         trees::mutate_len_rot(read_tree, game.getResources().generator, 0.0f, 0.01f);
-        write_tree.trees = read_tree.trees;
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         mutate_time = "Mutate Time (CPU): " + std::to_string(elapsed.count()) + "us";
+        write_tree.trees = read_tree.trees;
     }
 
     if (mutating_pos) {
         auto start = std::chrono::steady_clock::now();
         trees::mutate_pos(read_tree, game.getResources().generator, 1.0f);
-        write_tree.trees = read_tree.trees;
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         mutate_pos_time = "Mutate Pos Time (CPU): " + std::to_string(elapsed.count()) + "us";
+        write_tree.trees = read_tree.trees;
     }
 
 
     if (updating_parallel) {
+        // memory io is excluded from timing
+        read_tree_device.copy_from_host(read_tree);
+
         auto start = std::chrono::steady_clock::now();
-        trees::update_tree_cuda(read_tree, write_tree);
+        trees::update_tree_cuda(read_tree_device, write_tree_device);
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         update_time = "Update Time (CUDA): " + std::to_string(elapsed.count()) + "us";
-    } else if (updating_cpu) {
+
+        // copy modified vectors back to host
+        // read_tree.trees.core.abs_rot = read_tree_device.trees.core.abs_rot;
+        // read_tree.trees.core.pos = read_tree_device.trees.core.pos;
+        // read_tree.trees.core.current_rel_rot = read_tree_device.trees.core.current_rel_rot;
+        read_tree_device.copy_to_host(read_tree);
+        write_tree_device = read_tree_device;
+
+        write_tree = read_tree;
+    } else
+        if (updating_cpu) {
         auto start = std::chrono::steady_clock::now();
         trees::update_tree_parallel(read_tree, write_tree);
 //        update_tree_cuda(read_tree, write_tree);

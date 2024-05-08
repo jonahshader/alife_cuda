@@ -59,7 +59,11 @@ namespace trees {
      */
     void mutate_len_rot(TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise);
 
+    void mutate_len_rot(trees2::TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise);
+
     void mutate_pos(TreeBatch &batch, std::default_random_engine &rand, float noise);
+
+    void mutate_pos(trees2::TreeBatch &batch, std::default_random_engine &rand, float noise);
 
     /**
      * Propagate orientation and position changes through the tree
@@ -69,7 +73,11 @@ namespace trees {
 
     void update_tree_parallel(TreeBatch &read_batch, TreeBatch &write_batch);
 
+    void update_tree_parallel(trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch);
+
     void update_tree_cuda(TreeBatch &read_batch, TreeBatch &write_batch);
+
+    void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device);
 
     /**
      * Sort the tree so that the parent of each node is before the node in the vector.
@@ -95,7 +103,7 @@ namespace trees {
 
     void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp);
 
-    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float inter);
+    // void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float inter);
 
     float compute_total_energy(const Tree &nodes);
 
@@ -107,4 +115,10 @@ namespace trees {
 
     __host__ __device__
     glm::vec2 get_length_vec(const trees2::BranchCore &core);
+
+    __host__ __device__
+    glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i);
+
+    __host__ __device__
+    glm::vec2 get_length_vec(float abs_rot, float length);
 }
