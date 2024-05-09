@@ -453,7 +453,7 @@ namespace trees {
         } else {
             // TODO: compute torque first. also, i don't think i need to store acceleration
             const auto& current_vel = read.trees.core.vel[i];
-            const auto new_vel = current_vel + glm::vec2(0, -9.8f * dt);
+            const auto new_vel = current_vel + glm::vec2(0, -98.0f * dt);
             write.trees.core.vel[i] = new_vel;
 
             const auto& current_pos = read.trees.core.pos[i];
