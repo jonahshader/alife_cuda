@@ -37,6 +37,17 @@ namespace trees2 {
 #define DEFINE_STRUCT(StructName, MacroName) \
     struct StructName { MacroName(DEF_SCALAR, DEF_SCALAR_WITH_INIT) };
 
+#define DEFINE_STRUCT_PTR(StructName, MacroName) \
+    struct StructName##Ptrs { \
+    MacroName(DEF_SCALAR_PTR, DEF_SCALAR_PTR) \
+\
+    void get_ptrs(StructName##SoADevice& s) { \
+        MacroName(SET_PTR, SET_PTR) \
+    } \
+};
+
+
+
 #define DEFINE_SOA_STRUCT(StructName, MacroName)            \
     struct StructName##SoA {                                \
         MacroName(DEF_VECTOR, DEF_VECTOR)                   \
@@ -73,10 +84,12 @@ namespace trees2 {
 #define DEFINE_STRUCTS(StructName, MacroName) \
     DEFINE_STRUCT(StructName, MacroName)      \
     DEFINE_SOA_STRUCT(StructName, MacroName)  \
-    DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName)
+    DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
+    DEFINE_STRUCT_PTR(StructName, MacroName)
 
 #define DEF_SCALAR(type, name) type name{};
 #define DEF_SCALAR_WITH_INIT(type, name, init) type name{init};
+#define DEF_SCALAR_PTR(type, name) type* name{nullptr};
 #define DEF_VECTOR(type, name, ...) thrust::host_vector<type> name{};
 #define DEF_DEVICE_VECTOR(type, name, ...) thrust::device_vector<type> name{};
 #define PUSH_BACK_SINGLE(type, name, ...) name.push_back(single.name);
@@ -84,6 +97,7 @@ namespace trees2 {
 // TODO: avoid reallocating vectors?
 #define COPY_FROM_HOST(type, name, ...) name = host.name;
 #define COPY_TO_HOST(type, name, ...) host.name = name;
+#define SET_PTR(type, name, ...) name = s.name.data().get();
 
     DEFINE_STRUCTS(BranchCore, FOR_BRANCH_CORE)
 
@@ -99,6 +113,7 @@ namespace trees2 {
 #undef FOR_BRANCH_STATS
 #undef FOR_TREE_DATA
 #undef DEFINE_STRUCT
+#undef DEFINE_STRUCT_PTR
 #undef DEFINE_SOA_STRUCT
 #undef DEFINE_DEVICE_SOA_STRUCT
 #undef DEFINE_STRUCTS
@@ -152,6 +167,18 @@ namespace trees2 {
         }
     };
 
+    struct BranchNodePtrs {
+        BranchCorePtrs core{};
+        BranchStatsPtrs stats{};
+        BranchShapePtrs ch{};
+
+        void get_ptrs(BranchNodeSoADevice& s) {
+            core.get_ptrs(s.core);
+            stats.get_ptrs(s.stats);
+            ch.get_ptrs(s.ch);
+        }
+    };
+
     struct TreeBatch {
         BranchShapeSoA tree_shapes{};
         TreeDataSoA tree_data{};
@@ -173,6 +200,18 @@ namespace trees2 {
             tree_shapes.copy_to_host(host.tree_shapes);
             tree_data.copy_to_host(host.tree_data);
             trees.copy_to_host(host.trees);
+        }
+    };
+
+    struct TreeBatchPtrs {
+        BranchShapePtrs tree_shapes{};
+        TreeDataPtrs tree_data{};
+        BranchNodePtrs trees{};
+
+        void get_ptrs(TreeBatchDevice& s) {
+            tree_shapes.get_ptrs(s.tree_shapes);
+            tree_data.get_ptrs(s.tree_data);
+            trees.get_ptrs(s.trees);
         }
     };
 

@@ -215,8 +215,13 @@ namespace trees {
     }
 
     __global__
-    void update_rot_kernel(const trees2::bid_t* read_parent, const float* read_current_rel_rot,
-        const float* read_abs_rot, float* write_abs_rot, size_t node_count) {
+    void update_rot_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count) {
+        // TODO: try passing by reference
+        const auto read_parent = read.trees.core.parent;
+        const auto read_current_rel_rot = read.trees.core.current_rel_rot;
+        const auto read_abs_rot = read.trees.core.abs_rot;
+        auto write_abs_rot = write.trees.core.abs_rot;
+
         auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= node_count) {
             return;
@@ -373,52 +378,60 @@ namespace trees {
     }
 
     __global__
-void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos, const float* read_length,
-                    const float* read_abs_rot, const trees2::bid_t* read_ch_start, const trees2::bid_t* read_ch_count,
-                    glm::vec2* write_pos, float* write_abs_rot, float* write_current_rel_rot, size_t node_count) {
-    auto i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= node_count) {
-        return;
-    }
-    const bool has_parent = read_parent[i] != i;
-
-    glm::vec2 avg_start_pos = read_pos[i];
-    glm::vec2 avg_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], read_length[i]);
-
-    // iterate through parent's children. add up their end positions then divide to get average
-    if (has_parent) {
-        const auto parent_index = read_parent[i];
-        avg_start_pos += read_pos[parent_index] + get_length_vec(read_abs_rot[parent_index], read_length[parent_index]);
-        for (auto j = read_ch_start[parent_index]; j < read_ch_start[parent_index] + read_ch_count[parent_index]; ++j) {
-            if (j != i) {
-                avg_start_pos += read_pos[j];
-            }
+    void fix_pos_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count) {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= node_count) {
+            return;
         }
-        avg_start_pos /= (1 + read_ch_count[parent_index]);
-    }
+        const auto read_parent = read.trees.core.parent;
+        const auto read_pos = read.trees.core.pos;
+        const auto read_length = read.trees.core.length;
+        const auto read_abs_rot = read.trees.core.abs_rot;
+        const auto read_ch_start = read.trees.ch.start;
+        const auto read_ch_count = read.trees.ch.count;
+        auto write_pos = write.trees.core.pos;
+        auto write_abs_rot = write.trees.core.abs_rot;
+        auto write_current_rel_rot = write.trees.core.current_rel_rot;
 
-    // iterate through children. add up their start positions then divide to get average
-    for (auto j = read_ch_start[i]; j < read_ch_start[i] + read_ch_count[i]; ++j) {
-        avg_end_pos += read_pos[j];
-    }
-    avg_end_pos /= (1 + read_ch_count[i]);
+        const bool has_parent = read_parent[i] != i;
 
-    // compute new angle
-    const float new_angle = std::atan2(avg_end_pos.y - avg_start_pos.y, avg_end_pos.x - avg_start_pos.x);
-    write_abs_rot[i] = new_angle;
+        glm::vec2 avg_start_pos = read_pos[i];
+        glm::vec2 avg_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], read_length[i]);
 
-    // shrink line to match length
-    if (has_parent) {
-        const auto parent_index = read_parent[i];
-        write_current_rel_rot[i] = new_angle - read_abs_rot[parent_index];
-        auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
-        auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read_length[i] / 2.0f;
-        write_pos[i] = new_start;
-    } else {
-        // this is the root, so we want to keep the start position the same
-        write_pos[i] = read_pos[i];
+        // iterate through parent's children. add up their end positions then divide to get average
+        if (has_parent) {
+            const auto parent_index = read_parent[i];
+            avg_start_pos += read_pos[parent_index] + get_length_vec(read_abs_rot[parent_index], read_length[parent_index]);
+            for (auto j = read_ch_start[parent_index]; j < read_ch_start[parent_index] + read_ch_count[parent_index]; ++j) {
+                if (j != i) {
+                    avg_start_pos += read_pos[j];
+                }
+            }
+            avg_start_pos /= (1 + read_ch_count[parent_index]);
+        }
+
+        // iterate through children. add up their start positions then divide to get average
+        for (auto j = read_ch_start[i]; j < read_ch_start[i] + read_ch_count[i]; ++j) {
+            avg_end_pos += read_pos[j];
+        }
+        avg_end_pos /= (1 + read_ch_count[i]);
+
+        // compute new angle
+        const float new_angle = std::atan2(avg_end_pos.y - avg_start_pos.y, avg_end_pos.x - avg_start_pos.x);
+        write_abs_rot[i] = new_angle;
+
+        // shrink line to match length
+        if (has_parent) {
+            const auto parent_index = read_parent[i];
+            write_current_rel_rot[i] = new_angle - read_abs_rot[parent_index];
+            auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
+            auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read_length[i] / 2.0f;
+            write_pos[i] = new_start;
+        } else {
+            // this is the root, so we want to keep the start position the same
+            write_pos[i] = read_pos[i];
+        }
     }
-}
 
     void calc_accel_parallel(const TreeBatch &read_batch, TreeBatch &write_batch) {
         // for now, just add gravity
@@ -455,39 +468,29 @@ void fix_pos_kernel(const trees2::bid_t* read_parent, const glm::vec2* read_pos,
         dim3 block(256);
         dim3 grid((node_count + block.x - 1) / block.x);
 
-        const trees2::bid_t* d_read_parent;
-        const float* d_read_current_rel_rot;
-        const float* d_read_abs_rot;
-        float* d_write_abs_rot;
+        // const trees2::bid_t* d_read_parent;
+        // const float* d_read_current_rel_rot;
+        // const float* d_read_abs_rot;
+        // float* d_write_abs_rot;
+        //
+        // d_read_parent = read_batch_device.trees.core.parent.data().get();
+        // d_read_current_rel_rot = read_batch_device.trees.core.current_rel_rot.data().get();
+        // d_read_abs_rot = read_batch_device.trees.core.abs_rot.data().get();
+        // d_write_abs_rot = write_batch_device.trees.core.abs_rot.data().get();
 
-        d_read_parent = read_batch_device.trees.core.parent.data().get();
-        d_read_current_rel_rot = read_batch_device.trees.core.current_rel_rot.data().get();
-        d_read_abs_rot = read_batch_device.trees.core.abs_rot.data().get();
-        d_write_abs_rot = write_batch_device.trees.core.abs_rot.data().get();
+        trees2::TreeBatchPtrs read_batch_ptrs, write_batch_ptrs;
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
 
-        update_rot_kernel<<<grid, block>>>(d_read_parent, d_read_current_rel_rot, d_read_abs_rot, d_write_abs_rot, node_count);
+        update_rot_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count);
         cudaDeviceSynchronize();
 
-        // we just wrote to write_batch_device's abs_rot, so we need to swap the pointers and re-acquire d_read_abs_rot and d_write_abs_rot
+        // we just wrote to write_batch_device's abs_rot, so we need to swap the pointers and re-acquire ptrs
         write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
-        d_read_abs_rot = read_batch_device.trees.core.abs_rot.data().get();
-        d_write_abs_rot = write_batch_device.trees.core.abs_rot.data().get();
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
 
-        const glm::vec2* d_read_pos;
-        const float* d_read_length;
-        const trees2::bid_t* d_read_ch_start;
-        const trees2::bid_t* d_read_ch_count;
-        glm::vec2* d_write_pos;
-        float* d_write_current_rel_rot;
-
-        d_read_pos = read_batch_device.trees.core.pos.data().get();
-        d_read_length = read_batch_device.trees.core.length.data().get();
-        d_read_ch_start = read_batch_device.trees.ch.start.data().get();
-        d_read_ch_count = read_batch_device.trees.ch.count.data().get();
-        d_write_pos = write_batch_device.trees.core.pos.data().get();
-        d_write_current_rel_rot = write_batch_device.trees.core.current_rel_rot.data().get();
-
-        fix_pos_kernel<<<grid, block>>>(d_read_parent, d_read_pos, d_read_length, d_read_abs_rot, d_read_ch_start, d_read_ch_count, d_write_pos, d_write_abs_rot, d_write_current_rel_rot, node_count);
+        fix_pos_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count);
         cudaDeviceSynchronize();
 
         // we just wrote to write_batch_device's pos, abs_rot, and current_rel_rot, so we need to swap the pointers
