@@ -383,6 +383,7 @@ namespace trees {
         if (i >= node_count) {
             return;
         }
+        // TODO: manipulate velocity based on required correction and dt
         const auto read_parent = read.trees.core.parent;
         const auto read_pos = read.trees.core.pos;
         const auto read_length = read.trees.core.length;
@@ -430,6 +431,43 @@ namespace trees {
         } else {
             // this is the root, so we want to keep the start position the same
             write_pos[i] = read_pos[i];
+        }
+    }
+
+    __global__
+    void integrate_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count, float dt) {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= node_count) {
+            return;
+        }
+        const auto parent_id = read.trees.core.parent[i];
+        if (parent_id == i) {
+            // there is no parent, so copy over position and set velocity to zero
+            write.trees.core.pos[i] = read.trees.core.pos[i];
+            write.trees.core.vel[i] = glm::vec2(0);
+            // copy over angular position and velocity
+            // TODO: double check which ones we need to copy. mem writes should match the angular integration below
+            write.trees.core.abs_rot[i] = read.trees.core.abs_rot[i];
+            // write.trees.core.current_rel_rot[i] = read.trees.core.current_rel_rot[i];
+            write.trees.core.rot_vel[i] = read.trees.core.rot_vel[i];
+        } else {
+            // TODO: compute torque first. also, i don't think i need to store acceleration
+            const auto& current_vel = read.trees.core.vel[i];
+            const auto new_vel = current_vel + glm::vec2(0, -9.8f * dt);
+            write.trees.core.vel[i] = new_vel;
+
+            const auto& current_pos = read.trees.core.pos[i];
+            const glm::vec2 new_pos = current_pos + current_vel * dt;
+            write.trees.core.pos[i] = new_pos;
+
+            // repeat for angular TODO
+            const auto& current_rot_vel = read.trees.core.rot_vel[i];
+            const auto new_rot_vel = current_rot_vel + 0.0f * dt;
+            write.trees.core.rot_vel[i] = new_rot_vel;
+
+            const auto& current_abs_rot = read.trees.core.abs_rot[i];
+            const auto new_abs_rot = current_abs_rot + current_rot_vel * dt;
+            write.trees.core.abs_rot[i] = new_abs_rot;
         }
     }
 
@@ -487,6 +525,17 @@ namespace trees {
 
         // we just wrote to write_batch_device's abs_rot, so we need to swap the pointers and re-acquire ptrs
         write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
+
+        integrate_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 1/60.0f);
+        cudaDeviceSynchronize();
+
+        // we just write to pos, vel, abs_rot, and rot_vel, so we need to swap the pointers
+        write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
+        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
+        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
         read_batch_ptrs.get_ptrs(read_batch_device);
         write_batch_ptrs.get_ptrs(write_batch_device);
 
