@@ -8,12 +8,12 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 1<<6;
-constexpr uint32_t NUM_TREES = 1<<12;
+constexpr uint32_t NUM_NODES = 1<<7;
+constexpr uint32_t NUM_TREES = 1<<8;
 
 trees::TreeBatch make_batch_aos(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
     std::vector<trees::Tree> trees;
-    constexpr auto row_size = 64;
+    constexpr auto row_size = 32;
     std::normal_distribution<float> spawn_dist(0, row_size);
     std::uniform_int_distribution<int> num_nodes_dist(NUM_NODES / 2, 3 * NUM_NODES / 2);
     for (int i = 0; i < NUM_TREES; ++i) {
@@ -53,6 +53,12 @@ TreeTest::TreeTest(Game &game) : game(game) {
 
     read_tree_device.copy_from_host(read_tree);
     write_tree_device.copy_from_host(write_tree);
+
+    // read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
+    // write_tree = read_tree;
+    //
+    // read_tree_device.copy_from_host(read_tree);
+    // write_tree_device.copy_from_host(write_tree);
 }
 
 void TreeTest::show() {
@@ -187,6 +193,9 @@ void TreeTest::handleInput(SDL_Event event) {
         } else if (event.key.keysym.sym == SDLK_r) {
             read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
             write_tree = read_tree;
+
+            read_tree_device.copy_from_host(read_tree);
+            write_tree_device.copy_from_host(write_tree);
         } else if (event.key.keysym.sym == SDLK_SPACE) {
             mixing = !mixing;
         } else if (event.key.keysym.sym == SDLK_m) {

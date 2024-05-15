@@ -79,14 +79,6 @@ namespace trees {
 
     Tree strip_nav(const std::vector<BranchNodeFull> &nodes);
 
-    void mix_node_contents(const trees2::BranchNode read_nodes[], trees2::BranchNode write_nodes[], size_t start,
-                           size_t node_count, float interp, float total_energy);
-
-    void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp,
-                           const std::vector<float> &total_energies);
-
-    void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp);
-
     void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float interp);
 
 
@@ -96,9 +88,6 @@ namespace trees {
 
     float compute_total_energy(const float energies[], size_t node_count);
 
-    float get_min_energy(const Tree &nodes);
-
-    float get_max_energy(const Tree &nodes);
 
     __host__ __device__
     glm::vec2 get_length_vec(const trees2::BranchCore &core);

@@ -14,10 +14,14 @@ namespace trees {
         std::vector<BranchNodeFull> nodes;
         nodes.reserve(num_nodes);
 
+        const float root_rotation = static_cast<float>((M_PI / 2) + rot_dist(rand));
+
         nodes.emplace_back(BranchNodeFull{
             .core = trees2::BranchCore{
                 .length = length_dist(rand),
-                .abs_rot = static_cast<float>((M_PI / 2) + rot_dist(rand)),
+                .current_rel_rot = root_rotation,
+                .target_rel_rot = root_rotation,
+                .abs_rot = root_rotation,
                 .pos = start_pos,
             },
             .stats = trees2::BranchStats{
@@ -200,23 +204,9 @@ namespace trees {
         }
     }
 
-    __global__
-    void update_rot_kernel(const trees2::BranchNode *read_nodes, trees2::BranchNode *write_nodes, size_t node_count) {
-        auto i = blockIdx.x * blockDim.x + threadIdx.x;
-        if (i >= node_count) {
-            return;
-        }
-        const auto &read = read_nodes[i];
-        const auto &parent = read_nodes[read.core.parent];
-        auto &write = write_nodes[i];
-        if (read.core.parent != i) {
-            write.core.abs_rot = read.core.current_rel_rot + parent.core.abs_rot;
-        }
-    }
 
     __global__
     void update_rot_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count) {
-        // TODO: try passing by reference
         const auto read_parent = read.trees.core.parent;
         const auto read_current_rel_rot = read.trees.core.current_rel_rot;
         const auto read_abs_rot = read.trees.core.abs_rot;
@@ -229,6 +219,8 @@ namespace trees {
         auto parent_id = read_parent[i];
         if (parent_id != i) {
             write_abs_rot[i] = read_current_rel_rot[i] + read_abs_rot[parent_id];
+        } else {
+            write_abs_rot[i] = read_current_rel_rot[i]; // parent's abs_rot is considered to be 0
         }
     }
 
@@ -329,56 +321,19 @@ namespace trees {
         }
     }
 
-    __global__
-    void fix_pos_kernel(const trees2::BranchNode *read_nodes, trees2::BranchNode *write_nodes, size_t node_count) {
-        auto i = blockIdx.x * blockDim.x + threadIdx.x;
-        if (i >= node_count) {
-            return;
+    __host__ __device__
+    float smallest_angle_between(float angle1, float angle2) {
+        float diff = fmodf(angle2 - angle1, 2 * M_PI);
+        if (diff < -M_PI) {
+            diff += 2 * M_PI;
+        } else if (diff > M_PI) {
+            diff -= 2 * M_PI;
         }
-        const auto &read = read_nodes[i];
-        const auto &parent = read_nodes[read.core.parent];
-        const bool has_parent = read.core.parent != i;
-        auto &write = write_nodes[i];
-
-        glm::vec2 avg_start_pos = read.core.pos;
-        glm::vec2 avg_end_pos = read.core.pos + get_length_vec(read.core);
-
-        // iterate through parent's children. add up their end positions then divide to get average
-        if (has_parent) {
-            avg_start_pos += parent.core.pos + get_length_vec(parent.core);
-            for (auto j = parent.ch.start; j < parent.ch.start + parent.ch.count; ++j) {
-                const auto &parent_child = read_nodes[j];
-                if (j != i) {
-                    avg_start_pos += parent_child.core.pos;
-                }
-            }
-            avg_start_pos /= (1 + parent.ch.count);
-        }
-
-        // iterate through children. add up their start positions then divide to get average
-        for (auto j = read.ch.start; j < read.ch.start + read.ch.count; ++j) {
-            avg_end_pos += read_nodes[j].core.pos;
-        }
-        avg_end_pos /= (1 + read.ch.count);
-
-        // compute new angle
-        const float new_angle = std::atan2(avg_end_pos.y - avg_start_pos.y, avg_end_pos.x - avg_start_pos.x);
-        write.core.abs_rot = new_angle;
-
-        // shrink line to match length
-        if (has_parent) {
-            write.core.current_rel_rot = new_angle - parent.core.abs_rot;
-            auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
-            auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read.core.length / 2.0f;
-            write.core.pos = new_start;
-        } else {
-            // this is the root, so we want to keep the start position the same
-            write.core.pos = read.core.pos;
-        }
+        return diff;
     }
 
     __global__
-    void fix_pos_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count) {
+    void fix_pos_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count, float dt_inv, float vel_interp) {
         auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= node_count) {
             return;
@@ -386,56 +341,78 @@ namespace trees {
         // TODO: manipulate velocity based on required correction and dt
         const auto read_parent = read.trees.core.parent;
         const auto read_pos = read.trees.core.pos;
+        const auto read_vel = read.trees.core.vel;
         const auto read_length = read.trees.core.length;
         const auto read_abs_rot = read.trees.core.abs_rot;
         const auto read_ch_start = read.trees.ch.start;
         const auto read_ch_count = read.trees.ch.count;
+        const auto read_rot_vel = read.trees.core.rot_vel;
         auto write_pos = write.trees.core.pos;
         auto write_abs_rot = write.trees.core.abs_rot;
         auto write_current_rel_rot = write.trees.core.current_rel_rot;
+        auto write_vel = write.trees.core.vel;
+        auto write_rot_vel = write.trees.core.rot_vel;
 
+
+
+
+        const auto parent_index = read_parent[i];
         const bool has_parent = read_parent[i] != i;
 
-        glm::vec2 avg_start_pos = read_pos[i];
-        glm::vec2 avg_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], read_length[i]);
+        glm::vec2 new_start_pos = read_pos[i];
+        glm::vec2 new_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], read_length[i]);
 
-        // iterate through parent's children. add up their end positions then divide to get average
         if (has_parent) {
-            const auto parent_index = read_parent[i];
-            avg_start_pos += read_pos[parent_index] + get_length_vec(read_abs_rot[parent_index], read_length[parent_index]);
-            for (auto j = read_ch_start[parent_index]; j < read_ch_start[parent_index] + read_ch_count[parent_index]; ++j) {
-                if (j != i) {
-                    avg_start_pos += read_pos[j];
-                }
-            }
-            avg_start_pos /= (1 + read_ch_count[parent_index]);
+            new_start_pos = read_pos[parent_index] + get_length_vec(read_abs_rot[parent_index], read_length[parent_index]);
         }
 
         // iterate through children. add up their start positions then divide to get average
-        for (auto j = read_ch_start[i]; j < read_ch_start[i] + read_ch_count[i]; ++j) {
-            avg_end_pos += read_pos[j];
+        const auto ch_count = read_ch_count[i];
+        if (ch_count > 0) {
+            new_end_pos = glm::vec2(0);
+            for (auto j = read_ch_start[i]; j < read_ch_start[i] + ch_count; ++j) {
+                new_end_pos += read_pos[j];
+            }
+            // avg_end_pos /= (1 + read_ch_count[i]);
+            new_end_pos /= read_ch_count[i];
         }
-        avg_end_pos /= (1 + read_ch_count[i]);
+
 
         // compute new angle
-        const float new_angle = std::atan2(avg_end_pos.y - avg_start_pos.y, avg_end_pos.x - avg_start_pos.x);
-        write_abs_rot[i] = new_angle;
+        const float new_angle = std::atan2(new_end_pos.y - new_start_pos.y, new_end_pos.x - new_start_pos.x);
+        // write_abs_rot[i] = new_angle;
 
-        // shrink line to match length
-        if (has_parent) {
-            const auto parent_index = read_parent[i];
-            write_current_rel_rot[i] = new_angle - read_abs_rot[parent_index];
-            auto avg_center = (avg_start_pos + avg_end_pos) / 2.0f;
-            auto new_start = avg_center - glm::vec2(std::cos(new_angle), std::sin(new_angle)) * read_length[i] / 2.0f;
-            write_pos[i] = new_start;
-        } else {
-            // this is the root, so we want to keep the start position the same
-            write_pos[i] = read_pos[i];
-        }
+        // compute velocity of correction
+        const glm::vec2 correction_vel = (new_start_pos - read_pos[i]) * dt_inv;
+        const auto correction_normal = glm::normalize(correction_vel);
+        float vel_scalar = glm::dot(correction_normal, glm::normalize(read_vel[i]));
+        // vel_scalar = tanh(vel_scalar) * .5f + 0.5f;
+        // vel_scalar = 0.5f;
+        // vel_scalar = std::log(1.0f + exp(vel_scalar));
+        // write_vel[i] = read_vel[i] * vel_scalar;
+        // write_vel[i] = read_vel[i] * vel_scalar;
+        // write_vel[i] = read_vel[i] * vel_scalar;
+        write_vel[i] = read_vel[i] + correction_vel * 0.1f;
+        // write_vel[i] = read_vel[i];
+
+        const float parent_abs_rot = has_parent ? read_abs_rot[parent_index] : 0.0f;
+
+        write_pos[i] = new_start_pos;
+        // write_current_rel_rot[i] = new_angle - read_abs_rot[parent_index];
+        // write_current_rel_rot[i] = new_angle - read_abs_rot[i];
+        // write_current_rel_rot[i] = read.trees.core.current_rel_rot[i];
+
+        // const auto rot_delta = new_angle - read_abs_rot[i];
+        const auto rot_delta = smallest_angle_between(read_abs_rot[i], new_angle);
+        const auto rot_accel = rot_delta * 10.0f;
+
+        // write_current_rel_rot[i] = new_angle - parent_abs_rot;
+        write_rot_vel[i] = read_rot_vel[i] + rot_accel / dt_inv; // TODO pass in dt
     }
 
     __global__
     void integrate_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count, float dt) {
+        const float ANGULAR_DAMPENING = 0.99f;
         auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= node_count) {
             return;
@@ -445,13 +422,45 @@ namespace trees {
             // there is no parent, so copy over position and set velocity to zero
             write.trees.core.pos[i] = read.trees.core.pos[i];
             write.trees.core.vel[i] = glm::vec2(0);
-            // copy over angular position and velocity
-            // TODO: double check which ones we need to copy. mem writes should match the angular integration below
-            write.trees.core.abs_rot[i] = read.trees.core.abs_rot[i];
+            // // copy over angular position and velocity
+            // write.trees.core.abs_rot[i] = read.trees.core.abs_rot[i];
             // write.trees.core.current_rel_rot[i] = read.trees.core.current_rel_rot[i];
-            write.trees.core.rot_vel[i] = read.trees.core.rot_vel[i];
+            // write.trees.core.rot_vel[i] = read.trees.core.rot_vel[i];
+
+            // we still apply torque to the root node
+            const auto rot_delta = read.trees.core.target_rel_rot[i] - read.trees.core.current_rel_rot[i];
+            const auto torque = rot_delta * read.trees.stats.thickness[i] * trees2::TORQUE_PER_RAD;
+            const auto mass = read.trees.stats.energy[i] * trees2::MASS_PER_ENERGY;
+            const auto r = read.trees.core.length[i];
+            const auto moment_of_inertia = (1.0f / 3.0f) * mass * r * r;
+            const auto rot_acc = torque / moment_of_inertia;
+            const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
+            write.trees.core.rot_vel[i] = new_rot_vel;
+            const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+            write.trees.core.current_rel_rot[i] = new_rel_rot;
+            write.trees.core.abs_rot[i] = new_rel_rot;
         } else {
-            // TODO: compute torque first. also, i don't think i need to store acceleration
+            // compute torque between parent and this node
+            const auto rot_delta = read.trees.core.target_rel_rot[i] - read.trees.core.current_rel_rot[i];
+            // TODO try other things like avg or min thickness
+            const auto max_thickness = max(read.trees.stats.thickness[i], read.trees.stats.thickness[parent_id]);
+            const auto torque = rot_delta * max_thickness * trees2::TORQUE_PER_RAD;
+            const auto mass = read.trees.stats.energy[i] * trees2::MASS_PER_ENERGY;
+            // we are rotating around the parent, so moment of inertia is (1/3) * mass * r^2
+            const auto r = read.trees.core.length[i];
+            const auto moment_of_inertia = (1.0f / 3.0f) * mass * r * r;
+            // angular acceleration is torque / moment of inertia
+            const auto rot_acc = torque / moment_of_inertia;
+            // integrate angular velocity
+            const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
+            write.trees.core.rot_vel[i] = new_rot_vel;
+            // integrate angular position
+            const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+            write.trees.core.current_rel_rot[i] = new_rel_rot;
+            write.trees.core.abs_rot[i] = read.trees.core.abs_rot[parent_id] + new_rel_rot;
+
+
+
             const auto& current_vel = read.trees.core.vel[i];
             const auto new_vel = current_vel + glm::vec2(0, -98.0f * dt);
             write.trees.core.vel[i] = new_vel;
@@ -459,15 +468,6 @@ namespace trees {
             const auto& current_pos = read.trees.core.pos[i];
             const glm::vec2 new_pos = current_pos + current_vel * dt;
             write.trees.core.pos[i] = new_pos;
-
-            // repeat for angular TODO
-            const auto& current_rot_vel = read.trees.core.rot_vel[i];
-            const auto new_rot_vel = current_rot_vel + 0.0f * dt;
-            write.trees.core.rot_vel[i] = new_rot_vel;
-
-            const auto& current_abs_rot = read.trees.core.abs_rot[i];
-            const auto new_abs_rot = current_abs_rot + current_rot_vel * dt;
-            write.trees.core.abs_rot[i] = new_abs_rot;
         }
     }
 
@@ -506,16 +506,6 @@ namespace trees {
         dim3 block(256);
         dim3 grid((node_count + block.x - 1) / block.x);
 
-        // const trees2::bid_t* d_read_parent;
-        // const float* d_read_current_rel_rot;
-        // const float* d_read_abs_rot;
-        // float* d_write_abs_rot;
-        //
-        // d_read_parent = read_batch_device.trees.core.parent.data().get();
-        // d_read_current_rel_rot = read_batch_device.trees.core.current_rel_rot.data().get();
-        // d_read_abs_rot = read_batch_device.trees.core.abs_rot.data().get();
-        // d_write_abs_rot = write_batch_device.trees.core.abs_rot.data().get();
-
         trees2::TreeBatchPtrs read_batch_ptrs, write_batch_ptrs;
         read_batch_ptrs.get_ptrs(read_batch_device);
         write_batch_ptrs.get_ptrs(write_batch_device);
@@ -531,24 +521,24 @@ namespace trees {
         integrate_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 1/60.0f);
         cudaDeviceSynchronize();
 
-        // we just write to pos, vel, abs_rot, and rot_vel, so we need to swap the pointers
+        // we just write to pos, vel, abs_rot, rot_vel, current_rel_rot, so we need to swap the pointers
         write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
         write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
         write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
         write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
+        write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
         read_batch_ptrs.get_ptrs(read_batch_device);
         write_batch_ptrs.get_ptrs(write_batch_device);
 
-        fix_pos_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count);
+        fix_pos_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 60.0f, 1.0f);
         cudaDeviceSynchronize();
 
-        // we just wrote to write_batch_device's pos, abs_rot, and current_rel_rot, so we need to swap the pointers
+        // we just wrote to write_batch_device's pos, abs_rot, current_rel_rot, vel, and rot_vel, so we need to swap the pointers
         write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
-        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
-        write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
-
-
-
+        // write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        // write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
+        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
+        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
     }
 
 
@@ -733,28 +723,6 @@ namespace trees {
         return sum;
     }
 
-
-    float get_min_energy(const std::vector<trees2::BranchNode> &nodes) {
-        float min = std::numeric_limits<float>::max();
-        // skip the first node
-        for (auto i = 1; i < nodes.size(); ++i) {
-            if (nodes[i].stats.energy < min) {
-                min = nodes[i].stats.energy;
-            }
-        }
-        return min;
-    }
-
-    float get_max_energy(const std::vector<trees2::BranchNode> &nodes) {
-        float max = std::numeric_limits<float>::min();
-        // skip the first node
-        for (auto i = 1; i < nodes.size(); ++i) {
-            if (nodes[i].stats.energy > max) {
-                max = nodes[i].stats.energy;
-            }
-        }
-        return max;
-    }
 
     __host__ __device__
     glm::vec2 get_length_vec(const trees2::BranchCore &core) {
