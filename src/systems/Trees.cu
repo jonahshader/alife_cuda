@@ -3,7 +3,7 @@
 #include <stack>
 #include <glm/glm.hpp>
 #include <iostream>
-#include "graphics/renderers/LineRenderer.h"
+#include "graphics/renderers/LineRenderer.cuh"
 
 namespace trees {
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos) {
@@ -105,7 +105,7 @@ namespace trees {
         return batch;
     }
 
-    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand) {
+    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand, glm::mat4 transform) {
         std::uniform_real_distribution<float> rand_color(0, 1);
         std::default_random_engine rand_const(1);
         const auto &core = batch.trees.core;
@@ -123,9 +123,64 @@ namespace trees {
                                core.length[node_id];
                 auto parent_thickness = stats.thickness[parent_id];
                 auto thickness = stats.thickness[node_id];
+                // check if start or end pos is outside of the screen
+                glm::vec4 start_pos_vec4 = transform * glm::vec4(start_pos, 0, 1);
+                glm::vec4 end_pos_vec4 = transform * glm::vec4(end_pos, 0, 1);
+                if (start_pos_vec4.x < -1 || start_pos_vec4.x > 1 || start_pos_vec4.y < -1 || start_pos_vec4.y > 1 ||
+                    end_pos_vec4.x < -1 || end_pos_vec4.x > 1 || end_pos_vec4.y < -1 || end_pos_vec4.y > 1) {
+                    continue;
+                }
                 line_renderer.add_line(start_pos, end_pos, parent_thickness, thickness, color, color);
+                // line_renderer.add_line(start_pos, end_pos, parent_thickness, thickness, start_pos_vec4 * 0.5f + 0.5f, end_pos_vec4 * 0.5f + 0.5f);
             }
         }
+    }
+
+    __device__
+    void add_vertex(unsigned int* line_vbo, unsigned int line_start_index, float x, float y, float tx, float ty, float length, float radius, unsigned char red,
+                              unsigned char green, unsigned char blue, unsigned char alpha) {
+        auto s = line_start_index * 7;
+        line_vbo[s] = reinterpret_cast<unsigned int &>(x);
+        line_vbo[s + 1] = reinterpret_cast<unsigned int &>(y);
+        line_vbo[s + 2] = reinterpret_cast<unsigned int &>(tx);
+        line_vbo[s + 3] = reinterpret_cast<unsigned int &>(ty);
+        line_vbo[s + 4] = reinterpret_cast<unsigned int &>(length);
+        line_vbo[s + 5] = reinterpret_cast<unsigned int &>(radius);
+        unsigned int color = 0;
+        color |= red;
+        color |= green << 8;
+        color |= blue << 16;
+        color |= alpha << 24;
+        line_vbo[s + 6] = color;
+    }
+
+    __device__
+    void add_vertex(unsigned int* line_vbo, unsigned int line_start_index, float x, float y, float tx, float ty, float length, float radius, const glm::vec4 &color) {
+        add_vertex(line_vbo, line_start_index, x, y, tx, ty, length, radius, color.r * 255, color.g * 255, color.b * 255, color.a * 255);
+    }
+
+    __global__
+    void render_tree_kernel(unsigned int* line_vbo, const trees2::TreeBatchPtrs batch, size_t node_count) {
+        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= node_count) {
+            return;
+        }
+        auto parent_id = batch.trees.core.parent[i];
+        auto energy = batch.trees.stats.energy[i];
+        auto start_pos = batch.trees.core.pos[i];
+        auto abs_rot = batch.trees.core.abs_rot[i];
+        auto length = batch.trees.core.length[i];
+        auto line_dir = glm::vec2(std::cos(abs_rot), std::sin(abs_rot));
+        auto end_pos = start_pos + line_dir * length;
+        auto parent_thickness = batch.trees.stats.thickness[parent_id];
+        auto thickness = batch.trees.stats.thickness[i];
+        auto max_thickness = max(parent_thickness, thickness);
+        auto color = glm::vec4(1, 1, 1, min(1.0f, max(0.0f, energy)));
+
+        auto line_start_index = i * 6;
+
+        line_dir *= thickness;
+
     }
 
     void mutate_len_rot(trees2::TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise) {

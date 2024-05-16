@@ -30,7 +30,7 @@ private:
     trees2::TreeBatch read_tree{}, write_tree{};
     trees2::TreeBatchDevice read_tree_device{}, write_tree_device{};
 
-    bool mixing{false};
+    bool mixing{true};
     bool mutating_len_rot{false};
     bool updating_cpu{false};
     bool updating_parallel{false};

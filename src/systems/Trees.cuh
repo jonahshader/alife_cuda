@@ -46,7 +46,7 @@ namespace trees {
      * @param line_renderer The LineRenderer to use
      * @param batch The nodes of the trees
      */
-    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand);
+    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand, glm::mat4 transform);
 
 
     /**

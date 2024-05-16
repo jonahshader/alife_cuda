@@ -2,9 +2,11 @@
 // Created by jonah on 5/7/2023.
 //
 
-#include "LineRenderer.h"
+#include "LineRenderer.cuh"
 
 #include <glad/glad.h>
+#include <cuda_gl_interop.h>
+
 #include <iostream>
 
 LineRenderer::LineRenderer() : shader("shaders/line.vert", "shaders/line.frag") {
@@ -64,7 +66,7 @@ void LineRenderer::add_line(float x1, float y1, float x2, float y2, float radius
 
     glm::vec2 line = glm::vec2(x2 - x1, y2 - y1);
     float line_len = glm::length(line);
-    glm::vec2 line_dir = glm::normalize(glm::vec2(x2 - x1, y2 - y1)) * radius;
+    glm::vec2 line_dir = glm::normalize(line) * radius;
     glm::vec2 perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
 
     // bottom left
@@ -111,7 +113,8 @@ LineRenderer::add_line(float x1, float y1, float x2, float y2, float r1, float r
 
     glm::vec2 line = glm::vec2(x2 - x1, y2 - y1);
     float line_len = glm::length(line);
-    glm::vec2 line_dir = glm::normalize(glm::vec2(x2 - x1, y2 - y1)) * std::max(r1, r2);
+    float radius = std::max(r1, r2);
+    glm::vec2 line_dir = glm::normalize(line) * radius;
     glm::vec2 perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
 
     // bottom left
@@ -124,7 +127,7 @@ LineRenderer::add_line(float x1, float y1, float x2, float y2, float r1, float r
     glm::vec2 tr = glm::vec2(x2, y2) - perp_dir + line_dir;
 
     // max radius
-    float radius = std::max(r1, r2);
+
 
     // tri 1
     add_vertex(bl.x, bl.y, -radius, -radius, line_len, r1, color1);
@@ -139,6 +142,27 @@ LineRenderer::add_line(float x1, float y1, float x2, float y2, float r1, float r
 void LineRenderer::add_line(const glm::vec2 &v1, const glm::vec2 &v2, float r1, float r2, const glm::vec4 &color1, const glm::vec4 &color2) {
     add_line(v1.x, v1.y, v2.x, v2.y, r1, r2, color1, color2);
 }
+
+void LineRenderer::cudaRegisterBuffer() {
+    cudaGraphicsGLRegisterBuffer(&cudaResource, vbo, cudaGraphicsMapFlagsWriteDiscard);
+}
+
+void LineRenderer::cudaUnregisterBuffer() {
+    cudaGraphicsUnregisterResource(cudaResource);
+}
+
+void* LineRenderer::cudaMapBuffer() {
+    void* devPtr;
+    size_t size;
+    cudaGraphicsMapResources(1, &cudaResource, 0);
+    cudaGraphicsResourceGetMappedPointer(&devPtr, &size, cudaResource);
+    return devPtr;
+}
+
+void LineRenderer::cudaUnmapBuffer() {
+    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+}
+
 
 void LineRenderer::add_vertex(float x, float y, float tx, float ty, float length,  float radius,
                               const glm::vec4 &color) {

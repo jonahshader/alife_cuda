@@ -7,7 +7,7 @@
 #include "graphics/renderers/FontRenderer.h"
 #include "graphics/renderers/CircleRenderer.h"
 #include "graphics/renderers/RectRenderer.h"
-#include "graphics/renderers/LineRenderer.h"
+#include "graphics/renderers/LineRenderer.cuh"
 #include "SDL.h"
 
 // #include <thrust/random.h>

@@ -25,8 +25,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/graphics/ExtendViewport.h
         src/graphics/Shader.cpp
         src/graphics/Shader.h
-        src/graphics/renderers/LineRenderer.cpp
-        src/graphics/renderers/LineRenderer.h
+        src/graphics/renderers/LineRenderer.cu
+        src/graphics/renderers/LineRenderer.cuh
         src/graphics/renderers/CircleRenderer.cpp
         src/graphics/renderers/CircleRenderer.h
         src/graphics/renderers/FontRenderer.cpp

@@ -8,12 +8,12 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 1<<7;
-constexpr uint32_t NUM_TREES = 1<<8;
+constexpr uint32_t NUM_NODES = 1<<9;
+constexpr uint32_t NUM_TREES = 1<<11;
 
 trees::TreeBatch make_batch_aos(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
     std::vector<trees::Tree> trees;
-    constexpr auto row_size = 32;
+    constexpr auto row_size = 64;
     std::normal_distribution<float> spawn_dist(0, row_size);
     std::uniform_int_distribution<int> num_nodes_dist(NUM_NODES / 2, 3 * NUM_NODES / 2);
     for (int i = 0; i < NUM_TREES; ++i) {
@@ -74,9 +74,14 @@ void TreeTest::render(float dt) {
     bold.set_transform(vp.get_transform());
     rect.set_transform(vp.get_transform());
     line.set_transform(vp.get_transform());
+
+    bool update_render = mixing || mutating_len_rot || updating_parallel || mutating_pos || updating_cpu;
+
     bold.begin();
     rect.begin();
-    line.begin();
+    if (update_render) {
+        line.begin();
+    }
 
     std::string mix_time, mutate_time, update_time, mutate_pos_time, update_parallel_time;
 
@@ -135,18 +140,24 @@ void TreeTest::render(float dt) {
         auto start = std::chrono::steady_clock::now();
         trees::update_tree_parallel(read_tree, write_tree);
 //        update_tree_cuda(read_tree, write_tree);
-        auto end = std::chrono::steady_clock::now();
+        auto end =  std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         update_time = "Update Time (CPU): " + std::to_string(elapsed.count()) + "us";
     }
 
 
-    trees::render_tree(line, read_tree, game.getResources().generator);
+    if (update_render) {
+        trees::render_tree(line, read_tree, game.getResources().generator, vp.get_transform());
+    }
+
 
 
     bold.end();
     rect.end();
-    line.end();
+    if (update_render) {
+        line.end();
+    }
+
 
     bold.render();
     rect.render();
@@ -156,8 +167,6 @@ void TreeTest::render(float dt) {
     rect.set_transform(hud_vp.get_transform());
     line.set_transform(hud_vp.get_transform());
     bold.begin();
-    rect.begin();
-    line.begin();
 
     constexpr int padding = 10;
 
@@ -167,12 +176,8 @@ void TreeTest::render(float dt) {
 
 
     bold.end();
-    rect.end();
-    line.end();
 
     bold.render();
-    rect.render();
-    line.render();
 
     SDL_GL_SwapWindow(game.getResources().window);
 }
