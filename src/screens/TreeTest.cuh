@@ -36,4 +36,6 @@ private:
     bool updating_parallel{false};
     bool mutating_pos{false};
 
+    bool tree_vbo_buffered{false};
+
 };

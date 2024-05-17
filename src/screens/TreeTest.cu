@@ -79,7 +79,7 @@ void TreeTest::render(float dt) {
 
     bold.begin();
     rect.begin();
-    if (update_render) {
+    if (update_render && !tree_vbo_buffered) {
         line.begin();
     }
 
@@ -88,6 +88,7 @@ void TreeTest::render(float dt) {
 
     // TODO: fix
     if (mixing) {
+        read_tree_device.copy_to_host(read_tree);
         auto start = std::chrono::steady_clock::now();
         trees::mix_node_contents(read_tree, write_tree, 1.0f);
         // TODO: write a swap function for TreeBatch struct
@@ -96,30 +97,32 @@ void TreeTest::render(float dt) {
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         mix_time = "Mix Time (CPU): " + std::to_string(elapsed.count()) + "us";
+        read_tree_device.copy_from_host(read_tree);
     }
 
     if (mutating_len_rot) {
+        read_tree_device.copy_to_host(read_tree);
         auto start = std::chrono::steady_clock::now();
         trees::mutate_len_rot(read_tree, game.getResources().generator, 0.0f, 0.01f);
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         mutate_time = "Mutate Time (CPU): " + std::to_string(elapsed.count()) + "us";
-        write_tree.trees = read_tree.trees;
+        read_tree_device.copy_from_host(read_tree);
     }
 
     if (mutating_pos) {
+        read_tree_device.copy_to_host(read_tree);
         auto start = std::chrono::steady_clock::now();
         trees::mutate_pos(read_tree, game.getResources().generator, 1.0f);
         auto end = std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         mutate_pos_time = "Mutate Pos Time (CPU): " + std::to_string(elapsed.count()) + "us";
-        write_tree.trees = read_tree.trees;
+        read_tree_device.copy_from_host(read_tree);
     }
 
 
     if (updating_parallel) {
         // memory io is excluded from timing
-        read_tree_device.copy_from_host(read_tree);
 
         auto start = std::chrono::steady_clock::now();
         trees::update_tree_cuda(read_tree_device, write_tree_device);
@@ -127,35 +130,50 @@ void TreeTest::render(float dt) {
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         update_time = "Update Time (CUDA): " + std::to_string(elapsed.count()) + "us";
 
-        // copy modified vectors back to host
-        // read_tree.trees.core.abs_rot = read_tree_device.trees.core.abs_rot;
-        // read_tree.trees.core.pos = read_tree_device.trees.core.pos;
-        // read_tree.trees.core.current_rel_rot = read_tree_device.trees.core.current_rel_rot;
+    } else if (updating_cpu) {
         read_tree_device.copy_to_host(read_tree);
-        write_tree_device = read_tree_device;
-
-        write_tree = read_tree;
-    } else
-        if (updating_cpu) {
         auto start = std::chrono::steady_clock::now();
         trees::update_tree_parallel(read_tree, write_tree);
 //        update_tree_cuda(read_tree, write_tree);
         auto end =  std::chrono::steady_clock::now();
         auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         update_time = "Update Time (CPU): " + std::to_string(elapsed.count()) + "us";
+
+        // TODO: update_tree_parallel needs proper swaps, so this is a workaround
+        read_tree = write_tree;
+        read_tree_device.copy_from_host(read_tree);
+        write_tree_device = read_tree_device;
     }
 
 
     if (update_render) {
-        trees::render_tree(line, read_tree, game.getResources().generator, vp.get_transform());
+        if (tree_vbo_buffered) {
+            auto vbo_cuda_map = line.cudaMapBuffer();
+            trees2::TreeBatchPtrs read_tree_device_ptrs;
+            read_tree_device_ptrs.get_ptrs(read_tree_device);
+
+            dim3 block(256);
+            auto node_count = read_tree.trees.core.abs_rot.size();
+            dim3 grid((node_count + block.x - 1) / block.x);
+
+            trees::render_tree_kernel<<<grid, block>>>(static_cast<unsigned int *>(vbo_cuda_map), read_tree_device_ptrs, node_count);
+            // wait for kernel to finish
+            cudaDeviceSynchronize();
+            line.cudaUnmapBuffer();
+        } else {
+            trees::render_tree(line, read_tree, game.getResources().generator, vp.get_transform());
+        }
+
     }
 
 
 
     bold.end();
     rect.end();
-    if (update_render) {
+    if (update_render && !tree_vbo_buffered) {
         line.end();
+        line.cudaRegisterBuffer();
+        tree_vbo_buffered = true;
     }
 
 

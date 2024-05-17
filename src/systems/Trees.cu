@@ -6,6 +6,8 @@
 #include "graphics/renderers/LineRenderer.cuh"
 
 namespace trees {
+
+
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos) {
         std::uniform_real_distribution<float> length_dist(16.0f, 32.0f);
         std::normal_distribution<float> rot_dist(0.0f, 0.2f);
@@ -126,14 +128,16 @@ namespace trees {
                 // check if start or end pos is outside of the screen
                 glm::vec4 start_pos_vec4 = transform * glm::vec4(start_pos, 0, 1);
                 glm::vec4 end_pos_vec4 = transform * glm::vec4(end_pos, 0, 1);
-                if (start_pos_vec4.x < -1 || start_pos_vec4.x > 1 || start_pos_vec4.y < -1 || start_pos_vec4.y > 1 ||
-                    end_pos_vec4.x < -1 || end_pos_vec4.x > 1 || end_pos_vec4.y < -1 || end_pos_vec4.y > 1) {
-                    continue;
-                }
+                // if (start_pos_vec4.x < -1 || start_pos_vec4.x > 1 || start_pos_vec4.y < -1 || start_pos_vec4.y > 1 ||
+                //     end_pos_vec4.x < -1 || end_pos_vec4.x > 1 || end_pos_vec4.y < -1 || end_pos_vec4.y > 1) {
+                //     continue;
+                // }
                 line_renderer.add_line(start_pos, end_pos, parent_thickness, thickness, color, color);
                 // line_renderer.add_line(start_pos, end_pos, parent_thickness, thickness, start_pos_vec4 * 0.5f + 0.5f, end_pos_vec4 * 0.5f + 0.5f);
             }
         }
+
+
     }
 
     __device__
@@ -180,6 +184,25 @@ namespace trees {
         auto line_start_index = i * 6;
 
         line_dir *= thickness;
+        auto perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
+
+        // bottom left
+        glm::vec2 bl = start_pos + perp_dir - line_dir;
+        // bottom right
+        glm::vec2 br = start_pos - perp_dir - line_dir;
+        // top left
+        glm::vec2 tl = end_pos + perp_dir + line_dir;
+        // top right
+        glm::vec2 tr = end_pos - perp_dir + line_dir;
+
+        // tri 1
+        add_vertex(line_vbo, line_start_index + 0, bl.x, bl.y, -max_thickness, -max_thickness, length, parent_thickness, color);
+        add_vertex(line_vbo, line_start_index + 1, br.x, br.y, max_thickness, -max_thickness, length, parent_thickness, color);
+        add_vertex(line_vbo, line_start_index + 2, tr.x, tr.y, max_thickness, max_thickness + length, length, thickness, color);
+        // tri 2
+        add_vertex(line_vbo, line_start_index + 3, tr.x, tr.y, max_thickness, max_thickness + length, length, thickness, color);
+        add_vertex(line_vbo, line_start_index + 4, tl.x, tl.y, -max_thickness, max_thickness + length, length, thickness, color);
+        add_vertex(line_vbo, line_start_index + 5, bl.x, bl.y, -max_thickness, -max_thickness, length, parent_thickness, color);
 
     }
 

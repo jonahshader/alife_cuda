@@ -88,6 +88,8 @@ namespace trees {
 
     float compute_total_energy(const float energies[], size_t node_count);
 
+    __global__
+    void render_tree_kernel(unsigned int* line_vbo, const trees2::TreeBatchPtrs batch, size_t node_count);
 
     __host__ __device__
     glm::vec2 get_length_vec(const trees2::BranchCore &core);
@@ -97,4 +99,5 @@ namespace trees {
 
     __host__ __device__
     glm::vec2 get_length_vec(float abs_rot, float length);
+
 }

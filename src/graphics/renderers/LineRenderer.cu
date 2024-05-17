@@ -126,9 +126,6 @@ LineRenderer::add_line(float x1, float y1, float x2, float y2, float r1, float r
     // top right
     glm::vec2 tr = glm::vec2(x2, y2) - perp_dir + line_dir;
 
-    // max radius
-
-
     // tri 1
     add_vertex(bl.x, bl.y, -radius, -radius, line_len, r1, color1);
     add_vertex(br.x, br.y, radius, -radius, line_len, r1, color1);
