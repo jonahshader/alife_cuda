@@ -8,18 +8,18 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 1<<9;
-constexpr uint32_t NUM_TREES = 1<<11;
+constexpr uint32_t NUM_NODES = 1<<6;
+constexpr uint32_t NUM_TREES = 1<<15;
 
 trees::TreeBatch make_batch_aos(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
     std::vector<trees::Tree> trees;
-    constexpr auto row_size = 64;
+    constexpr auto row_size = 1024;
     std::normal_distribution<float> spawn_dist(0, row_size);
     std::uniform_int_distribution<int> num_nodes_dist(NUM_NODES / 2, 3 * NUM_NODES / 2);
     for (int i = 0; i < NUM_TREES; ++i) {
         int x = i % row_size;
         int y = i / row_size;
-        trees.push_back(trees::build_tree_optimized((x * NUM_NODES) / (row_size/2), rand, glm::vec2(x * 128, y * 128)));
+        trees.push_back(trees::build_tree_optimized((i * NUM_NODES) / (NUM_TREES/2), rand, glm::vec2(x * 128, y * 128)));
 //        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(spawn_dist(rand), spawn_dist(rand))));
     }
 
@@ -28,7 +28,7 @@ trees::TreeBatch make_batch_aos(uint32_t node_count, uint32_t tree_count, std::d
 
 trees2::TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
     std::vector<trees::Tree> trees;
-    constexpr auto row_size = 64;
+    constexpr auto row_size = 256;
     std::normal_distribution<float> spawn_dist(0, row_size);
     std::uniform_int_distribution<int> num_nodes_dist(NUM_NODES / 2, 3 * NUM_NODES / 2);
     for (int i = 0; i < NUM_TREES; ++i) {
