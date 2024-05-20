@@ -3,8 +3,9 @@
 
 #include <cstdint>
 #include <random>
-#include <glm/glm.hpp>
 #include <vector>
+#include <memory>
+#include <glm/glm.hpp>
 #include "systems/Game.cuh"
 #include <thrust/device_vector.h>
 
@@ -46,7 +47,7 @@ namespace trees {
      * @param line_renderer The LineRenderer to use
      * @param batch The nodes of the trees
      */
-    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand, glm::mat4 transform);
+    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform);
 
 
     /**
@@ -99,5 +100,23 @@ namespace trees {
 
     __host__ __device__
     glm::vec2 get_length_vec(float abs_rot, float length);
+
+    class Trees {
+    public:
+        explicit Trees(bool use_graphics);
+        ~Trees();
+
+        void generate_random_trees(uint32_t num_trees, uint32_t num_nodes, std::default_random_engine &rand);
+        void update(float dt);
+        void render(glm::mat4 transform);
+
+    private:
+        trees2::TreeBatch read_host{}, write_host{};
+        trees2::TreeBatchDevice read_device{}, write_device{};
+        bool host_current{false}, device_current{false};
+
+        // LineRenderer *line_renderer{nullptr};
+        std::unique_ptr<LineRenderer> line_renderer{};
+    };
 
 }

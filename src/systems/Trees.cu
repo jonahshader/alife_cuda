@@ -11,12 +11,13 @@ namespace trees {
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos) {
         std::uniform_real_distribution<float> length_dist(16.0f, 32.0f);
         std::normal_distribution<float> rot_dist(0.0f, 0.2f);
-        std::uniform_real_distribution<float> energy_dist(0.0f, 1.0f);
+        std::uniform_real_distribution<float> energy_dist(0.1f, 1.0f);
 
         std::vector<BranchNodeFull> nodes;
         nodes.reserve(num_nodes);
 
         const float root_rotation = static_cast<float>((M_PI / 2) + rot_dist(rand));
+        const float root_thickness = 5.0f;
 
         nodes.emplace_back(BranchNodeFull{
             .core = trees2::BranchCore{
@@ -27,7 +28,8 @@ namespace trees {
                 .pos = start_pos,
             },
             .stats = trees2::BranchStats{
-                .thickness = 3.0f,
+                .energy = 1.0f,
+                .thickness = root_thickness,
             },
         });
 
@@ -41,11 +43,11 @@ namespace trees {
             float absolute_rotation = parent_node.core.abs_rot + relative_rotation;
             glm::vec2 position = parent_node.core.pos + get_length_vec(parent_node.core);
             //            float thickness = std::max(parent_node.stats.thickness * 0.9f, 1.0f);
-            float thickness = parent_node.stats.thickness * 0.9f;
+            float thickness = parent_node.stats.thickness * 0.95f;
 
             nodes.emplace_back(BranchNodeFull{
                 .core = trees2::BranchCore{
-                    .length = length_dist(rand),
+                    .length = length_dist(rand) * thickness / root_thickness,
                     .current_rel_rot = relative_rotation,
                     .target_rel_rot = relative_rotation,
                     .abs_rot = absolute_rotation,
@@ -107,7 +109,28 @@ namespace trees {
         return batch;
     }
 
-    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, std::default_random_engine &rand, glm::mat4 transform) {
+    trees2::TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
+        std::vector<Tree> trees;
+        constexpr auto row_size = 256;
+        std::normal_distribution<float> spawn_dist(0, row_size);
+        std::uniform_int_distribution<int> num_nodes_dist(node_count / 2, 3 * node_count / 2);
+        for (int i = 0; i < tree_count; ++i) {
+            int x = i % row_size;
+            int y = i / row_size;
+            trees.push_back(trees::build_tree_optimized((x * node_count) / (row_size/2), rand, glm::vec2(x * 128, y * 128)));
+            //        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(spawn_dist(rand), spawn_dist(rand))));
+        }
+
+        auto concat = trees::concatenate_trees(trees);
+        trees2::TreeBatch batch;
+        batch.tree_shapes.push_back(concat.tree_shapes);
+        batch.tree_data.push_back(concat.tree_data);
+        batch.trees.push_back(concat.trees);
+
+        return batch;
+    }
+
+    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform) {
         std::uniform_real_distribution<float> rand_color(0, 1);
         std::default_random_engine rand_const(1);
         const auto &core = batch.trees.core;
@@ -579,6 +602,7 @@ namespace trees {
     // so the final updated version is stored in read_batch_device.
     // updates abs_rot, pos, current_rel_rot
     void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device) {
+        cudaDeviceSynchronize();
         const size_t node_count = read_batch_device.trees.core.abs_rot.size();
 
         dim3 block(256);
@@ -816,4 +840,72 @@ namespace trees {
     glm::vec2 get_length_vec(float abs_rot, float length) {
         return glm::vec2(std::cos(abs_rot), std::sin(abs_rot)) * length;
     }
+
+    Trees::Trees(bool use_graphics) {
+        if (use_graphics) {
+            // line_renderer = new LineRenderer();
+            line_renderer = std::make_unique<LineRenderer>();
+            // line_renderer->cudaRegisterBuffer();
+        }
+    }
+
+    Trees::~Trees() {
+        if (line_renderer) {
+            // line_renderer->cudaUnregisterBuffer();
+        }
+    }
+
+    void Trees::generate_random_trees(uint32_t num_trees, uint32_t num_nodes, std::default_random_engine &rand) {
+        std::cout << "make_batch" << std::endl;
+        read_host = make_batch(num_nodes, num_trees, rand);
+        std::cout << "copy 1" << std::endl;
+        write_host = read_host;
+
+        std::cout << "copy to device 1" << std::endl;
+        read_device.copy_from_host(read_host);
+        std::cout << "copy to device 2" << std::endl;
+        write_device.copy_from_host(write_host);
+        std::cout << "sync" << std::endl;
+        cudaDeviceSynchronize();
+    }
+
+    void Trees::update(float dt) {
+        update_tree_cuda(read_device, write_device);
+    }
+
+    void Trees::render(glm::mat4 transform) {
+        // early return if we don't have a line renderer
+        if (!line_renderer) return;
+
+        line_renderer->set_transform(transform);
+
+        const auto node_count = read_device.trees.core.abs_rot.size();
+        line_renderer->ensure_vbo_capacity(node_count);
+        // get a cuda compatible pointer to the vbo
+        line_renderer->cudaRegisterBuffer();
+        auto vbo_ptr = line_renderer->cudaMapBuffer();
+        trees2::TreeBatchPtrs ptrs;
+        ptrs.get_ptrs(read_device);
+
+        dim3 block(256);
+        dim3 grid((node_count + block.x - 1) / block.x);
+        render_tree_kernel<<<grid, block>>>(static_cast<unsigned int *>(vbo_ptr), ptrs, node_count);
+        cudaDeviceSynchronize();
+        line_renderer->cudaUnmapBuffer();
+
+        line_renderer->render(node_count);
+        line_renderer->cudaUnregisterBuffer();
+
+        // read_device.copy_to_host(read_host);
+        // line_renderer->begin();
+        // render_tree(*line_renderer.get(), read_host, transform);
+        // line_renderer->end();
+        // line_renderer->render();
+
+    }
+
+
+
+
+
 }

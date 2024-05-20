@@ -27,8 +27,7 @@ private:
     ExtendViewport vp{720, 720};
     ExtendViewport hud_vp{720, 720};
 
-    trees2::TreeBatch read_tree{}, write_tree{};
-    trees2::TreeBatchDevice read_tree_device{}, write_tree_device{};
+    trees::Trees trees{true};
 
     bool mixing{true};
     bool mutating_len_rot{false};

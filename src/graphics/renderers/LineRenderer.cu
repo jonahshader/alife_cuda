@@ -21,16 +21,15 @@ LineRenderer::LineRenderer() : shader("shaders/line.vert", "shaders/line.frag") 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
 
     // x y
-    GLsizei s = 7 * sizeof(float);
-    glVertexAttribPointer(0, 2, GL_FLOAT, false, s, (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, false, VERTEX_BYTES, (void*)0);
     // tex x y
-    glVertexAttribPointer(1, 2, GL_FLOAT, false, s, (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, false, VERTEX_BYTES, (void*)(2 * sizeof(float)));
     // line end
-    glVertexAttribPointer(2, 1, GL_FLOAT, false, s, (void*)(4 * sizeof(float)));
+    glVertexAttribPointer(2, 1, GL_FLOAT, false, VERTEX_BYTES, (void*)(4 * sizeof(float)));
     // radius
-    glVertexAttribPointer(3, 1, GL_FLOAT, false, s, (void*)(5 * sizeof(float)));
+    glVertexAttribPointer(3, 1, GL_FLOAT, false, VERTEX_BYTES, (void*)(5 * sizeof(float)));
     // color
-    glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, true, s, (void*)(6 * sizeof(float)));
+    glVertexAttribPointer(4, 4, GL_UNSIGNED_BYTE, true, VERTEX_BYTES, (void*)(6 * sizeof(float)));
 
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
@@ -97,9 +96,17 @@ LineRenderer::~LineRenderer() {
 void LineRenderer::render() {
     shader.use();
     glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, 0, data.size() / 7);
+    glDrawArrays(GL_TRIANGLES, 0, data.size() / VERTEX_ELEMS);
     glBindVertexArray(0);
 }
+
+void LineRenderer::render(size_t line_count) {
+    shader.use();
+    glBindVertexArray(vao);
+    glDrawArrays(GL_TRIANGLES, 0, line_count * VERTICES_PER_LINE);
+    glBindVertexArray(0);
+}
+
 
 void LineRenderer::set_transform(glm::mat4 transform) {
     shader.use();
@@ -180,4 +187,28 @@ void LineRenderer::add_vertex(float x, float y, float tx, float ty, float length
     color |= blue << 16;
     color |= alpha << 24;
     data.emplace_back(color);
+}
+
+void LineRenderer::ensure_vbo_capacity(size_t num_lines) {
+    const auto size_bytes = num_lines * VERTEX_BYTES * VERTICES_PER_LINE;
+    if (buffer_size < size_bytes) {
+        if (buffer_size == 0) {
+            buffer_size = size_bytes;
+        } else {
+            while (buffer_size < size_bytes) {
+                buffer_size *= 2;
+            }
+        }
+
+        std::cout << "LineRenderer buffer size changed to " << buffer_size << std::endl;
+
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    } else if (buffer_size > size_bytes * 4) {
+        buffer_size = size_bytes;
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
 }
