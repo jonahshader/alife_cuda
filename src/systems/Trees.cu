@@ -7,7 +7,6 @@
 
 namespace trees {
 
-
     std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos) {
         std::uniform_real_distribution<float> length_dist(16.0f, 32.0f);
         std::normal_distribution<float> rot_dist(0.0f, 0.2f);
@@ -69,12 +68,33 @@ namespace trees {
         return nodes;
     }
 
+    std::vector<trees2::BranchNode> strip_nav(const std::vector<BranchNodeFull> &nodes) {
+        std::vector<trees2::BranchNode> stripped;
+        stripped.reserve(nodes.size());
+        for (const auto &node: nodes) {
+            uint32_t num_children = node.nav.children.size();
+            uint32_t children_start = 0;
+            if (num_children > 0) {
+                children_start = node.nav.children[0];
+            }
+            stripped.push_back(trees2::BranchNode{
+                .core = node.core,
+                .stats = node.stats,
+                .ch = trees2::BranchShape{
+                    .start = children_start,
+                    .count = num_children
+                }
+            });
+        }
+        return stripped;
+    }
+
     std::vector<trees2::BranchNode> build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand,
                                                          glm::vec2 start_pos) {
         return strip_nav(sort_tree(build_tree(num_nodes, rand, start_pos)));
     }
 
-    TreeBatch concatenate_trees(const std::vector<Tree> &trees) {
+    TreeBatch concatenate_trees(const std::vector<Tree> &trees, const std::vector<trees2::TreeData> &tree_data) {
         TreeBatch batch{};
         // reserve the exact amount of mem needed to store the concatenated tree
         uint32_t total_size = 0;
@@ -89,6 +109,7 @@ namespace trees {
             .count = static_cast<uint32_t>(trees[0].size()),
         });
         batch.trees = trees[0];
+        batch.tree_data.push_back(tree_data[0]);
         for (int i = 1; i < trees.size(); ++i) {
             auto tree = trees[i];
             const auto offset = batch.tree_shapes.back().start + batch.tree_shapes.back().count;
@@ -104,6 +125,7 @@ namespace trees {
             });
             // append the tree to the batch
             batch.trees.insert(batch.trees.end(), tree.begin(), tree.end());
+            batch.tree_data.push_back(tree_data[i]);
         }
 
         return batch;
@@ -111,21 +133,53 @@ namespace trees {
 
     trees2::TreeBatch make_batch(uint32_t node_count, uint32_t tree_count, std::default_random_engine& rand) {
         std::vector<Tree> trees;
+        std::vector<trees2::TreeData> tree_data;
         constexpr auto row_size = 256;
         std::normal_distribution<float> spawn_dist(0, row_size);
         std::uniform_int_distribution<int> num_nodes_dist(node_count / 2, 3 * node_count / 2);
         for (int i = 0; i < tree_count; ++i) {
             int x = i % row_size;
             int y = i / row_size;
-            trees.push_back(trees::build_tree_optimized((x * node_count) / (row_size/2), rand, glm::vec2(x * 128, y * 128)));
+            uint32_t nodes = std::max(2u, (x * node_count) / (row_size/2));
+            trees.push_back(build_tree_optimized(nodes, rand, glm::vec2(x * 128, y * 128)));
             //        trees.push_back(build_tree_optimized(NUM_NODES, rand, glm::vec2(spawn_dist(rand), spawn_dist(rand))));
+            tree_data.emplace_back();
         }
 
-        auto concat = trees::concatenate_trees(trees);
+        auto concat = concatenate_trees(trees, tree_data);
         trees2::TreeBatch batch;
         batch.tree_shapes.push_back(concat.tree_shapes);
         batch.tree_data.push_back(concat.tree_data);
         batch.trees.push_back(concat.trees);
+
+        const auto total_nodes = batch.trees.core.abs_rot.size();
+
+        std::vector<int> branch_reads;
+        // init with zeros
+        branch_reads.reserve(total_nodes);
+        for (int i = 0; i < total_nodes; ++i) {
+            branch_reads.push_back(0);
+        }
+
+        for (auto i = 0; i < batch.tree_shapes.count.size(); ++i) {
+            auto start = batch.tree_shapes.start[i];
+            for (auto j = 0; j < batch.tree_shapes.count[i]; ++j) {
+                auto branch_index = start + j;
+                if (branch_index >= total_nodes) {
+                    std::cout << "total_nodes = " << total_nodes << std::endl;
+                    std::cout << "branch_index = " << branch_index << std::endl;
+                    std::cout << "start = " << start << std::endl;
+                    std::cout << "count = " << batch.tree_shapes.count[i] << std::endl;
+                }
+                branch_reads[branch_index]++;
+            }
+        }
+
+        for (auto i = 0; i < total_nodes; ++i) {
+            if (branch_reads[i] != 1) {
+                std::cout << "branch_reads[" << i << "] = " << branch_reads[i] << std::endl;
+            }
+        }
 
         return batch;
     }
@@ -159,8 +213,6 @@ namespace trees {
                 // line_renderer.add_line(start_pos, end_pos, parent_thickness, thickness, start_pos_vec4 * 0.5f + 0.5f, end_pos_vec4 * 0.5f + 0.5f);
             }
         }
-
-
     }
 
     __device__
@@ -188,26 +240,26 @@ namespace trees {
 
     __global__
     void render_tree_kernel(unsigned int* line_vbo, const trees2::TreeBatchPtrs batch, size_t node_count) {
-        auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        const auto i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= node_count) {
             return;
         }
-        auto parent_id = batch.trees.core.parent[i];
-        auto energy = batch.trees.stats.energy[i];
-        auto start_pos = batch.trees.core.pos[i];
-        auto abs_rot = batch.trees.core.abs_rot[i];
-        auto length = batch.trees.core.length[i];
+        const auto parent_id = batch.trees.core.parent[i];
+        const auto energy = batch.trees.stats.energy[i];
+        const auto start_pos = batch.trees.core.pos[i];
+        const auto abs_rot = batch.trees.core.abs_rot[i];
+        const auto length = batch.trees.core.length[i];
         auto line_dir = glm::vec2(std::cos(abs_rot), std::sin(abs_rot));
-        auto end_pos = start_pos + line_dir * length;
-        auto parent_thickness = batch.trees.stats.thickness[parent_id];
-        auto thickness = batch.trees.stats.thickness[i];
-        auto max_thickness = max(parent_thickness, thickness);
-        auto color = glm::vec4(1, 1, 1, min(1.0f, max(0.0f, energy)));
+        const auto end_pos = start_pos + line_dir * length;
+        const auto parent_thickness = batch.trees.stats.thickness[parent_id];
+        const auto thickness = batch.trees.stats.thickness[i];
+        const auto max_thickness = max(parent_thickness, thickness);
+        const auto color = glm::vec4(1, 1, 1, min(1.0f, max(0.0f, energy)));
 
-        auto line_start_index = i * 6;
+        const auto line_start_index = i * 6;
 
         line_dir *= thickness;
-        auto perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
+        const auto perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
 
         // bottom left
         glm::vec2 bl = start_pos + perp_dir - line_dir;
@@ -228,83 +280,6 @@ namespace trees {
         add_vertex(line_vbo, line_start_index + 5, bl.x, bl.y, -max_thickness, -max_thickness, length, parent_thickness, color);
 
     }
-
-    void mutate_len_rot(trees2::TreeBatch &batch, std::default_random_engine &rand, float length_noise, float rot_noise) {
-        std::normal_distribution<float> length_dist(0.0f, length_noise);
-        std::normal_distribution<float> rot_dist(0.0f, rot_noise);
-
-        for (auto i = 0; i < batch.trees.core.abs_rot.size(); ++i) {
-            auto& length = batch.trees.core.length[i];
-            length += length_dist(rand);
-            length = std::max(0.0f, length);
-            batch.trees.core.current_rel_rot[i] += rot_dist(rand);
-        }
-    }
-
-    void mutate_pos(trees2::TreeBatch &batch, std::default_random_engine &rand, float noise) {
-        std::normal_distribution<float> pos_dist(0.0f, noise);
-        for (auto i = 0; i < batch.trees.core.pos.size(); ++i) {
-            batch.trees.core.pos[i].x += pos_dist(rand);
-            batch.trees.core.pos[i].y += pos_dist(rand);
-        }
-    }
-
-    void update_tree(std::vector<BranchNodeFull> &nodes) {
-        for (auto i = 1; i < nodes.size(); ++i) {
-            auto &core = nodes[i].core;
-            core.abs_rot = nodes[core.parent].core.abs_rot + core.current_rel_rot;
-            core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.
-                       length;
-        }
-    }
-
-    void update_tree(std::vector<trees2::BranchNode> &nodes) {
-        for (auto i = 1; i < nodes.size(); ++i) {
-            auto &core = nodes[i].core;
-            core.abs_rot = nodes[core.parent].core.abs_rot + core.current_rel_rot;
-            core.pos = nodes[core.parent].core.pos + glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.
-                       length;
-        }
-    }
-
-    void update_tree(TreeBatch &batch) {
-#pragma omp parallel for
-        for (int j = 0; j < batch.tree_shapes.size(); ++j) {
-            const auto &shape = batch.tree_shapes[j];
-            for (auto i = shape.start; i < shape.start + shape.count; ++i) {
-                auto &core = batch.trees[i].core;
-                if (i != core.parent) {
-                    core.abs_rot = batch.trees[core.parent].core.abs_rot + core.current_rel_rot;
-                    core.pos = batch.trees[core.parent].core.pos + glm::vec2(
-                                   std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
-                }
-            }
-        }
-    }
-
-    // PRIVATE FUNCTIONS
-    void update_rot_parallel(const TreeBatch &read_batch, TreeBatch &write_batch) {
-#pragma omp parallel for
-        for (int i = 0; i < read_batch.trees.size(); ++i) {
-            const auto &read = read_batch.trees[i];
-            const auto &parent = read_batch.trees[read.core.parent];
-            auto &write = write_batch.trees[i];
-            if (read.core.parent != i) {
-                write.core.abs_rot = read.core.current_rel_rot + parent.core.abs_rot;
-            }
-        }
-    }
-
-    void update_rot_parallel(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch) {
-        for (auto i = 0; i < read_batch.trees.core.abs_rot.size(); ++i) {
-            auto parent_id = read_batch.trees.core.parent[i];
-            if (parent_id != i) {
-                write_batch.trees.core.abs_rot[i] =
-                        read_batch.trees.core.current_rel_rot[i] + read_batch.trees.core.abs_rot[parent_id];
-            }
-        }
-    }
-
 
     __global__
     void update_rot_kernel(const trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t node_count) {
@@ -591,58 +566,6 @@ namespace trees {
         }
     }
 
-    void update_tree_parallel(trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch) {
-        update_rot_parallel(read_batch, write_batch);
-        fix_pos_parallel(write_batch, read_batch);
-        //        read_batch.trees = write_batch.trees;
-        write_batch.trees = read_batch.trees;
-    }
-
-    // write to write_batch_device, but swaps written vectors with read_batch_device vectors,
-    // so the final updated version is stored in read_batch_device.
-    // updates abs_rot, pos, current_rel_rot
-    void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device) {
-        cudaDeviceSynchronize();
-        const size_t node_count = read_batch_device.trees.core.abs_rot.size();
-
-        dim3 block(256);
-        dim3 grid((node_count + block.x - 1) / block.x);
-
-        trees2::TreeBatchPtrs read_batch_ptrs, write_batch_ptrs;
-        read_batch_ptrs.get_ptrs(read_batch_device);
-        write_batch_ptrs.get_ptrs(write_batch_device);
-
-        update_rot_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count);
-        cudaDeviceSynchronize();
-
-        // we just wrote to write_batch_device's abs_rot, so we need to swap the pointers and re-acquire ptrs
-        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
-        read_batch_ptrs.get_ptrs(read_batch_device);
-        write_batch_ptrs.get_ptrs(write_batch_device);
-
-        integrate_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 1/60.0f);
-        cudaDeviceSynchronize();
-
-        // we just write to pos, vel, abs_rot, rot_vel, current_rel_rot, so we need to swap the pointers
-        write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
-        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
-        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
-        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
-        write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
-        read_batch_ptrs.get_ptrs(read_batch_device);
-        write_batch_ptrs.get_ptrs(write_batch_device);
-
-        fix_pos_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 60.0f, 1.0f);
-        cudaDeviceSynchronize();
-
-        // we just wrote to write_batch_device's pos, abs_rot, current_rel_rot, vel, and rot_vel, so we need to swap the pointers
-        write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
-        // write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
-        // write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
-        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
-        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
-    }
-
 
     std::vector<BranchNodeFull> sort_tree(const std::vector<BranchNodeFull> &nodes) {
         std::vector<BranchNodeFull> sorted_tree;
@@ -673,156 +596,184 @@ namespace trees {
         return sorted_tree;
     }
 
-    std::vector<trees2::BranchNode> strip_nav(const std::vector<BranchNodeFull> &nodes) {
-        std::vector<trees2::BranchNode> stripped;
-        stripped.reserve(nodes.size());
-        for (const auto &node: nodes) {
-            uint32_t num_children = node.nav.children.size();
-            uint32_t children_start = 0;
-            if (num_children > 0) {
-                children_start = node.nav.children[0];
-            }
-            stripped.push_back(trees2::BranchNode{
-                .core = node.core,
-                .stats = node.stats,
-                .ch = trees2::BranchShape{
-                    .start = children_start,
-                    .count = num_children
-                }
-            });
+    __host__ __device__
+    inline void compute_tree_total_energies(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, unsigned i) {
+        const auto start = read.tree_shapes.start[i];
+        const auto count = read.tree_shapes.count[i];
+        float total_energy = 0;
+        for (auto j = start; j < start + count; ++j) {
+            total_energy += read.trees.stats.energy[j];
         }
-        return stripped;
+        write.tree_data.total_energy[i] = total_energy;
     }
 
-    void mix_node_contents(const trees2::BranchNode read_nodes[], trees2::BranchNode write_nodes[], size_t start,
-                           size_t node_count, float interp, float total_energy) {
-        for (auto i = start; i < start + node_count; ++i) {
-            auto &read_node = read_nodes[i];
-            auto &write_node = write_nodes[i];
-
-            float sum = read_node.stats.energy;
-            float weight_sum = 1.0f;
-
-            // if parent id equals node id, that indicates it is a root
-            if (read_node.core.parent != i) {
-                sum += read_nodes[read_node.core.parent].stats.energy;
-                weight_sum += 1.0f;
-            }
-
-            auto child_start_index = read_node.ch.start;
-            for (uint32_t j = 0; j < read_node.ch.count; ++j) {
-                auto &child = read_nodes[j + child_start_index];
-                sum += child.stats.energy;
-                weight_sum += 1.0f;
-            }
-
-            float avg_energy = sum / weight_sum;
-            write_node.stats.energy = (1 - interp) * read_nodes[i].stats.energy + interp * avg_energy;
+    // writes to tree_data.total_energy
+    __global__
+    void compute_tree_total_energies_kernel(trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t tree_count) {
+        const auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= tree_count) {
+            return;
         }
-
-        float new_total_energy = compute_total_energy(&write_nodes[start], node_count);
-        float scale_factor = total_energy / new_total_energy;
-
-        for (auto i = start; i < start + node_count; ++i) {
-            auto &node = write_nodes[i];
-            node.stats.energy *= scale_factor;
-        }
+        compute_tree_total_energies(read, write, i);
     }
 
-    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch,
-        size_t start, size_t node_count,float interp, float total_energy) {
-        const auto& read_energy = read_batch.trees.stats.energy;
-        auto& write_energy = write_batch.trees.stats.energy;
-
-        for (auto i = start; i < start + node_count; ++i) {
-            float sum = read_energy[i];
-            float weight_sum = 1.0f;
-
-            // if parent id equals node id, that indicates it is a root.
-            // that means it doesn't have a parent so skip
-            auto parent_id = read_batch.trees.core.parent[i];
-            if (parent_id != i) {
-                sum += read_energy[parent_id];
-                weight_sum += 1.0f;
-            }
-
-            auto child_start_index = read_batch.trees.ch.start[i];
-            for (auto j = 0; j < read_batch.trees.ch.count[i]; ++j) {
-                sum += read_energy[j + child_start_index];
-                weight_sum += 1.0f;
-            }
-
-            float avg_energy = sum / weight_sum;
-            write_energy[i] = (1 - interp) * read_energy[i] + interp * avg_energy;
-        }
-
-        float new_total_energy = compute_total_energy(&write_energy[start], node_count);
-        float scale_factor = total_energy / new_total_energy;
-
-        for (auto i = start; i < start + node_count; ++i) {
-            write_energy[i] *= scale_factor;
-        }
-    }
-
-    void mix_node_contents(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch, float interp) {
+    void compute_tree_total_energies_cpu(trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t tree_count) {
 #pragma omp parallel for
-        for (int i = 0; i < read_batch.tree_shapes.start.size(); ++i) {
-            const auto start = read_batch.tree_shapes.start[i];
-            const auto count = read_batch.tree_shapes.count[i];
-            const float *energies = &read_batch.trees.stats.energy[start];
-            const auto total_energy = compute_total_energy(energies, count);
-            mix_node_contents(read_batch, write_batch, start, count, interp, total_energy);
+        for (auto i = 0; i < tree_count; ++i) {
+            compute_tree_total_energies(read, write, i);
         }
     }
 
+    __host__ __device__
+    inline void set_tree_total_energies(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, unsigned i) {
+        // TODO: this function can read and write from the same memory location, or
+        // it can read from read.tree_data.total_energy and write to write.tree_data.total_energy.
+        // need to determine which is better
 
-
-    void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp,
-                           const std::vector<float> &total_energies) {
-        // TODO: try pragma omp parallel for
-        for (int i = 0; i < read_batch.tree_shapes.size(); ++i) {
-            const trees2::BranchShape &shape = read_batch.tree_shapes[i];
-            const auto total_energy = total_energies[i];
-            mix_node_contents(read_batch.trees.data(), write_batch.trees.data(), shape.start, shape.count, interp,
-                              total_energy);
+        const auto start = read.tree_shapes.start[i];
+        const auto count = read.tree_shapes.count[i];
+        float total_energy = 0;
+        for (auto j = start; j < start + count; ++j) {
+            total_energy += read.trees.stats.energy[j];
+        }
+        float scale = read.tree_data.total_energy[i] / total_energy;
+        for (auto j = start; j < start + count; ++j) {
+            write.trees.stats.energy[j] = read.trees.stats.energy[j] * scale;
         }
     }
 
-    void mix_node_contents(const TreeBatch &read_batch, TreeBatch &write_batch, float interp) {
-        // TODO: try pragma omp parallel for
+    __global__
+    void set_tree_total_energies_kernel(trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t tree_count) {
+        const auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= tree_count) {
+            return;
+        }
+        set_tree_total_energies(read, write, i);
+    }
+
+    void set_tree_total_energies_cpu(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, size_t tree_count) {
 #pragma omp parallel for
-        for (int i = 0; i < read_batch.tree_shapes.size(); ++i) {
-            const trees2::BranchShape &shape = read_batch.tree_shapes[i];
-            const trees2::BranchNode *read_tree = &read_batch.trees[shape.start];
-            const auto total_energy = compute_total_energy(read_tree, shape.count);
-            mix_node_contents(read_batch.trees.data(), write_batch.trees.data(), shape.start, shape.count, interp,
-                              total_energy);
+        for (auto i = 0; i < tree_count; ++i) {
+            set_tree_total_energies(read, write, i);
         }
     }
 
-    float compute_total_energy(const std::vector<trees2::BranchNode> &nodes) {
-        float sum = 0;
-        for (auto &node: nodes) {
-            sum += node.stats.energy;
+    __host__ __device__
+    inline void mix_node_contents(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, unsigned i) {
+        const float interp = 1.0f;
+        const auto read_energy = read.trees.stats.energy;
+        const auto write_energy = write.trees.stats.energy;
+
+        float sum = read_energy[i];
+        float weight_sum = 1.0f;
+
+        auto parent_id = read.trees.core.parent[i];
+        // if parent id equals node id, that indicates it is a root.
+        // that means it doesn't have a parent so skip
+        if (parent_id != i) {
+            sum += read_energy[parent_id];
+            weight_sum += 1.0f;
         }
-        return sum;
+
+        auto child_start_index = read.trees.ch.start[i];
+        for (auto j = 0; j < read.trees.ch.count[i]; ++j) {
+            sum += read_energy[j + child_start_index];
+            weight_sum += 1.0f;
+        }
+
+        float avg_energy = sum / weight_sum;
+        write_energy[i] = (1 - interp) * read_energy[i] + interp * avg_energy;
     }
 
-    float compute_total_energy(const trees2::BranchNode nodes[], size_t node_count) {
-        float sum = 0;
-        for (int i = 0; i < node_count; ++i) {
-            const auto &node = nodes[i];
-            sum += node.stats.energy;
+    __global__
+    void mix_node_contents_kernel(trees2::TreeBatchPtrs read, trees2::TreeBatchPtrs write, size_t tree_count) {
+        const auto i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i >= tree_count) {
+            return;
         }
-        return sum;
+        mix_node_contents(read, write, i);
     }
 
-    float compute_total_energy(const float energy[], size_t count) {
-        float sum = 0;
-        for (auto i = 0; i < count; ++i) {
-            sum += energy[i];
+    void mix_node_contents_cpu(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, size_t tree_count) {
+#pragma omp parallel for
+        for (auto i = 0; i < tree_count; ++i) {
+            mix_node_contents(read, write, i);
         }
-        return sum;
+    }
+
+    void mix_node_contents_device_full(trees2::TreeBatchDevice &read_device, trees2::TreeBatchDevice &write_device) {
+        cudaDeviceSynchronize();
+        const size_t tree_count = read_device.tree_shapes.count.size();
+        const size_t node_count = read_device.trees.core.abs_rot.size();
+        dim3 block(256);
+        dim3 tree_grid((tree_count + block.x - 1) / block.x);
+        dim3 node_grid((node_count + block.x - 1) / block.x);
+
+        // std::cout << "tree_count: " << tree_count << std::endl;
+        // std::cout << "node_count: " << node_count << std::endl;
+        // std::cout << "last tree shape count: " << read_device.tree_shapes.count[tree_count - 1] << std::endl;
+        // std::cout << "last tree shape start: " << read_device.tree_shapes.start[tree_count - 1] << std::endl;
+
+        // first, compute total energies
+        trees2::TreeBatchPtrs read_ptrs, write_ptrs;
+        read_ptrs.get_ptrs(read_device);
+        write_ptrs.get_ptrs(write_device);
+        compute_tree_total_energies_kernel<<<tree_grid, block>>>(read_ptrs, write_ptrs, tree_count);
+        cudaDeviceSynchronize();
+        // compute_tree_total_energies_kernel writes to tree_data.total_energy, so we need to swap the pointers
+        write_device.tree_data.total_energy.swap(read_device.tree_data.total_energy);
+
+        // re-aquire pointers
+        read_ptrs.get_ptrs(read_device);
+        write_ptrs.get_ptrs(write_device);
+
+        // next, mix node contents
+        mix_node_contents_kernel<<<node_grid, block>>>(read_ptrs, write_ptrs, node_count);
+        cudaDeviceSynchronize();
+        // mix_node_contents_kernel writes to stats.energy, so we need to swap the pointers
+        write_device.trees.stats.energy.swap(read_device.trees.stats.energy);
+
+        // re-aquire pointers
+        read_ptrs.get_ptrs(read_device);
+        write_ptrs.get_ptrs(write_device);
+
+        // finally, correct total energies so that they match the original total energy
+        set_tree_total_energies_kernel<<<tree_grid, block>>>(read_ptrs, write_ptrs, tree_count);
+        cudaDeviceSynchronize();
+        // set_tree_total_energies_kernel writes to stats.energy, so we need to swap the pointers
+        write_device.trees.stats.energy.swap(read_device.trees.stats.energy);
+    }
+
+    void mix_node_contents_host_full(trees2::TreeBatch &read, trees2::TreeBatch &write) {
+        const size_t tree_count = read.tree_shapes.count.size();
+        const size_t node_count = read.trees.core.abs_rot.size();
+
+        // first, compute total energies
+        trees2::TreeBatchPtrs read_ptrs, write_ptrs;
+        read_ptrs.get_ptrs(read);
+        write_ptrs.get_ptrs(write);
+
+        compute_tree_total_energies_cpu(read_ptrs, write_ptrs, tree_count);
+        // compute_tree_total_energies_cpu writes to tree_data.total_energy, so we need to swap the pointers
+        write.tree_data.total_energy.swap(read.tree_data.total_energy);
+
+        // re-aquire pointers
+        read_ptrs.get_ptrs(read);
+        write_ptrs.get_ptrs(write);
+
+        // next, mix node contents
+        mix_node_contents_cpu(read_ptrs, write_ptrs, node_count);
+        // mix_node_contents_cpu writes to stats.energy, so we need to swap the pointers
+        write.trees.stats.energy.swap(read.trees.stats.energy);
+
+        // re-aquire pointers
+        read_ptrs.get_ptrs(read);
+        write_ptrs.get_ptrs(write);
+
+        // finally, correct total energies so that they match the original total energy
+        set_tree_total_energies_cpu(read_ptrs, write_ptrs, tree_count);
+        // set_tree_total_energies_cpu writes to stats.energy, so we need to swap the pointers
+        write.trees.stats.energy.swap(read.trees.stats.energy);
     }
 
 
@@ -843,15 +794,7 @@ namespace trees {
 
     Trees::Trees(bool use_graphics) {
         if (use_graphics) {
-            // line_renderer = new LineRenderer();
             line_renderer = std::make_unique<LineRenderer>();
-            // line_renderer->cudaRegisterBuffer();
-        }
-    }
-
-    Trees::~Trees() {
-        if (line_renderer) {
-            // line_renderer->cudaUnregisterBuffer();
         }
     }
 
@@ -902,6 +845,63 @@ namespace trees {
         // line_renderer->end();
         // line_renderer->render();
 
+    }
+
+        // write to write_batch_device, but swaps written vectors with read_batch_device vectors,
+    // so the final updated version is stored in read_batch_device.
+    // updates abs_rot, pos, current_rel_rot
+    void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device) {
+        // trees2::TreeBatch read_batch_host, write_batch_host;
+        // read_batch_device.copy_to_host(read_batch_host);
+        // write_batch_device.copy_to_host(write_batch_host);
+        //
+        //
+        // mix_node_contents_host_full(read_batch_host, write_batch_host);
+        //
+        // // copy back
+        // read_batch_device.copy_from_host(read_batch_host);
+        // write_batch_device.copy_from_host(write_batch_host);
+
+        mix_node_contents_device_full(read_batch_device, write_batch_device);
+
+        const size_t node_count = read_batch_device.trees.core.abs_rot.size();
+
+        dim3 block(256);
+        dim3 grid((node_count + block.x - 1) / block.x);
+
+        trees2::TreeBatchPtrs read_batch_ptrs, write_batch_ptrs;
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
+
+        update_rot_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count);
+        cudaDeviceSynchronize();
+
+        // we just wrote to write_batch_device's abs_rot, so we need to swap the pointers and re-acquire ptrs
+        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
+
+        integrate_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 1/60.0f);
+        cudaDeviceSynchronize();
+
+        // we just write to pos, vel, abs_rot, rot_vel, current_rel_rot, so we need to swap the pointers
+        write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
+        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
+        write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
+        write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
+        read_batch_ptrs.get_ptrs(read_batch_device);
+        write_batch_ptrs.get_ptrs(write_batch_device);
+
+        fix_pos_kernel<<<grid, block>>>(read_batch_ptrs, write_batch_ptrs, node_count, 60.0f, 1.0f);
+        cudaDeviceSynchronize();
+
+        // we just wrote to write_batch_device's pos, abs_rot, current_rel_rot, vel, and rot_vel, so we need to swap the pointers
+        write_batch_device.trees.core.pos.swap(read_batch_device.trees.core.pos);
+        // write_batch_device.trees.core.abs_rot.swap(read_batch_device.trees.core.abs_rot);
+        // write_batch_device.trees.core.current_rel_rot.swap(read_batch_device.trees.core.current_rel_rot);
+        write_batch_device.trees.core.vel.swap(read_batch_device.trees.core.vel);
+        write_batch_device.trees.core.rot_vel.swap(read_batch_device.trees.core.rot_vel);
     }
 
 

@@ -46,6 +46,9 @@ namespace trees2 {
     void get_ptrs(StructName##SoADevice& s) { \
         MacroName(SET_PTR, SET_PTR) \
     } \
+    void get_ptrs(StructName##SoA& s) { \
+        MacroName(SET_PTR_HOST, SET_PTR_HOST) \
+    } \
 };
 
 
@@ -100,6 +103,7 @@ namespace trees2 {
 #define COPY_FROM_HOST(type, name, ...) name = host.name;
 #define COPY_TO_HOST(type, name, ...) host.name = name;
 #define SET_PTR(type, name, ...) name = s.name.data().get();
+#define SET_PTR_HOST(type, name, ...) name = s.name.data();
 
     DEFINE_STRUCTS(BranchCore, FOR_BRANCH_CORE)
 
@@ -179,6 +183,12 @@ namespace trees2 {
             stats.get_ptrs(s.stats);
             ch.get_ptrs(s.ch);
         }
+
+        void get_ptrs(BranchNodeSoA& s) {
+            core.get_ptrs(s.core);
+            stats.get_ptrs(s.stats);
+            ch.get_ptrs(s.ch);
+        }
     };
 
     struct TreeBatch {
@@ -211,6 +221,12 @@ namespace trees2 {
         BranchNodePtrs trees{};
 
         void get_ptrs(TreeBatchDevice& s) {
+            tree_shapes.get_ptrs(s.tree_shapes);
+            tree_data.get_ptrs(s.tree_data);
+            trees.get_ptrs(s.trees);
+        }
+
+        void get_ptrs(TreeBatch& s) {
             tree_shapes.get_ptrs(s.tree_shapes);
             tree_data.get_ptrs(s.tree_data);
             trees.get_ptrs(s.trees);

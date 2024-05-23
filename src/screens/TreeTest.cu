@@ -8,18 +8,12 @@
 #include <iostream>
 #include <chrono>
 
-constexpr uint32_t NUM_NODES = 1<<6;
-constexpr uint32_t NUM_TREES = 1<<15;
+constexpr uint32_t NUM_NODES = 1<<7;
+constexpr uint32_t NUM_TREES = 1<<14;
 
 
 
 TreeTest::TreeTest(Game &game) : game(game) {
-
-    // read_tree = make_batch(NUM_NODES, NUM_TREES, game.getResources().generator);
-    // write_tree = read_tree;
-    //
-    // read_tree_device.copy_from_host(read_tree);
-    // write_tree_device.copy_from_host(write_tree);
     trees.generate_random_trees(NUM_TREES, NUM_NODES, game.getResources().generator);
 }
 

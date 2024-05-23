@@ -4,7 +4,7 @@ project(alife_cuda CUDA C CXX)
 set(CMAKE_CUDA_STANDARD 20)
 
 #set(CMAKE_CXX_FLAGS "-O3")
-set(CMAKE_CUDA_FLAGS "-openmp")
+set(CMAKE_CUDA_FLAGS "-openmp -lineinfo")
 
 set(LibraryRoot "F:/Programming/C++ Libraries/")
 
@@ -51,8 +51,6 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
         src/systems/TreeTypes.cuh
-        src/systems/TreeAlgos.cu
-        src/systems/TreeAlgos.cuh
 )
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)
