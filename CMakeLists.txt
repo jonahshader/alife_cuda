@@ -52,9 +52,44 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/screens/FluidTest.cuh
         src/systems/TreeTypes.cuh
 )
+
+add_executable(alife_cuda_headless src/main2.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
+        src/graphics/ExtendViewport.cpp
+        src/graphics/ExtendViewport.h
+        src/graphics/Shader.cpp
+        src/graphics/Shader.h
+        src/graphics/renderers/LineRenderer.cu
+        src/graphics/renderers/LineRenderer.cuh
+        src/graphics/renderers/CircleRenderer.cpp
+        src/graphics/renderers/CircleRenderer.h
+        src/graphics/renderers/FontRenderer.cpp
+        src/graphics/renderers/FontRenderer.h
+        src/lodepng.cpp
+        src/lodepng.h
+        src/graphics/renderers/RectRenderer.cpp
+        src/graphics/renderers/RectRenderer.h
+        src/systems/Game.cu
+        src/systems/Game.cuh
+        src/systems/Screen.h
+        src/systems/Resources.cu
+        src/systems/Resources.cuh
+        src/spatial_sort.cu
+        src/spatial_sort.cuh
+        src/screens/TreeTest.cu
+        src/screens/TreeTest.cuh
+        src/systems/Trees.cu
+        src/systems/Trees.cuh
+        src/systems/Fluid.cu
+        src/systems/Fluid.cuh
+        src/screens/FluidTest.cu
+        src/screens/FluidTest.cuh
+        src/systems/TreeTypes.cuh
+)
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(${PROJECT_NAME} SDL2main)
-target_link_libraries(${PROJECT_NAME} SDL2)
+target_link_libraries(alife_cuda SDL2main)
+target_link_libraries(alife_cuda SDL2)
+
+target_include_directories(alife_cuda_headless PUBLIC ${PROJECT_SOURCE_DIR}/src)
 
 set_target_properties(alife_cuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
