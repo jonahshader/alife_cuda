@@ -29,6 +29,7 @@ namespace trees {
             .stats = trees2::BranchStats{
                 .energy = 1.0f,
                 .thickness = root_thickness,
+                .target_thickness = root_thickness,
             },
         });
 
@@ -46,16 +47,17 @@ namespace trees {
 
             nodes.emplace_back(BranchNodeFull{
                 .core = trees2::BranchCore{
-                    .length = length_dist(rand) * thickness / root_thickness,
+                    // .length = length_dist(rand) * thickness / root_thickness,
                     .current_rel_rot = relative_rotation,
                     .target_rel_rot = relative_rotation,
                     .abs_rot = absolute_rotation,
                     .pos = position,
-                    .parent = parent
+                    .parent = parent,
                 },
                 .stats = trees2::BranchStats{
-                    .energy = energy_dist(rand),
-                    .thickness = thickness,
+                    .energy = 0,
+                    .target_thickness = thickness,
+                    .target_length = length_dist(rand) * thickness / root_thickness,
                 },
                 .nav = BranchNav{
                     .id = static_cast<uint32_t>(i)
@@ -254,7 +256,8 @@ namespace trees {
         const auto parent_thickness = batch.trees.stats.thickness[parent_id];
         const auto thickness = batch.trees.stats.thickness[i];
         const auto max_thickness = max(parent_thickness, thickness);
-        const auto color = glm::vec4(1, 1, 1, min(1.0f, max(0.0f, energy)));
+        const auto energy_coerced = min(1.0f, max(0.0f, energy));
+        const auto color = glm::vec4(1-energy_coerced, 1, 1-energy_coerced, 1);
 
         const auto line_start_index = i * 6;
 
@@ -429,6 +432,8 @@ namespace trees {
         auto write_vel = write.trees.core.vel;
         auto write_rot_vel = write.trees.core.rot_vel;
 
+        const auto length = read_length[i];
+
 
 
 
@@ -436,7 +441,7 @@ namespace trees {
         const bool has_parent = read_parent[i] != i;
 
         glm::vec2 new_start_pos = read_pos[i];
-        glm::vec2 new_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], read_length[i]);
+        glm::vec2 new_end_pos = read_pos[i] + get_length_vec(read_abs_rot[i], length);
 
         if (has_parent) {
             new_start_pos = read_pos[parent_index] + get_length_vec(read_abs_rot[parent_index], read_length[parent_index]);
@@ -460,18 +465,19 @@ namespace trees {
 
         // compute velocity of correction
         const glm::vec2 correction_vel = (new_start_pos - read_pos[i]) * dt_inv;
-        const auto correction_normal = glm::normalize(correction_vel);
-        float vel_scalar = glm::dot(correction_normal, glm::normalize(read_vel[i]));
+        // const auto correction_normal = glm::normalize(correction_vel);
+        // float vel_scalar = glm::dot(correction_normal, glm::normalize(read_vel[i]));
         // vel_scalar = tanh(vel_scalar) * .5f + 0.5f;
         // vel_scalar = 0.5f;
         // vel_scalar = std::log(1.0f + exp(vel_scalar));
         // write_vel[i] = read_vel[i] * vel_scalar;
         // write_vel[i] = read_vel[i] * vel_scalar;
         // write_vel[i] = read_vel[i] * vel_scalar;
-        write_vel[i] = read_vel[i] + correction_vel * 0.1f;
+        // TODO: vel should be limited by their normalized dot product somehow
+        write_vel[i] = read_vel[i] + correction_vel * 0.1f; // TODO scale with dt
         // write_vel[i] = read_vel[i];
 
-        const float parent_abs_rot = has_parent ? read_abs_rot[parent_index] : 0.0f;
+        // const float parent_abs_rot = has_parent ? read_abs_rot[parent_index] : 0.0f;
 
         write_pos[i] = new_start_pos;
         // write_current_rel_rot[i] = new_angle - read_abs_rot[parent_index];
@@ -480,10 +486,16 @@ namespace trees {
 
         // const auto rot_delta = new_angle - read_abs_rot[i];
         const auto rot_delta = smallest_angle_between(read_abs_rot[i], new_angle);
-        const auto rot_accel = rot_delta * 10.0f;
+        const auto rot_accel = length > 0 ? rot_delta * 10.0f : 0.0f; // TODO const rot_delta scalar
 
         // write_current_rel_rot[i] = new_angle - parent_abs_rot;
         write_rot_vel[i] = read_rot_vel[i] + rot_accel / dt_inv; // TODO pass in dt
+    }
+
+    __device__
+    float calc_torque(const float& min_thickness, const float& rot_delta) {
+        // return rot_delta * min_thickness * trees2::TORQUE_PER_RAD;
+        return rot_delta * pow(min_thickness, 4) * trees2::TORQUE_PER_RAD;
     }
 
     __global__
@@ -505,36 +517,56 @@ namespace trees {
 
             // we still apply torque to the root node
             const auto rot_delta = read.trees.core.target_rel_rot[i] - read.trees.core.current_rel_rot[i];
-            const auto torque = rot_delta * read.trees.stats.thickness[i] * trees2::TORQUE_PER_RAD;
-            const auto mass = read.trees.stats.energy[i] * trees2::MASS_PER_ENERGY;
-            const auto r = read.trees.core.length[i];
-            const auto moment_of_inertia = (1.0f / 3.0f) * mass * r * r;
-            const auto rot_acc = torque / moment_of_inertia;
-            const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
-            write.trees.core.rot_vel[i] = new_rot_vel;
-            const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
-            write.trees.core.current_rel_rot[i] = new_rel_rot;
-            write.trees.core.abs_rot[i] = new_rel_rot;
+            const auto torque = calc_torque(read.trees.stats.thickness[i], rot_delta);
+
+            const auto length = read.trees.core.length[i];
+            const auto radius = read.trees.stats.thickness[i];
+            // const auto mass = read.trees.stats.energy[i] * trees2::MASS_PER_ENERGY;
+            const auto mass = (trees2::MASS_PER_ENERGY / trees2::CUBIC_CM_PER_ENERGY) * length * radius * radius;
+            if (mass == 0 || length == 0) {
+                const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING;
+                const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+                write.trees.core.rot_vel[i] = new_rot_vel;
+                write.trees.core.current_rel_rot[i] = new_rel_rot;
+                write.trees.core.abs_rot[i] = new_rel_rot;
+            } else {
+                const auto moment_of_inertia = (1.0f / 3.0f) * mass * length * length;
+                const auto rot_acc = torque / moment_of_inertia;
+                const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
+                const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+                write.trees.core.rot_vel[i] = new_rot_vel;
+                write.trees.core.current_rel_rot[i] = new_rel_rot;
+                write.trees.core.abs_rot[i] = new_rel_rot;
+            }
+
         } else {
             // compute torque between parent and this node
             const auto rot_delta = read.trees.core.target_rel_rot[i] - read.trees.core.current_rel_rot[i];
-            // TODO try other things like avg or min thickness
-            const auto max_thickness = max(read.trees.stats.thickness[i], read.trees.stats.thickness[parent_id]);
-            const auto torque = rot_delta * max_thickness * trees2::TORQUE_PER_RAD;
+            const auto min_thickness = min(read.trees.stats.thickness[i], read.trees.stats.thickness[parent_id]);
+            const auto torque = calc_torque(min_thickness, rot_delta);
             const auto mass = read.trees.stats.energy[i] * trees2::MASS_PER_ENERGY;
             // we are rotating around the parent, so moment of inertia is (1/3) * mass * r^2
-            const auto r = read.trees.core.length[i];
-            const auto moment_of_inertia = (1.0f / 3.0f) * mass * r * r;
-            // angular acceleration is torque / moment of inertia
-            const auto rot_acc = torque / moment_of_inertia;
-            // integrate angular velocity
-            const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
-            write.trees.core.rot_vel[i] = new_rot_vel;
-            // integrate angular position
-            const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
-            write.trees.core.current_rel_rot[i] = new_rel_rot;
-            write.trees.core.abs_rot[i] = read.trees.core.abs_rot[parent_id] + new_rel_rot;
-
+            const auto length = read.trees.core.length[i];
+            if (mass == 0 || length == 0) {
+                // integrate angular velocity
+                const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING;
+                // integrate angular position
+                const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+                write.trees.core.rot_vel[i] = new_rot_vel;
+                write.trees.core.current_rel_rot[i] = new_rel_rot;
+                write.trees.core.abs_rot[i] = read.trees.core.abs_rot[parent_id] + new_rel_rot;
+            } else {
+                const auto moment_of_inertia = (1.0f / 3.0f) * mass * length * length;
+                // angular acceleration is torque / moment of inertia
+                const auto rot_acc = torque / moment_of_inertia;
+                // integrate angular velocity
+                const auto new_rot_vel = read.trees.core.rot_vel[i] * ANGULAR_DAMPENING + rot_acc * dt;
+                // integrate angular position
+                const auto new_rel_rot = read.trees.core.current_rel_rot[i] + new_rot_vel * dt;
+                write.trees.core.rot_vel[i] = new_rot_vel;
+                write.trees.core.current_rel_rot[i] = new_rel_rot;
+                write.trees.core.abs_rot[i] = read.trees.core.abs_rot[parent_id] + new_rel_rot;
+            }
 
 
             const auto& current_vel = read.trees.core.vel[i];
@@ -774,6 +806,24 @@ namespace trees {
         set_tree_total_energies_cpu(read_ptrs, write_ptrs, tree_count);
         // set_tree_total_energies_cpu writes to stats.energy, so we need to swap the pointers
         write.trees.stats.energy.swap(read.trees.stats.energy);
+    }
+
+    __host__ __device__
+    inline void grow(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, unsigned i) {
+        const auto current_thickness = read.trees.stats.thickness[i];
+        const auto current_length = read.trees.core.length[i];
+
+        const auto target_thickness = read.trees.stats.target_thickness[i];
+        const auto target_length = read.trees.stats.target_length[i];
+
+        if (current_thickness < target_thickness || current_length < target_length) {
+            const auto growth_rate = read.trees.stats.growth_rate[i];
+        } else {
+            // copy over energy, thickness, length
+            write.trees.stats.energy[i] = read.trees.stats.energy[i];
+            write.trees.stats.thickness[i] = read.trees.stats.thickness[i];
+            write.trees.core.length[i] = read.trees.core.length[i];
+        }
     }
 
 

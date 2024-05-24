@@ -8,8 +8,9 @@
 namespace trees2 {
     using bid_t = uint32_t;
 
-    constexpr float TORQUE_PER_RAD = 1000.0f;
+    constexpr float TORQUE_PER_RAD = 100.0f;
     constexpr float MASS_PER_ENERGY = 1.0f;
+    constexpr float CUBIC_CM_PER_ENERGY = 10.0f;
 
 #define FOR_BRANCH_CORE(N, D)       \
     D(float, length, 0)             \
@@ -29,9 +30,11 @@ namespace trees2 {
 
 #define FOR_BRANCH_STATS(N, D) \
     D(float, energy, 0.0f)     \
-    D(float, max_energy, 0.0f) \
-    D(float, mix_rate, 0.1f)   \
-    D(float, thickness, 1.0f)
+    D(float, growth_rate, 0.1f)   \
+    D(float, thickness, 0.0f) \
+    D(float, target_thickness, 1.0f) \
+    D(float, target_length, 0.0f)
+
 
 #define FOR_TREE_DATA(N, D) \
     D(float, total_energy, 0.0f)
