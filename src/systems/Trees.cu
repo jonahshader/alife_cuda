@@ -809,7 +809,7 @@ namespace trees {
     }
 
     __host__ __device__
-    inline void grow(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, unsigned i) {
+    inline void grow(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &write, float dt, unsigned i) {
         const auto current_thickness = read.trees.stats.thickness[i];
         const auto current_length = read.trees.core.length[i];
 
@@ -817,7 +817,25 @@ namespace trees {
         const auto target_length = read.trees.stats.target_length[i];
 
         if (current_thickness < target_thickness || current_length < target_length) {
-            const auto growth_rate = read.trees.stats.growth_rate[i];
+            // TODO: should probably make current_thickness a function of
+            // (target_thickness, current_length, target_length)
+            // or i just hold onto it for cacheing reasons
+            const auto progress = current_length / target_length;
+            const auto surface_area = current_thickness * current_thickness * static_cast<float>(M_PI);
+            const auto surface_area2 = sqrt(progress) * target_thickness * static_cast<float>(M_PI);
+            const auto target_surface_area = target_thickness * target_thickness * static_cast<float>(M_PI);
+
+            const auto current_mass = current_length * surface_area2 * trees2::MASS_PER_CUBIC_CM;
+            const auto energy = read.trees.stats.energy[i];
+            const auto growth_energy = min(read.trees.stats.growth_rate[i] * dt, energy);
+            const auto new_mass = current_mass + growth_energy * trees2::MASS_PER_ENERGY;
+
+            // TODO: solve for current_length
+            const auto new_mass = current_length * sqrt(current_length / target_length) * target_thickness * static_cast<float>(M_PI) * trees2::MASS_PER_CUBIC_CM + growth_energy * trees2::MASS_PER_ENERGY;
+
+            // const auto new_length =
+
+
         } else {
             // copy over energy, thickness, length
             write.trees.stats.energy[i] = read.trees.stats.energy[i];

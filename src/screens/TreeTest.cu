@@ -9,7 +9,7 @@
 #include <chrono>
 
 constexpr uint32_t NUM_NODES = 1<<7;
-constexpr uint32_t NUM_TREES = 1<<14;
+constexpr uint32_t NUM_TREES = 1<<13;
 
 
 

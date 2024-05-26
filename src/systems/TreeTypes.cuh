@@ -11,6 +11,7 @@ namespace trees2 {
     constexpr float TORQUE_PER_RAD = 100.0f;
     constexpr float MASS_PER_ENERGY = 1.0f;
     constexpr float CUBIC_CM_PER_ENERGY = 10.0f;
+    constexpr float MASS_PER_CUBIC_CM = MASS_PER_ENERGY / CUBIC_CM_PER_ENERGY;
 
 #define FOR_BRANCH_CORE(N, D)       \
     D(float, length, 0)             \
@@ -30,7 +31,7 @@ namespace trees2 {
 
 #define FOR_BRANCH_STATS(N, D) \
     D(float, energy, 0.0f)     \
-    D(float, growth_rate, 0.1f)   \
+    D(float, growth_rate, 0.1f) /* energy_per_second */   \
     D(float, thickness, 0.0f) \
     D(float, target_thickness, 1.0f) \
     D(float, target_length, 0.0f)
@@ -97,7 +98,7 @@ namespace trees2 {
 
 #define DEF_SCALAR(type, name) type name{};
 #define DEF_SCALAR_WITH_INIT(type, name, init) type name{init};
-#define DEF_SCALAR_PTR(type, name) type* name{nullptr};
+#define DEF_SCALAR_PTR(type, name, ...) type* name{nullptr};
 #define DEF_VECTOR(type, name, ...) thrust::host_vector<type> name{};
 #define DEF_DEVICE_VECTOR(type, name, ...) thrust::device_vector<type> name{};
 #define PUSH_BACK_SINGLE(type, name, ...) name.push_back(single.name);
