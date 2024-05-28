@@ -10,7 +10,7 @@ namespace trees2 {
 
     constexpr float TORQUE_PER_RAD = 100.0f;
     constexpr float MASS_PER_ENERGY = 1.0f;
-    constexpr float CUBIC_CM_PER_ENERGY = 10.0f;
+    constexpr float CUBIC_CM_PER_ENERGY = 1000.0f;
     constexpr float MASS_PER_CUBIC_CM = MASS_PER_ENERGY / CUBIC_CM_PER_ENERGY;
 
 #define FOR_BRANCH_CORE(N, D)       \
@@ -30,8 +30,9 @@ namespace trees2 {
     D(bid_t, count, 0)
 
 #define FOR_BRANCH_STATS(N, D) \
-    D(float, energy, 0.0f)     \
-    D(float, growth_rate, 0.1f) /* energy_per_second */   \
+    D(float, energy, 0.0f) \
+    D(float, energy_give_per_sec, 1.0f)\
+    D(float, growth_rate, 0.5f) /* energy_per_second */   \
     D(float, thickness, 0.0f) \
     D(float, target_thickness, 1.0f) \
     D(float, target_length, 0.0f)
