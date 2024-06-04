@@ -783,8 +783,8 @@ namespace trees {
         write_ptrs.get_ptrs(write_device);
 
         // next, mix node contents
-        mix_node_contents_kernel<<<node_grid, block>>>(read_ptrs, write_ptrs, node_count);
-        // mix_node_give_take_kernel<<<node_grid, block>>>(read_ptrs, write_ptrs, node_count, 1/60.0f);
+        // mix_node_contents_kernel<<<node_grid, block>>>(read_ptrs, write_ptrs, node_count);
+        mix_node_give_take_kernel<<<node_grid, block>>>(read_ptrs, write_ptrs, node_count, 1/60.0f);
         cudaDeviceSynchronize();
         // mix_node_contents_kernel writes to stats.energy, so we need to swap the pointers
         write_device.trees.stats.energy.swap(read_device.trees.stats.energy);
@@ -941,7 +941,7 @@ namespace trees {
         update_tree_cuda(read_device, write_device);
     }
 
-    void Trees::render(glm::mat4 transform) {
+    void Trees::render(const glm::mat4 &transform) {
         // early return if we don't have a line renderer
         if (!line_renderer) return;
 

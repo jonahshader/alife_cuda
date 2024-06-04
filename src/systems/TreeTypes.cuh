@@ -31,8 +31,8 @@ namespace trees2 {
 
 #define FOR_BRANCH_STATS(N, D) \
     D(float, energy, 0.0f) \
-    D(float, energy_give_per_sec, 1.0f)\
-    D(float, growth_rate, 0.5f) /* energy_per_second */   \
+    D(float, energy_give_per_sec, 0.1f)\
+    D(float, growth_rate, 1000.5f) /* energy_per_second */   \
     D(float, thickness, 0.0f) \
     D(float, target_thickness, 1.0f) \
     D(float, target_length, 0.0f)

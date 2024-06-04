@@ -81,7 +81,7 @@ namespace trees {
 
         void generate_random_trees(uint32_t num_trees, uint32_t num_nodes, std::default_random_engine &rand);
         void update(float dt);
-        void render(glm::mat4 transform);
+        void render(const glm::mat4 &transform);
 
     private:
         trees2::TreeBatch read_host{}, write_host{};
