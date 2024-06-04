@@ -1,4 +1,4 @@
-#include "World.h"
+#include "World.cuh"
 
 World::World(bool use_graphics) :
 trees(use_graphics)

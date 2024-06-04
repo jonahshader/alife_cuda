@@ -55,8 +55,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/ui/Container.cuh
         src/systems/ui/WorldUI.cu
         src/systems/ui/WorldUI.cuh
-        src/systems/World.cpp
-        src/systems/World.h
+        src/systems/World.cu
+        src/systems/World.cuh
 )
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)
