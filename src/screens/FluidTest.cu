@@ -27,17 +27,13 @@ void FluidTest::render(float dt) {
     bold.begin();
     rect.begin();
 
-    bold.add_text(0, (vp.get_height() / 2.0f) - 60, 600, "Fluid Test", glm::vec4(1), FontRenderer::HAlign::CENTER);
-    rect.add_rect(0, 0, 32, 24, 8, glm::vec4(1));
-    rect.add_rect(0, -100, 128, 32, 16, glm::vec4(1, 0, 1, 1));
-
     auto w = fluid.width;
     auto h = fluid.height;
 
     dim3 block(16, 16);
     dim3 grid(w / block.x, h / block.y);
     // get raw pointers from device vectors
-    fluid_diffuse<<<grid, block>>>(read_cells, write_cells, w, h, 0.01f);
+    fluid_diffuse<<<grid, block>>>(read_cells, write_cells, w, h, 1.0f);
 
     // synchronize before running next kernel
     // cudaDeviceSynchronize();

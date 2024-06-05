@@ -5,6 +5,8 @@
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 
+#include "SoAHelper.h"
+
 namespace trees2 {
     using bid_t = uint32_t;
 
@@ -31,8 +33,8 @@ namespace trees2 {
 
 #define FOR_BRANCH_STATS(N, D) \
     D(float, energy, 0.0f) \
-    D(float, energy_give_per_sec, 0.1f)\
-    D(float, growth_rate, 1000.5f) /* energy_per_second */   \
+    D(float, energy_give_per_sec, 1.0f)\
+    D(float, growth_rate, 0.5f) /* energy_per_second */   \
     D(float, thickness, 0.0f) \
     D(float, target_thickness, 1.0f) \
     D(float, target_length, 0.0f)
@@ -41,74 +43,7 @@ namespace trees2 {
 #define FOR_TREE_DATA(N, D) \
     D(float, total_energy, 0.0f)
 
-#define DEFINE_STRUCT(StructName, MacroName) \
-    struct StructName { MacroName(DEF_SCALAR, DEF_SCALAR_WITH_INIT) };
 
-#define DEFINE_STRUCT_PTR(StructName, MacroName) \
-    struct StructName##Ptrs { \
-    MacroName(DEF_SCALAR_PTR, DEF_SCALAR_PTR) \
-\
-    void get_ptrs(StructName##SoADevice& s) { \
-        MacroName(SET_PTR, SET_PTR) \
-    } \
-    void get_ptrs(StructName##SoA& s) { \
-        MacroName(SET_PTR_HOST, SET_PTR_HOST) \
-    } \
-};
-
-
-
-#define DEFINE_SOA_STRUCT(StructName, MacroName)            \
-    struct StructName##SoA {                                \
-        MacroName(DEF_VECTOR, DEF_VECTOR)                   \
-                                                            \
-        void push_back(const StructName& single) {          \
-             MacroName(PUSH_BACK_SINGLE, PUSH_BACK_SINGLE)  \
-        }                                                   \
-                                                            \
-        void push_back(const std::vector<StructName>& vec) {\
-            for (const auto& s : vec) {                     \
-                push_back(s);                               \
-            }                                               \
-        }                                                   \
-                                                            \
-        void swap_all(StructName##SoA &s) {                 \
-             MacroName(SWAP, SWAP)                          \
-        }                                                   \
-    };
-
-#define DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
-    struct StructName##SoADevice {                      \
-        MacroName(DEF_DEVICE_VECTOR, DEF_DEVICE_VECTOR) \
-                                                        \
-    void copy_from_host(const StructName##SoA& host) {  \
-        MacroName(COPY_FROM_HOST, COPY_FROM_HOST)       \
-    }                                                   \
-                                                        \
-    void copy_to_host(StructName##SoA& host) const {    \
-        MacroName(COPY_TO_HOST, COPY_TO_HOST)           \
-    }                                                   \
-                                                        \
-};
-
-#define DEFINE_STRUCTS(StructName, MacroName) \
-    DEFINE_STRUCT(StructName, MacroName)      \
-    DEFINE_SOA_STRUCT(StructName, MacroName)  \
-    DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
-    DEFINE_STRUCT_PTR(StructName, MacroName)
-
-#define DEF_SCALAR(type, name) type name{};
-#define DEF_SCALAR_WITH_INIT(type, name, init) type name{init};
-#define DEF_SCALAR_PTR(type, name, ...) type* name{nullptr};
-#define DEF_VECTOR(type, name, ...) thrust::host_vector<type> name{};
-#define DEF_DEVICE_VECTOR(type, name, ...) thrust::device_vector<type> name{};
-#define PUSH_BACK_SINGLE(type, name, ...) name.push_back(single.name);
-#define SWAP(type, name, ...) name.swap(s.name);
-// TODO: avoid reallocating vectors?
-#define COPY_FROM_HOST(type, name, ...) name = host.name;
-#define COPY_TO_HOST(type, name, ...) host.name = name;
-#define SET_PTR(type, name, ...) name = s.name.data().get();
-#define SET_PTR_HOST(type, name, ...) name = s.name.data();
 
     DEFINE_STRUCTS(BranchCore, FOR_BRANCH_CORE)
 
@@ -118,16 +53,6 @@ namespace trees2 {
 
     DEFINE_STRUCTS(TreeData, FOR_TREE_DATA)
 
-
-#undef FOR_BRANCH_CORE
-#undef FOR_BRANCH_SHAPE
-#undef FOR_BRANCH_STATS
-#undef FOR_TREE_DATA
-#undef DEFINE_STRUCT
-#undef DEFINE_STRUCT_PTR
-#undef DEFINE_SOA_STRUCT
-#undef DEFINE_DEVICE_SOA_STRUCT
-#undef DEFINE_STRUCTS
 
     // TODO: can probably use a macro to define these
     struct BranchNode {
