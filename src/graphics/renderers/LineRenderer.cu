@@ -9,6 +9,8 @@
 
 #include <iostream>
 
+
+
 LineRenderer::LineRenderer() : shader("shaders/line.vert", "shaders/line.frag") {
     // create vao, buffer
     glGenVertexArrays(1, &vao);
@@ -147,24 +149,24 @@ void LineRenderer::add_line(const glm::vec2 &v1, const glm::vec2 &v2, float r1, 
     add_line(v1.x, v1.y, v2.x, v2.y, r1, r2, color1, color2);
 }
 
-void LineRenderer::cudaRegisterBuffer() {
-    cudaGraphicsGLRegisterBuffer(&cudaResource, vbo, cudaGraphicsMapFlagsWriteDiscard);
+void LineRenderer::cuda_register_buffer() {
+    cudaGraphicsGLRegisterBuffer(&cuda_resource, vbo, cudaGraphicsMapFlagsWriteDiscard);
 }
 
-void LineRenderer::cudaUnregisterBuffer() {
-    cudaGraphicsUnregisterResource(cudaResource);
+void LineRenderer::cuda_unregister_buffer() {
+    cudaGraphicsUnregisterResource(cuda_resource);
 }
 
-void* LineRenderer::cudaMapBuffer() {
-    void* devPtr;
+void* LineRenderer::cuda_map_buffer() {
+    void* device_ptr;
     size_t size;
-    cudaGraphicsMapResources(1, &cudaResource, 0);
-    cudaGraphicsResourceGetMappedPointer(&devPtr, &size, cudaResource);
-    return devPtr;
+    cudaGraphicsMapResources(1, &cuda_resource, 0);
+    cudaGraphicsResourceGetMappedPointer(&device_ptr, &size, cuda_resource);
+    return device_ptr;
 }
 
-void LineRenderer::cudaUnmapBuffer() {
-    cudaGraphicsUnmapResources(1, &cudaResource, 0);
+void LineRenderer::cuda_unmap_buffer() {
+    cudaGraphicsUnmapResources(1, &cuda_resource, 0);
 }
 
 

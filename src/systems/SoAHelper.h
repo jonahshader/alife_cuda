@@ -32,6 +32,10 @@
         void swap_all(StructName##SoA &s) {                 \
              MacroName(SWAP, SWAP)                          \
         }                                                   \
+                                                            \
+        void resize_all(size_t new_size) {                  \
+            MacroName(RESIZE_WITHOUT_INIT, RESIZE_WITH_INIT)\
+        }                                                   \
     };
 
 #define DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName) \
@@ -66,3 +70,5 @@
 #define COPY_TO_HOST(type, name, ...) host.name = name;
 #define SET_PTR(type, name, ...) name = s.name.data().get();
 #define SET_PTR_HOST(type, name, ...) name = s.name.data();
+#define RESIZE_WITHOUT_INIT(type, name, ...) name.resize(new_size);
+#define RESIZE_WITH_INIT(type, name, init) name.resize(new_size, init);

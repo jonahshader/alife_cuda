@@ -24,15 +24,19 @@ public:
 
 
     // CUDA interop functions
-    void cudaRegisterBuffer();
-    void cudaUnregisterBuffer();
-    void* cudaMapBuffer();
-    void cudaUnmapBuffer();
+    void cuda_register_buffer();
+    void cuda_unregister_buffer();
+    void* cuda_map_buffer();
+    void cuda_unmap_buffer();
 
     // ensures that the vbo has at least the given size.
     // doubles the size of the vbo until it is greater than size.
     // if the vbo is bigger than 4x the size, it will be reset to the given size.
     void ensure_vbo_capacity(size_t size);
+
+    static const size_t VERTEX_ELEMS = 7;
+    static const size_t VERTEX_BYTES = VERTEX_ELEMS * sizeof(float);
+    static const size_t VERTICES_PER_LINE = 6;
 
 private:
     Shader shader;
@@ -40,11 +44,9 @@ private:
     unsigned int vbo{};
     unsigned int vao{};
     unsigned int buffer_size{};
-    cudaGraphicsResource_t cudaResource{nullptr}; // CUDA graphics resource handle
+    cudaGraphicsResource_t cuda_resource{nullptr}; // CUDA graphics resource handle
     void add_vertex(float x, float y, float tx, float ty, float length, float radius, const glm::vec4 &color);
     void add_vertex(float x, float y, float tx, float ty, float length, float radius, unsigned char red, unsigned char green, unsigned char blue, unsigned char alpha);
 
-    const size_t VERTEX_ELEMS = 7;
-    const size_t VERTEX_BYTES = VERTEX_ELEMS * sizeof(float);
-    const size_t VERTICES_PER_LINE = 6;
+
 };

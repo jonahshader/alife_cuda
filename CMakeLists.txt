@@ -33,8 +33,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/graphics/renderers/FontRenderer.h
         src/lodepng.cpp
         src/lodepng.h
-        src/graphics/renderers/RectRenderer.cpp
-        src/graphics/renderers/RectRenderer.h
+        src/graphics/renderers/RectRenderer.cu
+        src/graphics/renderers/RectRenderer.cuh
         src/systems/Game.cu
         src/systems/Game.cuh
         src/systems/Screen.h

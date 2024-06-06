@@ -262,7 +262,7 @@ namespace trees {
         const auto energy_coerced = min(1.0f, max(0.0f, energy));
         const auto color = glm::vec4(1-energy_coerced, 1, 1-energy_coerced, 1);
 
-        const auto line_start_index = i * 6;
+        const auto line_start_index = i * LineRenderer::VERTICES_PER_LINE;
 
         line_dir *= thickness;
         const auto perp_dir = glm::vec2(-line_dir.y, line_dir.x); // counter-clockwise
@@ -950,8 +950,8 @@ namespace trees {
         const auto node_count = read_device.trees.core.abs_rot.size();
         line_renderer->ensure_vbo_capacity(node_count);
         // get a cuda compatible pointer to the vbo
-        line_renderer->cudaRegisterBuffer();
-        auto vbo_ptr = line_renderer->cudaMapBuffer();
+        line_renderer->cuda_register_buffer();
+        auto vbo_ptr = line_renderer->cuda_map_buffer();
         trees2::TreeBatchPtrs ptrs;
         ptrs.get_ptrs(read_device);
 
@@ -959,10 +959,10 @@ namespace trees {
         dim3 grid((node_count + block.x - 1) / block.x);
         render_tree_kernel<<<grid, block>>>(static_cast<unsigned int *>(vbo_ptr), ptrs, node_count);
         cudaDeviceSynchronize();
-        line_renderer->cudaUnmapBuffer();
+        line_renderer->cuda_unmap_buffer();
 
         line_renderer->render(node_count);
-        line_renderer->cudaUnregisterBuffer();
+        line_renderer->cuda_unregister_buffer();
 
         // read_device.copy_to_host(read_host);
         // line_renderer->begin();

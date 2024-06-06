@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -86,7 +85,6 @@ namespace trees {
     private:
         trees2::TreeBatch read_host{}, write_host{};
         trees2::TreeBatchDevice read_device{}, write_device{};
-        bool host_current{false}, device_current{false};
 
         std::unique_ptr<LineRenderer> line_renderer{};
     };

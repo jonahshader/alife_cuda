@@ -1,13 +1,16 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 #include <glm/glm.hpp>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 
 #include "SoAHelper.h"
+#include "graphics/renderers/RectRenderer.cuh"
 
 namespace soil {
+    using uint = std::uint32_t;
     // TODO: need to store width and height somewhere. probably in World
 
 #define FOR_SOIL(N, D) \
@@ -19,6 +22,26 @@ namespace soil {
     D(float, organic_matter, 0)
 
     DEFINE_STRUCTS(Soil, FOR_SOIL)
+
+    class SoilSystem {
+    public:
+        SoilSystem(uint width, uint height, bool use_graphics);
+        ~SoilSystem() = default;
+
+        void update_cpu(float dt);
+        void update_cuda(float dt);
+        void render(const glm::mat4 &transform);
+
+    private:
+        uint width, height;
+        SoilSoADevice read{}, write{};
+        std::unique_ptr<RectRenderer> rect_renderer{};
+
+        void mix_give_take_cuda(float dt);
+
+    };
+
+
 
 
 }
