@@ -88,6 +88,20 @@ namespace soil {
         mix_give_take(read, write, width, height, dt, x, y);
     }
 
+    __host__ __device__
+    inline void add_rect(float x, float y, float width, float height, float radius, glm::vec4 color, float* vbo, size_t i) {
+        const auto s = i * RectRenderer::FLOATS_PER_RECT;
+        vbo[s + 0] = x;
+        vbo[s + 1] = y;
+        vbo[s + 2] = width;
+        vbo[s + 3] = height;
+        vbo[s + 4] = radius;
+        vbo[s + 5] = color.r;
+        vbo[s + 6] = color.g;
+        vbo[s + 7] = color.b;
+        vbo[s + 8] = color.a;
+    }
+
     __global__
     void render_kernel(float* rect_vbo, SoilPtrs read, uint width, size_t rect_count) {
         const auto i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -97,6 +111,10 @@ namespace soil {
         const auto water_density = read.water_density[i];
         const auto x = i % width;
         const auto y = i / width;
+
+        const auto amount = min(max(water_density, 0.0f), 1.0f);
+
+        add_rect(x * 4, y * 4, 5, 5, 1, glm::vec4(amount), rect_vbo, i);
     }
 
     SoilSystem::SoilSystem(uint width, uint height, bool use_graphics) : width(width), height(height) {
@@ -138,6 +156,17 @@ namespace soil {
         write.water_density.swap(read.water_density);
     }
 
+    void SoilSystem::update_cpu(float dt) {
+        // TODO: implement
+    }
+
+
+    void SoilSystem::update_cuda(float dt) {
+        // for now, just mix give take
+        mix_give_take_cuda(dt);
+    }
+
+
     void SoilSystem::render(const glm::mat4 &transform) {
         // early return if we don't have a rect renderer
         if (!rect_renderer) return;
@@ -154,7 +183,7 @@ namespace soil {
 
         dim3 block(256);
         dim3 grid((rect_count + block.x - 1) / block.x);
-        // TODO render_soil_kernel
+        render_kernel<<<grid, block>>>(static_cast<float*>(vbo_ptr), ptrs, width, rect_count);
         rect_renderer->cuda_unmap_buffer();
 
         rect_renderer->render(rect_count);

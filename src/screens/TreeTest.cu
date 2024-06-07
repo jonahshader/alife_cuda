@@ -1,12 +1,8 @@
-//
-// Created by jonah on 3/11/2024.
-//
-
 #include "TreeTest.cuh"
-#include "glad/glad.h"
 
-#include <iostream>
 #include <chrono>
+
+#include "glad/glad.h"
 
 constexpr uint32_t NUM_NODES = 1<<10;
 constexpr uint32_t NUM_TREES = 1<<10;

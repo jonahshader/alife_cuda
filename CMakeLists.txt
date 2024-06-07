@@ -60,6 +60,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/Soil.cu
         src/systems/Soil.cuh
         src/systems/SoAHelper.h
+        src/screens/SoilTest.cu
+        src/screens/SoilTest.cuh
 )
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)

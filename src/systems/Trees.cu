@@ -239,7 +239,7 @@ namespace trees {
     }
 
     __device__
-    void add_vertex(unsigned int* line_vbo, unsigned int line_start_index, float x, float y, float tx, float ty, float length, float radius, const glm::vec4 &color) {
+    void add_vertex(unsigned int* line_vbo, size_t line_start_index, float x, float y, float tx, float ty, float length, float radius, const glm::vec4 &color) {
         add_vertex(line_vbo, line_start_index, x, y, tx, ty, length, radius, color.r * 255, color.g * 255, color.b * 255, color.a * 255);
     }
 

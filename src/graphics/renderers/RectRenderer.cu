@@ -1,15 +1,10 @@
-//
-// Created by jonah on 4/28/2023.
-//
-
 #include "RectRenderer.cuh"
 #include <glad/glad.h>
 #include <iostream>
 
-#include "../../../../../../../Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.5/include/cuda_gl_interop.h"
+#include <cuda_gl_interop.h>
 
-constexpr auto FLOATS_PER_RECT = 9;
-constexpr auto BYTES_PER_RECT = FLOATS_PER_RECT * sizeof(float);
+
 
 RectRenderer::RectRenderer() : shader("shaders/rect.vert", "shaders/rect.frag")  {
     float baseMesh[] = {

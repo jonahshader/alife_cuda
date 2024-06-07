@@ -27,6 +27,9 @@ public:
     // if the vbo is bigger than 4x the size, it will be reset to the given size.
     void ensure_vbo_capacity(size_t size);
 
+    static constexpr auto FLOATS_PER_RECT = 9;
+    static constexpr auto BYTES_PER_RECT = FLOATS_PER_RECT * sizeof(float);
+
 private:
     Shader shader;
     std::vector<float> data;
