@@ -20,6 +20,7 @@ private:
     ExtendViewport vp{720, 720};
     ExtendViewport hud_vp{720, 720};
 
-    Soil soil;
+    SoilSystem soil;
+    bool running{false};
 
 };

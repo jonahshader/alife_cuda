@@ -14,13 +14,14 @@
 #include "systems/Game.cuh"
 #include "screens/TreeTest.cuh"
 #include "screens/FluidTest.cuh"
+#include "screens/SoilTest.cuh"
 #include "spatial_sort.cuh"
 
 #include <SDL.h>
 #include "glad/glad.h"
 
-static int viewport_width = 1280;
-static int viewport_height = 720;
+static int viewport_width = 1920;
+static int viewport_height = 1080;
 static SDL_Window* window = nullptr;
 static SDL_GLContext main_context;
 
@@ -114,8 +115,9 @@ int main() {
     game.getResources().window = window;
     game.resize(viewport_width, viewport_height);
     //    game.pushScreen(std::make_shared<MainMenu>(game));
-    game.pushScreen(std::make_shared<FluidTest>(game));
+    // game.pushScreen(std::make_shared<FluidTest>(game));
     // game.pushScreen(std::make_shared<TreeTest>(game));
+    game.pushScreen(std::make_shared<SoilTest>(game));
 
     float time = 0;
     SDL_Event event;

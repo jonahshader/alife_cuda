@@ -32,8 +32,13 @@ void SoilTest::render(float dt) {
 
     // TODO: time things
 
-    soil.update_cuda(dt);
+    if (running) {
+        soil.update_cuda(dt);
+    }
+
     soil.render(vp.get_transform());
+
+    bold.add_text(0.0f, 0.0f, 300, "hi", glm::vec4(0.9f));
 
     bold.end();
     rect.end();
@@ -49,3 +54,29 @@ void SoilTest::render(float dt) {
     SDL_GL_SwapWindow(game.getResources().window);
 }
 
+void SoilTest::resize(int width, int height) {
+    vp.update(width, height);
+    hud_vp.update(width, height);
+}
+
+void SoilTest::hide() {
+
+}
+
+void SoilTest::handleInput(SDL_Event event) {
+    if (event.type == SDL_MOUSEMOTION) {
+        if (event.motion.state & SDL_BUTTON_LMASK) {
+            vp.handle_pan(event.motion.xrel, event.motion.yrel);
+        }
+    } else if (event.type == SDL_MOUSEWHEEL) {
+        vp.handle_scroll(event.wheel.y);
+    } else if (event.type == SDL_KEYDOWN) {
+        if (event.key.keysym.sym == SDLK_u) {
+            running = true;
+        }
+    } else if (event.type == SDL_KEYUP) {
+        if (event.key.keysym.sym == SDLK_u) {
+            running = false;
+        }
+    }
+}

@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <vector>
+#include <cstdint>
 #include <glm/glm.hpp>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
@@ -10,9 +11,8 @@
 #include "graphics/renderers/RectRenderer.cuh"
 
 
-
 #define FOR_SOIL(N, D) \
-D(float, water_density, 0)\
+D(int16_t, water_density, 0)\
 D(float, sand_density, 1)\
 D(float, silt_density, 0)\
 D(float, clay_density, 0)\
