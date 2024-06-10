@@ -30,7 +30,7 @@ void ExtendViewport::update(int screenWidth, int screenHeight) {
     transform = glm::ortho(-w/2 + x_cam, w/2 + x_cam, -h/2 + y_cam, h/2 + y_cam, -100.0f, 100.0f);
 }
 
-glm::mat4 ExtendViewport::get_transform() {
+glm::mat4 ExtendViewport::get_transform() const {
     return transform;
 }
 
@@ -40,6 +40,17 @@ float ExtendViewport::get_width() const {
 
 float ExtendViewport::get_height() const {
     return height;
+}
+
+glm::vec2 ExtendViewport::unproject(glm::vec2 screen_coords) const {
+    screen_coords /= glm::vec2(last_screen_width, last_screen_height);
+    screen_coords -= glm::vec2(0.5f, 0.5f);
+    screen_coords *= glm::vec2(2.0f, -2.0f);
+
+    auto inv = get_transform();
+    inv = glm::inverse(inv);
+
+    return glm::vec2(inv * glm::vec4(screen_coords, 0.0f, 1.0f));
 }
 
 float ExtendViewport::get_left() const {
