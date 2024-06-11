@@ -1,6 +1,8 @@
 #include "Soil.cuh"
 
 #include <cmath>
+#include <random>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <cstdint>
@@ -234,31 +236,63 @@ inline void add_rect(float x, float y, float width, float height, float radius, 
 }
 
 
+// __global__
+// void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t rect_count) {
+//     const auto i = blockIdx.x * blockDim.x + threadIdx.x;
+//     if (i >= rect_count) {
+//         return;
+//     }
+//     const auto water_density = read.water_density[i];
+//     const auto x = i % width;
+//     const auto y = i / width;
+//
+//     auto amount = min(abs(water_density), 1.0f);
+//     amount = sqrt(amount);
+//
+//     glm::vec4 color(1, 1, 1, amount);
+//     if (water_density > 1) {
+//         // make red
+//         float gb = 1 - tanh((water_density - 1) * 0.25f);
+//         color = glm::vec4(1, gb, gb, 1);
+//     } else if (water_density < 0) {
+//         // make blue
+//         float gb = 1 - tanh(-water_density);
+//         color = glm::vec4(gb, gb, 1, 1);
+//     }
+//
+//     add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, color, rect_vbo, i);
+// }
+
 __global__
 void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t rect_count) {
     const auto i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= rect_count) {
         return;
     }
+    auto sand = read.sand_density[i];
+    auto silt = read.silt_density[i];
+    auto clay = read.clay_density[i];
+    auto density = sand + silt + clay;
+    auto inv_density = 1.0f / density;
+    // TODO: avoid infinity
+    sand *= inv_density;
+    silt *= inv_density;
+    clay *= inv_density;
     const auto water_density = read.water_density[i];
     const auto x = i % width;
     const auto y = i / width;
 
-    auto amount = min(abs(water_density), 1.0f);
-    amount = sqrt(amount);
+    glm::vec3 sand_color(219/255.0f, 193/255.0f, 44/255.0f);
+    glm::vec3 silt_color(219/255.0f, 143/255.0f, 40/255.0f);
+    glm::vec3 clay_color(219/255.0f, 81/255.0f, 43/255.0f);
+    glm::vec3 water_color(0.2f, 0.3f, 0.95f);
 
-    glm::vec4 color(1, 1, 1, amount);
-    if (water_density > 1) {
-        // make red
-        float gb = 1 - tanh((water_density - 1) * 0.25f);
-        color = glm::vec4(1, gb, gb, 1);
-    } else if (water_density < 0) {
-        // make blue
-        float gb = 1 - tanh(-water_density);
-        color = glm::vec4(gb, gb, 1, 1);
-    }
+    auto amount = min(max(water_density, 0.0f), 1.0f);
+    auto color = sand_color * sand + silt_color * silt + clay_color * clay;
+    color = glm::mix(color, water_color, amount);
+    const auto opacity = density * (1 - amount) + amount;
 
-    add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, color, rect_vbo, i);
+    add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, glm::vec4(color, opacity), rect_vbo, i);
 }
 
 SoilSystem::SoilSystem(uint width, uint height, uint size, bool use_graphics) : width(width), height(height), size(size) {
@@ -282,12 +316,35 @@ void SoilSystem::reset() {
     //
     // soil.water_density[id] = 127;
 
-    FractalNoise water_noise(4, 0.01, width, 2.0, 0.5, 1234);
+    // use time as seed
+    auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+    std::mt19937_64 rng(seed);
 
+
+
+
+    FractalNoise water_noise(4, 0.01, width, 2.0, 0.5, rng());
+
+    FractalNoise heightmap_noise(7, 0.001, width, 2.0, 0.5, rng());
+    std::vector<double> heightmap; // heightmap is 2d
+
+    heightmap.reserve(width);
+    for (auto x = 0; x < width; ++x) {
+        heightmap.push_back(heightmap_noise.eval(x));
+    }
+    // todo redo this when im not tired
     for (auto y = 0; y < height; ++y) {
+        double solid_threshold = ((y - 2.0) / height) * 2;
         for (auto x = 0; x < width; ++x) {
             const auto id = x + y * width;
-            soil.water_density[id] = pow(abs(water_noise.eval(x, y)), 2);
+            // soil.water_density[id] = pow(abs(water_noise.eval(x, y)), 2);
+            if (exp(heightmap[x] * 0.9) > solid_threshold) {
+                soil.sand_density[id] = 0;
+                soil.silt_density[id] = 0;
+                soil.clay_density[id] = 1;
+            } else {
+                soil.water_density[id] = 1;
+            }
         }
     }
 
