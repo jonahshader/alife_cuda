@@ -4,7 +4,7 @@
 
 #include "FontRenderer.h"
 
-#include "lodepng.h"
+#include "external/lodepng.h"
 #include <glad/glad.h>
 #include <iostream>
 

@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 
+#include "systems/terrain/FractalNoise.cuh"
+
 
 constexpr auto FILTER_WIDTH = 3;
 constexpr auto BLOCK_WIDTH = 16;
@@ -37,72 +39,9 @@ inline int16_t get_cell_w_wrap(int16_t* cells, int x, int y, int width) {
     return cells[y * width + x];
 }
 
-// __host__ __device__
-// inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint height, float dt, uint x, uint y) {
-//
-//     const auto id = x + y * width;
-//
-//     const int16_t give = max(1, static_cast<int16_t>(512 * dt)); // TODO: this should be computed from soil composition
-//     const int16_t epsilon = give+5;
-//
-//     const auto water = read.water_density[id];
-//
-//     int16_t water_delta = 0;
-//     // for now, hard code to going down
-//
-//     auto water_other = get_cell_w_wrap(read.water_density, x - 1, y, width);
-//     if (water > water_other + epsilon) {
-//         // give left water
-//         water_delta -= give;
-//     } else if (water + epsilon < water_other) {
-//         // take left water
-//         // TODO: calculate give rate
-//         water_delta += give;
-//     }
-//     water_other = get_cell_w_wrap(read.water_density, x + 1, y, width);
-//     if (water > water_other + epsilon) {
-//         // give right water
-//         water_delta -= give;
-//     } else if (water + epsilon < water_other) {
-//         // take right water
-//         // TODO: calculate give rate
-//         water_delta += give;
-//     }
-//     if (y < height - 1) {
-//         water_other = get_cell_w_wrap(read.water_density, x, y + 1, width);
-//         // only consider taking from top
-//         if (water + epsilon < water_other) {
-//             // take up water
-//             // TODO: calculate give rate
-//             water_delta += give;
-//         }
-//     }
-//     if (y > 0) {
-//         water_other = get_cell_w_wrap(read.water_density, x, y - 1, width);
-//         // only consider giving to bottom
-//         if (water > water_other + epsilon) {
-//             // give down water
-//             // TODO: calculate give rate
-//             water_delta -= give;
-//         }
-//     }
-//
-//     write.water_density[id] = water + water_delta;
-// }
-
 __host__ __device__
 inline float calc_delta(float water, float other_water) {
-    auto delta = abs(water - other_water);
-    // if (delta < 5) {
-    //     return 0;
-    // }
-    // if (water > other_water) {
-    //     return -(delta/4);
-    // } else {
-    //     return delta/4;
-    // }
     return (other_water - water) / 5;
-
 }
 
 __host__ __device__
@@ -319,7 +258,7 @@ void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t
         color = glm::vec4(gb, gb, 1, 1);
     }
 
-    add_rect(x * size, y * size, size+1, size+1, 1, color, rect_vbo, i);
+    add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, color, rect_vbo, i);
 }
 
 SoilSystem::SoilSystem(uint width, uint height, uint size, bool use_graphics) : width(width), height(height), size(size) {
@@ -337,11 +276,20 @@ void SoilSystem::reset() {
 
     // for now, just put a lot in one cell in the center
 
-    const auto x = width / 2;
-    const auto y = height / 2;
-    const auto id = x + y * width;
+    // const auto x = width / 2;
+    // const auto y = height / 2;
+    // const auto id = x + y * width;
+    //
+    // soil.water_density[id] = 127;
 
-    soil.water_density[id] = 127;
+    FractalNoise water_noise(4, 0.01, width, 2.0, 0.5, 1234);
+
+    for (auto y = 0; y < height; ++y) {
+        for (auto x = 0; x < width; ++x) {
+            const auto id = x + y * width;
+            soil.water_density[id] = pow(abs(water_noise.eval(x, y)), 2);
+        }
+    }
 
     read.copy_from_host(soil);
     write.copy_from_host(soil);

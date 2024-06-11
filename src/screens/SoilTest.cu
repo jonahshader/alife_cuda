@@ -41,7 +41,7 @@ void SoilTest::render(float dt) {
 
     soil.render(vp.get_transform());
 
-    bold.add_text(0.0f, 0.0f, 100, "hi", glm::vec4(0.9f));
+    // bold.add_text(0.0f, 0.0f, 100, "hi", glm::vec4(0.9f));
 
     bold.end();
     rect.end();
@@ -75,8 +75,7 @@ void SoilTest::handleInput(SDL_Event event) {
             if (event.motion.state & SDL_BUTTON_RMASK) {
                 // get mouse x y, project to world
                 const auto world_coords = vp.unproject({event.motion.x, event.motion.y});
-                std::cout << "world: " << world_coords.x << ", " << world_coords.y << std::endl;
-                soil.add_water(static_cast<int>(world_coords.x), static_cast<int>(world_coords.y), 1.0f);
+                soil.add_water(static_cast<int>(floor(world_coords.x)), static_cast<int>(floor(world_coords.y)), 1.0f);
             }
         }
         break;

@@ -31,8 +31,8 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/graphics/renderers/CircleRenderer.h
         src/graphics/renderers/FontRenderer.cpp
         src/graphics/renderers/FontRenderer.h
-        src/lodepng.cpp
-        src/lodepng.h
+        src/external/lodepng.cpp
+        src/external/lodepng.h
         src/graphics/renderers/RectRenderer.cu
         src/graphics/renderers/RectRenderer.cuh
         src/systems/Game.cu
@@ -62,6 +62,10 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/SoAHelper.h
         src/screens/SoilTest.cu
         src/screens/SoilTest.cuh
+        src/external/OpenSimplexNoise.cu
+        src/external/OpenSimplexNoise.cuh
+        src/systems/terrain/FractalNoise.cu
+        src/systems/terrain/FractalNoise.cuh
 )
 target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(${PROJECT_NAME} SDL2main)
