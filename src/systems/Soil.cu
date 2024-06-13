@@ -7,8 +7,9 @@
 #include <memory>
 #include <cstdint>
 #include <glm/glm.hpp>
+#include <thrust/extrema.h>
 
-#include "systems/terrain/FractalNoise.cuh"
+#include "external/FastNoiseLite.cuh"
 
 
 constexpr auto FILTER_WIDTH = 3;
@@ -24,12 +25,21 @@ __constant__ float gaussian_filter[FILTER_WIDTH * FILTER_WIDTH] = {
   };
 
 __host__ __device__
-inline float get_cell_w_wrap(float* cells, int x, int y, int width) {
+inline float get_cell_w_wrap(float* cells, int x, int y, uint width) {
     // wrap around left and right
     // TODO: try modulus solution
     if (x < 0) x += width;
     if (x >= width) x -= width;
     return cells[y * width + x];
+}
+
+__host__ __device__
+inline void set_cell_w_wrap(float* cells, int x, int y, uint width, float value) {
+    // wrap around left and right
+    // TODO: try modulus solution
+    if (x < 0) x += width;
+    if (x >= width) x -= width;
+    cells[y * width + x] = value;
 }
 
 __host__ __device__
@@ -62,6 +72,7 @@ inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint heig
 
     float water_delta = 0;
     // for now, hard code to going down
+    const float final_give_scalar = 0.5f;
 
     auto water_other = get_cell_w_wrap(read.water_density, x - 1, y, width);
     water_delta += calc_delta(water, water_other);
@@ -73,9 +84,9 @@ inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint heig
         // TODO: max water should be calculated from soil composition
         if (water < 1.0f) {
             if (water_other > give) {
-                water_delta += give * 0.5f;
+                water_delta += give * final_give_scalar;
             } else {
-                water_delta += water_other * 0.5f;
+                water_delta += water_other * final_give_scalar;
             }
         }
     }
@@ -85,9 +96,9 @@ inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint heig
         // TODO: max water should be calculated from soil composition
         if (water_other < 1.0f) {
             if (water > give) {
-                water_delta -= give * 0.5f;
+                water_delta -= give * final_give_scalar;
             } else {
-                water_delta -= water * 0.5f;
+                water_delta -= water * final_give_scalar;
             }
         }
     }
@@ -95,7 +106,33 @@ inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint heig
     write.water_density[id] = water + water_delta;
 }
 
+// TODO: write mix_give_take_3
+// this version will use the give take behavior in all four directions.
+// upward propagation only happens for water > limit.
+// water > limit will override limits in other directions too, but will only give up until equal
 
+__host__ __device__
+inline void mix_box_blur(SoilPtrs &read, SoilPtrs &write, uint width, uint height, uint x, uint y) {
+    const auto id = x + y * width;
+    const auto water = read.water_density[id];
+    float water_delta = 0.0f;
+
+    for (auto xx = x - 1; xx <= x + 1; ++xx) {
+        water_delta += max(0.0f, get_cell_w_wrap(read.water_density, xx, y, width) - 1);
+    }
+    if (y > 0) {
+        for (auto xx = x - 1; xx <= x + 1; ++xx) {
+            water_delta += max(0.0f, get_cell_w_wrap(read.water_density, xx, y - 1, width) - 1);
+        }
+    }
+    if (y < height - 1) {
+        for (auto xx = x - 1; xx <= x + 1; ++xx) {
+            water_delta += max(0.0f, get_cell_w_wrap(read.water_density, xx, y + 1, width) - 1);
+        }
+    }
+    // TODO: this doesn't conserve water density
+    write.water_density[id] = min(1.0f, water) + water_delta / 9;
+}
 
 __host__ __device__
 inline void mix_give_take_2(SoilPtrs &read, SoilPtrs &write, uint width, uint height, float dt, uint x, uint y) {
@@ -106,7 +143,7 @@ inline void mix_give_take_2(SoilPtrs &read, SoilPtrs &write, uint width, uint he
 
     // we need to determine if we are spreading, left is spreading, right is spreading
     const auto water = read.water_density[id];
-    float give = max(min(water * 0.9f, 1.0f), 0.0f);
+    float give = max(min(water, 1.0f), 0.0f);
     auto give_left = write.water_give_left;
     auto give_right = write.water_give_right;
     auto give_up = write.water_give_up;
@@ -152,12 +189,17 @@ inline void mix_give_take_2(SoilPtrs &read, SoilPtrs &write, uint width, uint he
         water_delta -= space_right;
     }
 
-    if (water + water_delta < 0) {
-        const float water_delta_scaler = water / water_delta;
-        next_give_left *= water_delta_scaler;
-        next_give_right *= water_delta_scaler;
-        next_give_down *= water_delta_scaler;
-        write.water_density[id] = 0;
+    if (water + water_delta <= 0) {
+        // const float water_delta_scaler = water / water_delta;
+        // next_give_left *= water_delta_scaler;
+        // next_give_right *= water_delta_scaler;
+        // next_give_down *= water_delta_scaler;
+        // write.water_density[id] = 0;
+
+        next_give_left = 0;
+        next_give_right = 0;
+        next_give_down = 0;
+        write.water_density[id] = water;
     } else {
         write.water_density[id] = water + water_delta;
     }
@@ -172,26 +214,101 @@ __host__ __device__
 inline void copy_give(SoilPtrs &read, SoilPtrs &write, uint width, uint height, float dt, uint x, uint y) {
     const auto id = x + y * width;
 
-    auto water = read.water_density[id];
+    const auto current_water = read.water_density[id];
     const auto give_left = read.water_give_left;
     const auto give_right = read.water_give_right;
     const auto give_up = read.water_give_up;
     const auto give_down = read.water_give_down;
+    const auto write_give_left = write.water_give_left;
+    const auto write_give_right = write.water_give_right;
+    const auto write_give_up = write.water_give_up;
+    const auto write_give_down = write.water_give_down;
 
     // take what the right is giving to the left (me)
-    water += get_cell_w_wrap(give_left, x + 1, y, width);
+    float from_right = get_cell_w_wrap(give_left, x + 1, y, width);
     // take what the left is giving to the right (me)
-    water += get_cell_w_wrap(give_right, x - 1, y, width);
+    float from_left = get_cell_w_wrap(give_right, x - 1, y, width);
     // take what the bottom is giving to the top (me)
-    if (inbounds(y - 1, height)) {
-        water += get_cell_w_wrap(give_up, x, y - 1, width);
+
+    float from_down = 0;
+    bool down_inbounds = inbounds(y - 1, height);
+    if (down_inbounds) {
+        from_down = get_cell_w_wrap(give_up, x, y - 1, width);
     }
     // take what the top is giving to the bottom (me)
-    if (inbounds(y + 1, height)) {
-        water += get_cell_w_wrap(give_down, x, y + 1, width);
+    float from_up = 0;
+    bool up_inbounds = inbounds(y + 1, height);
+    if (up_inbounds) {
+        from_up = get_cell_w_wrap(give_down, x, y + 1, width);
     }
 
-    write.water_density[id] = water;
+    float water_delta = from_right + from_left + from_down + from_up;
+    float capacity = 1 - current_water;
+    if (water_delta > capacity) {
+        // const float water_delta_scaler = capacity / water_delta;
+        // float new_from_right = from_right * water_delta_scaler;
+        // float new_from_left = from_left * water_delta_scaler;
+        // float new_from_down = from_down * water_delta_scaler;
+        // float new_from_up = from_up * water_delta_scaler;
+        //
+        // write.water_density[id] = 1;
+        // set_cell_w_wrap(write_give_left, x + 1, y, width, new_from_right);
+        // set_cell_w_wrap(write_give_right, x - 1, y, width, new_from_left);
+        // if (down_inbounds) {
+        //     set_cell_w_wrap(write_give_up, x, y - 1, width, new_from_down);
+        // }
+        // if (up_inbounds) {
+        //     set_cell_w_wrap(write_give_down, x, y + 1, width, new_from_up);
+        // }
+
+        write.water_density[id] = current_water;
+        set_cell_w_wrap(write_give_left, x + 1, y, width, from_right);
+        set_cell_w_wrap(write_give_right, x - 1, y, width, from_left);
+        if (down_inbounds) {
+            set_cell_w_wrap(write_give_up, x, y - 1, width, from_down);
+        }
+        if (up_inbounds) {
+            set_cell_w_wrap(write_give_down, x, y + 1, width, from_up);
+        }
+    } else {
+        write.water_density[id] = current_water + water_delta;
+        set_cell_w_wrap(write_give_left, x + 1, y, width, 0);
+        set_cell_w_wrap(write_give_right, x - 1, y, width, 0);
+        if (down_inbounds) {
+            set_cell_w_wrap(write_give_up, x, y - 1, width, 0);
+        }
+        if (up_inbounds) {
+            set_cell_w_wrap(write_give_down, x, y + 1, width, 0);
+        }
+    }
+}
+
+__host__ __device__
+inline void copy_take_back(SoilPtrs& read, SoilPtrs& write, uint width, uint height, float dt, uint x, uint y) {
+    // if there are remaining water_give_{left, right, up, down}, take it back
+    const auto id = x + y * width;
+
+    const auto current_water = read.water_density[id];
+    const auto give_left = read.water_give_left[id];
+    const auto give_right = read.water_give_right[id];
+    const auto give_up = read.water_give_up[id];
+    const auto give_down = read.water_give_down[id];
+    write.water_give_left[id] = 0;
+    write.water_give_right[id] = 0;
+    write.water_give_up[id] = 0;
+    write.water_give_down[id] = 0;
+    // if this goes over 1, its an error...
+    write.water_density[id] = current_water + give_left + give_right + give_up + give_down;
+}
+
+__host__ __device__
+inline float get_effective_density(float sand, float silt, float clay) {
+    return sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY + clay * CLAY_RELATIVE_DENSITY;
+}
+
+__host__ __device__
+inline float get_effective_permeability(float sand, float silt, float clay) {
+    return sand * SAND_PERMEABILITY + silt * SILT_PERMEABILITY + clay * CLAY_PERMEABILITY;
 }
 
 __global__
@@ -201,6 +318,15 @@ void mix_give_take_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height
     if (x >= width || y >= height) return;
 
     mix_give_take(read, write, width, height, dt, x, y);
+}
+
+__global__
+void mix_box_blur_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height) {
+    const auto x = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    mix_box_blur(read, write, width, height, x, y);
 }
 
 __global__
@@ -221,6 +347,15 @@ void copy_give_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height, fl
     copy_give(read, write, width, height, dt, x, y);
 }
 
+__global__
+void copy_take_back_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height, float dt) {
+    const auto x = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    copy_take_back(read, write, width, height, dt, x, y);
+}
+
 __host__ __device__
 inline void add_rect(float x, float y, float width, float height, float radius, glm::vec4 color, float* vbo, size_t i) {
     const auto s = i * RectRenderer::FLOATS_PER_RECT;
@@ -235,34 +370,6 @@ inline void add_rect(float x, float y, float width, float height, float radius, 
     vbo[s + 8] = color.a;
 }
 
-
-// __global__
-// void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t rect_count) {
-//     const auto i = blockIdx.x * blockDim.x + threadIdx.x;
-//     if (i >= rect_count) {
-//         return;
-//     }
-//     const auto water_density = read.water_density[i];
-//     const auto x = i % width;
-//     const auto y = i / width;
-//
-//     auto amount = min(abs(water_density), 1.0f);
-//     amount = sqrt(amount);
-//
-//     glm::vec4 color(1, 1, 1, amount);
-//     if (water_density > 1) {
-//         // make red
-//         float gb = 1 - tanh((water_density - 1) * 0.25f);
-//         color = glm::vec4(1, gb, gb, 1);
-//     } else if (water_density < 0) {
-//         // make blue
-//         float gb = 1 - tanh(-water_density);
-//         color = glm::vec4(gb, gb, 1, 1);
-//     }
-//
-//     add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, color, rect_vbo, i);
-// }
-
 __global__
 void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t rect_count) {
     const auto i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -272,26 +379,29 @@ void render_kernel(float* rect_vbo, SoilPtrs read, uint width, uint size, size_t
     auto sand = read.sand_density[i];
     auto silt = read.silt_density[i];
     auto clay = read.clay_density[i];
-    auto density = sand + silt + clay;
-    auto inv_density = 1.0f / density;
-    // TODO: avoid infinity
-    sand *= inv_density;
-    silt *= inv_density;
-    clay *= inv_density;
     const auto water_density = read.water_density[i];
+    auto density = sand + silt + clay;
+    glm::vec3 color = glm::vec3(0.0f);
+    if (density > 0.001f) {
+        auto inv_density = 1.0f / density;
+        sand *= inv_density;
+        silt *= inv_density;
+        clay *= inv_density;
+
+        const glm::vec3 sand_color(219/255.0f, 193/255.0f, 44/255.0f);
+        const glm::vec3 silt_color(219/255.0f, 143/255.0f, 40/255.0f);
+        const glm::vec3 clay_color(219/255.0f, 81/255.0f, 43/255.0f);
+        color = sand_color * sand + silt_color * silt + clay_color * clay;
+
+    }
+
+    const glm::vec3 water_color(0.2f, 0.3f, 0.95f);
+    auto amount = min(max(water_density, 0.0f), 1.0f);
+    color = glm::mix(color, water_color, amount);
+    float opacity = density * (1 - amount) + amount;
+
     const auto x = i % width;
     const auto y = i / width;
-
-    glm::vec3 sand_color(219/255.0f, 193/255.0f, 44/255.0f);
-    glm::vec3 silt_color(219/255.0f, 143/255.0f, 40/255.0f);
-    glm::vec3 clay_color(219/255.0f, 81/255.0f, 43/255.0f);
-    glm::vec3 water_color(0.2f, 0.3f, 0.95f);
-
-    auto amount = min(max(water_density, 0.0f), 1.0f);
-    auto color = sand_color * sand + silt_color * silt + clay_color * clay;
-    color = glm::mix(color, water_color, amount);
-    const auto opacity = density * (1 - amount) + amount;
-
     add_rect(x * size + size/2, y * size + size/2, size+1, size+1, 1, glm::vec4(color, opacity), rect_vbo, i);
 }
 
@@ -308,43 +418,69 @@ void SoilSystem::reset() {
     // assert(height % BLOCK_WIDTH == 0);
     soil.resize_all(width * height);
 
-    // for now, just put a lot in one cell in the center
-
-    // const auto x = width / 2;
-    // const auto y = height / 2;
-    // const auto id = x + y * width;
-    //
-    // soil.water_density[id] = 127;
-
     // use time as seed
     auto seed = std::chrono::system_clock::now().time_since_epoch().count();
     std::mt19937_64 rng(seed);
 
+    FastNoiseLite heightmap_noise(rng());
+    heightmap_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    heightmap_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    heightmap_noise.SetFractalOctaves(6);
+    heightmap_noise.SetFrequency(1.0f/height);
+
+    FastNoiseLite soil_noise(rng());
+    soil_noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2);
+    soil_noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+    soil_noise.SetFractalOctaves(5);
+    soil_noise.SetFrequency(0.01f);
 
 
-
-    FractalNoise water_noise(4, 0.01, width, 2.0, 0.5, rng());
-
-    FractalNoise heightmap_noise(7, 0.001, width, 2.0, 0.5, rng());
-    std::vector<double> heightmap; // heightmap is 2d
+    std::vector<double> heightmap; // heightmap is 1d, but interpreted as 2d
 
     heightmap.reserve(width);
     for (auto x = 0; x < width; ++x) {
-        heightmap.push_back(heightmap_noise.eval(x));
+        heightmap.push_back(heightmap_noise.GetNoise(static_cast<float>(x), 0.0f));
     }
-    // todo redo this when im not tired
-    for (auto y = 0; y < height; ++y) {
-        double solid_threshold = ((y - 2.0) / height) * 2;
+
+    const float water_height = 0.25f;
+    const float min_land_height = 0.1f;
+    for (auto x = 0; x < width; ++x) {
+        float hf = heightmap[x];
+        hf = tanh(hf*2);
+        float xf = x / static_cast<float>(width);
+        xf = xf * (1-xf) * 4;
+        xf = sqrt(xf);
+        hf = hf * 0.5f + 0.5f;
+        hf *= xf;
+        uint h = (min_land_height + hf * 0.8f) * height;
+        for (auto y = 0; y < h; ++y) {
+            const auto id = x + y * width;
+            float sand = soil_noise.GetNoise(static_cast<float>(x), static_cast<float>(y), 0.0f);
+            float silt = soil_noise.GetNoise(static_cast<float>(x), static_cast<float>(y), 300.0f);
+            float clay = soil_noise.GetNoise(static_cast<float>(x), static_cast<float>(y), 600.0f);
+            sand = sand * 0.5f + 0.5f;
+            silt = silt * 0.5f + 0.5f;
+            clay = clay * 0.5f + 0.5f;
+            float density = sand + silt + clay;
+            sand /= density;
+            silt /= density;
+            clay /= density;
+            soil.sand_density[id] = sand;
+            soil.silt_density[id] = silt;
+            soil.clay_density[id] = clay;
+        }
+    }
+
+    for (auto y = 0; y < height * water_height; ++y) {
         for (auto x = 0; x < width; ++x) {
             const auto id = x + y * width;
-            // soil.water_density[id] = pow(abs(water_noise.eval(x, y)), 2);
-            if (exp(heightmap[x] * 0.9) > solid_threshold) {
-                soil.sand_density[id] = 0;
-                soil.silt_density[id] = 0;
-                soil.clay_density[id] = 1;
-            } else {
-                soil.water_density[id] = 1;
-            }
+            float sand = soil.sand_density[id];
+            float silt = soil.silt_density[id];
+            float clay = soil.clay_density[id];
+
+            // TODO: pull this out into a function
+            float effective_density = sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY + clay * CLAY_RELATIVE_DENSITY;
+            soil.water_density[id] = 1 - effective_density;
         }
     }
 
@@ -365,6 +501,16 @@ void SoilSystem::mix_give_take_cuda(float dt) {
 
     // launch kernel
     mix_give_take_kernel<<<grid, block>>>(read_ptrs, write_ptrs, width, height, dt);
+
+    // kernel writes to water_density, so swap read and write
+    write.water_density.swap(read.water_density);
+
+    // re-acquire ptrs
+    read_ptrs.get_ptrs(read);
+    write_ptrs.get_ptrs(write);
+
+    // launch mix box blur kernel
+    mix_box_blur_kernel<<<grid, block>>>(read_ptrs, write_ptrs, width, height);
 
     // kernel writes to water_density, so swap read and write
     write.water_density.swap(read.water_density);
@@ -397,8 +543,26 @@ void SoilSystem::mix_give_take_2_cuda(float dt) {
     // launch copy_give kernel
     copy_give_kernel<<<grid, block>>>(read_ptrs, write_ptrs, width, height, dt);
 
-    // kernel writes to water_density, so swap read and write
+    // kernel writes to water_density, water_give_{left, right, up down}, so swap read and write
     write.water_density.swap(read.water_density);
+    write.water_give_left.swap(read.water_give_left);
+    write.water_give_right.swap(read.water_give_right);
+    write.water_give_up.swap(read.water_give_up);
+    write.water_give_down.swap(read.water_give_down);
+
+    // re-acquire ptrs
+    read_ptrs.get_ptrs(read);
+    write_ptrs.get_ptrs(write);
+
+    // launch copy_take_back kernel
+    copy_take_back_kernel<<<grid, block>>>(read_ptrs, write_ptrs, width, height, dt);
+
+    // kernel writes to water_density, water_give_{left, right, up down}, so swap read and write
+    write.water_density.swap(read.water_density);
+    write.water_give_left.swap(read.water_give_left);
+    write.water_give_right.swap(read.water_give_right);
+    write.water_give_up.swap(read.water_give_up);
+    write.water_give_down.swap(read.water_give_down);
 }
 
 
@@ -409,8 +573,26 @@ void SoilSystem::update_cpu(float dt) {
 
 void SoilSystem::update_cuda(float dt) {
     // for now, just mix give take
+    // mix_give_take_cuda(dt);
+
+
+    // SoilSoA soil;
+    // read.copy_to_host(soil);
+    // find min and max water density
+    auto min_iter = thrust::min_element(read.water_density.begin(), read.water_density.end());
+    auto max_iter = thrust::max_element(read.water_density.begin(), read.water_density.end());
+    auto min = *min_iter;
+    auto max = *max_iter;
+
+    // get sum
+    auto sum = thrust::reduce(read.water_density.begin(), read.water_density.end(), 0.0f);
+
+    std::cout << "water_density statistics:\n";
+    std::cout << "min: " << min << "\n";
+    std::cout << "max: " << max << std::endl;
+    std::cout << "sum: " << sum << std::endl;
+
     mix_give_take_cuda(dt);
-    // mix_give_take_2_cuda(dt);
 }
 
 

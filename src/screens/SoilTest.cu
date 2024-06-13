@@ -20,7 +20,7 @@ void SoilTest::show() {
 }
 
 void SoilTest::render(float dt) {
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClearColor(0.08f, 0.6f, 0.8f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     auto& bold = game.getResources().extra_bold_font;
     auto& rect = game.getResources().rect_renderer;

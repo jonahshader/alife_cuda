@@ -3,9 +3,9 @@
 #include <random>
 #include <cmath>
 
-#define M_PI 3.14159265358979323846
+#define M_PI_f 3.14159265358979323846f
 
-FractalNoise::FractalNoise(int octaves, double scale, double wrap_width, double lacunarity, double persistence, int64_t seed) :
+FractalNoise::FractalNoise(int octaves, float scale, float wrap_width, float lacunarity, float persistence, int64_t seed) :
 scale(scale),
 wrap_width(wrap_width),
 lacunarity(lacunarity),
@@ -20,18 +20,18 @@ persistence(persistence)
     }
 }
 
-double FractalNoise::eval(double x) const {
+float FractalNoise::eval(float x) const {
     // We want the noise to be loop horizontally at wrap_width,
     // so we will project the input coordinates to a cylinder.
-    double angle = (x / wrap_width) * 2.0 * M_PI;
-    double d1 = std::cos(angle) * scale * wrap_width / (2.0 * M_PI);
-    double d2 = std::sin(angle) * scale * wrap_width / (2.0 * M_PI);
+    float angle = (x / wrap_width) * 2.0f * M_PI_f;
+    float d1 = std::cos(angle) * scale * wrap_width / (2.0f * M_PI_f);
+    float d2 = std::sin(angle) * scale * wrap_width / (2.0f * M_PI_f);
 
-    double sum = 0.0;
-    double amp = 1.0;
-    double max = 0.0;
+    float sum = 0.0;
+    float amp = 1.0;
+    float max = 0.0;
     for (const auto& noise : m_noises) {
-        sum += noise.eval(d1, d2) * amp;
+        sum += noise.GetNoise(d1, d2) * amp;
         d1 *= lacunarity;
         d2 *= lacunarity;
         max += amp;
@@ -41,50 +41,27 @@ double FractalNoise::eval(double x) const {
     return sum / max;
 }
 
-double FractalNoise::eval(double x, double y) const {
+float FractalNoise::eval(float x, float y) const {
     // We want the noise to be loop horizontally at wrap_width,
     // so we will project the input coordinates to a cylinder.
-    double angle = (x / wrap_width) * 2.0 * M_PI;
-    double d1 = std::cos(angle) * scale * wrap_width / (2.0 * M_PI);
-    double d2 = std::sin(angle) * scale * wrap_width / (2.0 * M_PI);
-    double d3 = y * scale;
+    float angle = 2.0f * M_PI_f * x / wrap_width;
+    float d1 = std::cos(angle) * scale * wrap_width / (2.0f * M_PI_f);
+    float d2 = std::sin(angle) * scale * wrap_width / (2.0f * M_PI_f);
+    float d3 = y * scale;
 
-    double sum = 0.0;
-    double amp = 1.0;
-    double max = 0.0;
+    float sum = 0.0;
+    float amp = 1.0;
+    float max = 0.0;
     for (const auto& noise : m_noises) {
-        sum += noise.eval(d1, d2, d3) * amp;
-        d1 *= lacunarity;
-        d2 *= lacunarity;
-        d3 *= lacunarity;
-        max += amp;
-        amp *= persistence;
-    }
-
-    return sum / max;
-}
-
-double FractalNoise::eval(double x, double y, double z) const {
-    // We want the noise to be loop horizontally at wrap_width,
-    // so we will project the input coordinates to a cylinder.
-    double angle = (x / wrap_width) * 2.0 * M_PI;
-    double d1 = std::cos(angle) * scale * wrap_width / (2.0 * M_PI);
-    double d2 = std::sin(angle) * scale * wrap_width / (2.0 * M_PI);
-    double d3 = y * scale;
-    double d4 = z * scale;
-
-    double sum = 0.0;
-    double amp = 1.0;
-    double max = 0.0;
-    for (const auto& noise : m_noises) {
-        sum += noise.eval(d1, d2, d3, d4) * amp;
+        sum += noise.GetNoise(d1, d2, d3) * amp;
         d1 *= lacunarity;
         d2 *= lacunarity;
         d3 *= lacunarity;
-        d4 *= lacunarity;
         max += amp;
         amp *= persistence;
     }
 
     return sum / max;
 }
+
+

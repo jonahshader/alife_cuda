@@ -10,6 +10,13 @@
 #include "SoAHelper.h"
 #include "graphics/renderers/RectRenderer.cuh"
 
+constexpr float SAND_RELATIVE_DENSITY = 0.5f;
+constexpr float SILT_RELATIVE_DENSITY = 0.7f;
+constexpr float CLAY_RELATIVE_DENSITY = 0.9f;
+
+constexpr float SAND_PERMEABILITY = 0.5f;
+constexpr float SILT_PERMEABILITY = 0.3f;
+constexpr float CLAY_PERMEABILITY = 0.1f;
 
 #define FOR_SOIL(N, D) \
 D(float, water_density, 0)\
@@ -17,7 +24,7 @@ D(float, water_give_left, 0)\
 D(float, water_give_right, 0)\
 D(float, water_give_up, 0)\
 D(float, water_give_down, 0)\
-D(float, sand_density, 1)\
+D(float, sand_density, 0)\
 D(float, silt_density, 0)\
 D(float, clay_density, 0)\
 D(float, ph, 6.5)\

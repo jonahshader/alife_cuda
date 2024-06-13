@@ -3,17 +3,16 @@
 #include <cstdint>
 #include <vector>
 
-#include "external/OpenSimplexNoise.cuh"
+#include "external/FastNoiseLite.cuh"
 
 class FractalNoise {
 public:
-    FractalNoise(int octaves, double scale, double wrap_width, double lacunarity, double persistence, int64_t seed);
+    FractalNoise(int octaves, float scale, float wrap_width, float lacunarity, float persistence, int64_t seed);
 
-    double eval(double x) const;
-    double eval(double x, double y) const;
-    double eval(double x, double y, double z) const;
+    float eval(float x) const;
+    float eval(float x, float y) const;
 
 private:
-    double scale, wrap_width, lacunarity, persistence;
-    std::vector<OpenSimplexNoise::Noise> m_noises{};
+    float scale, wrap_width, lacunarity, persistence;
+    std::vector<FastNoiseLite> m_noises{};
 };
