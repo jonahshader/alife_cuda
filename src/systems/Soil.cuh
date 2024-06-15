@@ -52,5 +52,6 @@ private:
 
     void mix_give_take_cuda(float dt);
     void mix_give_take_2_cuda(float dt);
+    void mix_give_take_3_cuda(float dt);
 
 };

@@ -62,6 +62,32 @@ inline bool inbounds(int y, uint height) {
 }
 
 __host__ __device__
+inline float get_effective_density(float sand, float silt, float clay) {
+    return 1 - (sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY + clay * CLAY_RELATIVE_DENSITY);
+}
+
+__host__ __device__
+inline float get_effective_permeability(float sand, float silt, float clay) {
+    return 1 - (sand * (1 - SAND_PERMEABILITY) + silt * (1 - SILT_PERMEABILITY) + clay * (1 - CLAY_PERMEABILITY));
+}
+
+__host__ __device__
+inline void get_effective(const SoilPtrs& ptrs, size_t id, float& density, float& permeability) {
+    // does not check upper or lower bounds
+    density = get_effective_density(ptrs.sand_density[id], ptrs.silt_density[id], ptrs.clay_density[id]);
+    permeability = get_effective_permeability(ptrs.sand_density[id], ptrs.silt_density[id], ptrs.clay_density[id]);
+}
+
+__host__ __device__
+inline void get_effective(const SoilPtrs& ptrs, uint x, uint y, uint width, float& density, float& permeability) {
+    // does not check upper or lower bounds
+    if (x < 0) x += width;
+    if (x >= width) x -= width;
+    const auto id = x + y * width;
+    get_effective(ptrs, id, density, permeability);
+}
+
+__host__ __device__
 inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint height, float dt, uint x, uint y) {
 
     const auto id = x + y * width;
@@ -104,6 +130,95 @@ inline void mix_give_take(SoilPtrs &read, SoilPtrs &write, uint width, uint heig
     }
 
     write.water_density[id] = water + water_delta;
+}
+
+__host__ __device__
+inline float compute_give_normal(float current, float other, float dt, float perm, float dens) {
+    const float NORMAL_GIVE_PER_DELTA_PER_SECOND = 25.0f * dt;
+    const float MAX_GIVE_PER_DELTA_PER_SECOND = 25.0f * dt;
+    const auto delta = current - other;
+    const auto sum = current + other;
+    const auto overflow = current > 1 || other > 1;
+    // if (sum > 0.0f) {
+    //     return tanh(pow(delta, 3) - delta * 0.01f) * NORMAL_GIVE_PER_DELTA_PER_SECOND;
+    // } else {
+    //     return tanh(pow(delta, 3)) * NORMAL_GIVE_PER_DELTA_PER_SECOND;
+    // }
+
+    const auto epsilon = 0.25f * max(sum, 0.0f);
+    float rate = overflow ? MAX_GIVE_PER_DELTA_PER_SECOND : NORMAL_GIVE_PER_DELTA_PER_SECOND;
+    const auto use_epsilon = sum > epsilon / 2;
+
+    // return tanh(delta) * rate;
+    if (use_epsilon && delta > epsilon/2) {
+        return tanh(delta - epsilon) * rate;
+    } else if (use_epsilon && delta < -epsilon/2) {
+        return tanh(delta + epsilon) * rate;
+    } else {
+        return tanh(delta) * rate;
+    }
+}
+
+__host__ __device__
+inline void mix_give_take_3(SoilPtrs &read, SoilPtrs &write, uint width, uint height, float dt, uint x, uint y) {
+    const auto id = x + y * width;
+
+
+
+    // const auto current_water = read.water_density[id];
+    float current_perm = 0;
+    float current_dens = 0;
+    get_effective(read, x, y, width, current_dens, current_perm);
+    //
+    // float desired_give = 0.0f;
+    //
+    // const auto other_water = get_cell_w_wrap(read.water_density, x - 1, y, width);
+    // float other_perm;
+    // float other_dens;
+    // get_effective(read, x - 1, y, width, other_dens, other_perm);
+    // const auto other_remaining = 1 - other_water;
+
+    float give_left = 0;
+    float give_right = 0;
+    float give_up = 0;
+    float give_down = 0;
+
+    const auto current_water = read.water_density[id];
+
+    float other_perm = 0;
+    float other_dens = 0;
+
+    const auto left_water = get_cell_w_wrap(read.water_density, x - 1, y, width);
+    get_effective(read, x - 1, y, width, other_dens, other_perm);
+    give_left = compute_give_normal(current_water, left_water, dt, (current_perm + other_perm) / 2, (current_dens + other_dens) / 2);
+    const auto right_water = get_cell_w_wrap(read.water_density, x + 1, y, width);
+    get_effective(read, x + 1, y, width, other_dens, other_perm);
+    give_right = compute_give_normal(current_water, right_water, dt, (current_perm + other_perm) / 2, (current_dens + other_dens) / 2);
+    if (y > 0) {
+        const auto down_water = read.water_density[x + (y - 1) * width];
+        get_effective(read, x, y - 1, width, other_dens, other_perm);
+        give_down = compute_give_normal(current_water, down_water, dt, (current_perm + other_perm) / 2, (current_dens + other_dens) / 2);
+        if (down_water < (current_dens + other_dens) / 2) {
+            give_down += other_perm * current_water / 4;
+        }
+
+    }
+    float up_water = 0;
+    if (y < height - 1) {
+        up_water = read.water_density[x + (y + 1) * width];
+        get_effective(read, x, y + 1, width, other_dens, other_perm);
+        give_up = compute_give_normal(current_water, up_water, dt, (current_perm + other_perm) / 2, (current_dens + other_dens) / 2);
+        if (current_water < (current_dens + other_dens) / 2) {
+            give_up += current_perm * -up_water / 4;
+        }
+    }
+
+    // give_down = max(give_down - 1.0f, 0.0f);
+    // give_up = min(give_up + 1.0f, 0.0f);
+    // give_down = current_water;
+    // give_up = -up_water;
+
+    write.water_density[id] = current_water - give_left - give_right - give_up - give_down;
 }
 
 // TODO: write mix_give_take_3
@@ -301,16 +416,6 @@ inline void copy_take_back(SoilPtrs& read, SoilPtrs& write, uint width, uint hei
     write.water_density[id] = current_water + give_left + give_right + give_up + give_down;
 }
 
-__host__ __device__
-inline float get_effective_density(float sand, float silt, float clay) {
-    return sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY + clay * CLAY_RELATIVE_DENSITY;
-}
-
-__host__ __device__
-inline float get_effective_permeability(float sand, float silt, float clay) {
-    return sand * SAND_PERMEABILITY + silt * SILT_PERMEABILITY + clay * CLAY_PERMEABILITY;
-}
-
 __global__
 void mix_give_take_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height, float dt) {
     const auto x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -336,6 +441,15 @@ void mix_give_take_2_kernel(SoilPtrs read, SoilPtrs write, uint width, uint heig
     if (x >= width || y >= height) return;
 
     mix_give_take_2(read, write, width, height, dt, x, y);
+}
+
+__global__
+void mix_give_take_3_kernel(SoilPtrs read, SoilPtrs write, uint width, uint height, float dt) {
+    const auto x = blockIdx.x * blockDim.x + threadIdx.x;
+    const auto y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+
+    mix_give_take_3(read, write, width, height, dt, x, y);
 }
 
 __global__
@@ -565,6 +679,24 @@ void SoilSystem::mix_give_take_2_cuda(float dt) {
     write.water_give_down.swap(read.water_give_down);
 }
 
+void SoilSystem::mix_give_take_3_cuda(float dt) {
+    // grab ptrs
+    SoilPtrs read_ptrs{}, write_ptrs{};
+    read_ptrs.get_ptrs(read);
+    write_ptrs.get_ptrs(write);
+
+    // set up grid
+    dim3 block(BLOCK_WIDTH, BLOCK_HEIGHT);
+    dim3 grid(width + block.x - 1 / block.x, height + block.y - 1 / block.y);
+
+    // launch kernel
+    mix_give_take_3_kernel<<<grid, block>>>(read_ptrs, write_ptrs, width, height, dt);
+
+    // wrote to water_density, so swap read and write
+    write.water_density.swap(read.water_density);
+}
+
+
 
 void SoilSystem::update_cpu(float dt) {
     // TODO: implement
@@ -592,7 +724,7 @@ void SoilSystem::update_cuda(float dt) {
     std::cout << "max: " << max << std::endl;
     std::cout << "sum: " << sum << std::endl;
 
-    mix_give_take_cuda(dt);
+    mix_give_take_3_cuda(dt);
 }
 
 
