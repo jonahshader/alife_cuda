@@ -12,11 +12,11 @@
 
 constexpr float SAND_RELATIVE_DENSITY = 0.5f;
 constexpr float SILT_RELATIVE_DENSITY = 0.7f;
-constexpr float CLAY_RELATIVE_DENSITY = 0.9f;
+constexpr float CLAY_RELATIVE_DENSITY = 1.0f;
 
 constexpr float SAND_PERMEABILITY = 0.5f;
 constexpr float SILT_PERMEABILITY = 0.3f;
-constexpr float CLAY_PERMEABILITY = 0.1f;
+constexpr float CLAY_PERMEABILITY = 0.00f;
 
 #define FOR_SOIL(N, D) \
 D(float, water_density, 0)\
@@ -51,7 +51,6 @@ private:
     std::unique_ptr<RectRenderer> rect_renderer{};
 
     void mix_give_take_cuda(float dt);
-    void mix_give_take_2_cuda(float dt);
     void mix_give_take_3_cuda(float dt);
 
 };
