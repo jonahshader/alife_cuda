@@ -89,7 +89,7 @@ void init_screen(const char * caption) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     cudaDeviceProp cuda_prop;
     cudaGetDeviceProperties(&cuda_prop, 0);
     // print the compute capability, max number of threads per block, max number of blocks, number of SMs, max number of threads per SM,
