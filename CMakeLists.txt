@@ -1,26 +1,59 @@
 cmake_minimum_required(VERSION 3.28)
-project(alife_cuda CUDA C CXX)
+project(alife_cuda CUDA CXX) # removed C
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
-#set(CMAKE_CXX_FLAGS "-O3")
-set(CMAKE_CUDA_FLAGS "-openmp -lineinfo")
+# Include FetchContent for downloading dependencies
+include(FetchContent)
 
-set(LibraryRoot "F:/Programming/C++ Libraries/")
+# SDL2
+FetchContent_Declare(
+        SDL2
+        URL https://github.com/libsdl-org/SDL/releases/download/release-2.30.3/SDL2-2.30.3.tar.gz
+        URL_HASH SHA256=820440072f8f5b50188c1dae104f2ad25984de268785be40c41a099a510f0aec
+)
+FetchContent_MakeAvailable(SDL2)
 
-include_directories("${LibraryRoot}SDL2-devel-2.30.1-VC/SDL2-2.30.1/include")
-link_directories("${LibraryRoot}SDL2-devel-2.30.1-VC/SDL2-2.30.1/lib/x64")
-include_directories("${LibraryRoot}glm")
-include_directories("${LibraryRoot}artery-font-format-master/artery-font")
-include_directories("${LibraryRoot}glad_opengl46/include")
+# GLAD
+FetchContent_Declare(
+        glad
+        GIT_REPOSITORY https://github.com/jonahshader/glad_opengl46.git
+        GIT_TAG main
+)
+FetchContent_GetProperties(glad)
+if(NOT glad_POPULATED)
+    FetchContent_Populate(glad)
+    add_subdirectory(${glad_SOURCE_DIR} ${glad_BINARY_DIR} EXCLUDE_FROM_ALL)
+endif()
 
-# Add glad sources
-set(GLAD_SOURCES "${LibraryRoot}glad_opengl46/src/glad.c")
-set(GLAD_HEADERS "${LibraryRoot}glad_opengl46/include/glad/glad.h" "${LibraryRoot}glad_opengl46/include/KHR/khrplatform.h")
+# GLM
+FetchContent_Declare(
+        glm
+        GIT_REPOSITORY https://github.com/g-truc/glm.git
+        GIT_TAG 0.9.9.8
+)
+FetchContent_MakeAvailable(glm)
 
+# Artery Font (header-only library)
+FetchContent_Declare(
+        artery_font
+        GIT_REPOSITORY https://github.com/Chlumsky/artery-font-format.git
+        GIT_TAG master
+)
+FetchContent_GetProperties(artery_font)
+if(NOT artery_font_POPULATED)
+    FetchContent_Populate(artery_font)
+    add_library(artery_font INTERFACE)
+    target_include_directories(artery_font INTERFACE ${artery_font_SOURCE_DIR}/artery-font)
+endif()
 
+# Find OpenMP
+find_package(OpenMP REQUIRED)
 
-add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
+add_executable(alife_cuda src/main.cu
         src/graphics/ExtendViewport.cpp
         src/graphics/ExtendViewport.h
         src/graphics/Shader.cpp
@@ -68,9 +101,56 @@ add_executable(alife_cuda src/main.cu ${GLAD_SOURCES} ${GLAD_HEADERS}
         src/systems/terrain/Seamless.cu
         src/systems/terrain/Seamless.cuh
 )
-target_include_directories(alife_cuda PUBLIC ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(${PROJECT_NAME} SDL2main)
-target_link_libraries(${PROJECT_NAME} SDL2)
 
+# Set CUDA properties
 set_target_properties(alife_cuda PROPERTIES
-        CUDA_SEPARABLE_COMPILATION ON)
+        CUDA_SEPARABLE_COMPILATION ON
+)
+
+# Add src directory to include path
+target_include_directories(alife_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Link libraries
+target_link_libraries(alife_cuda PRIVATE
+        SDL2::SDL2
+        glad
+        glm::glm
+        artery_font
+        OpenMP::OpenMP_CXX
+)
+
+# Include GLAD headers
+target_include_directories(alife_cuda PRIVATE ${glad_SOURCE_DIR}/include)
+
+# Platform-specific configurations
+if(WIN32)
+    target_link_libraries(alife_cuda PRIVATE SDL2::SDL2main)
+
+    # Define SDL_MAIN_HANDLED
+    target_compile_definitions(${PROJECT_NAME} PRIVATE SDL_MAIN_HANDLED)
+    if(MSVC)
+        # Use the MultiThreaded DLL runtime library for both Debug and Release
+        set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
+
+#        # Set subsystem to Windows for Release, Console for Debug
+#        set_target_properties(alife_cuda PROPERTIES
+#                LINK_FLAGS "/SUBSYSTEM:WINDOWS"
+#                LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+#                LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:CONSOLE"
+#        )
+
+        # Add console-specific compiler definition for Debug
+        target_compile_definitions(${PROJECT_NAME} PRIVATE
+                $<$<CONFIG:Debug>:CONSOLE_DEBUG>
+        )
+    endif()
+endif()
+
+# Copy SDL2 DLL to output directory on Windows
+if(WIN32)
+    add_custom_command(TARGET alife_cuda POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL2::SDL2>
+            $<TARGET_FILE_DIR:alife_cuda>
+    )
+endif()
