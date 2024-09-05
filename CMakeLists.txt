@@ -131,18 +131,6 @@ if(WIN32)
     if(MSVC)
         # Use the MultiThreaded DLL runtime library for both Debug and Release
         set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreadedDLL")
-
-#        # Set subsystem to Windows for Release, Console for Debug
-#        set_target_properties(alife_cuda PROPERTIES
-#                LINK_FLAGS "/SUBSYSTEM:WINDOWS"
-#                LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
-#                LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:CONSOLE"
-#        )
-
-        # Add console-specific compiler definition for Debug
-        target_compile_definitions(${PROJECT_NAME} PRIVATE
-                $<$<CONFIG:Debug>:CONSOLE_DEBUG>
-        )
     endif()
 endif()
 

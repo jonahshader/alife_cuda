@@ -20,10 +20,6 @@
 #include <SDL.h>
 #include "glad/glad.h"
 
-#ifdef _WIN32
-#include <Windows.h>
-#endif
-
 static int viewport_width = 1920;
 static int viewport_height = 1080;
 static SDL_Window* window = nullptr;
@@ -152,10 +148,3 @@ int main(int argc, char* argv[]) {
     //    jl_atexit_hook(0);
     return 0;
 }
-
-#ifdef _WIN32
-// Windows entry point
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    return main(__argc, __argv);
-}
-#endif
