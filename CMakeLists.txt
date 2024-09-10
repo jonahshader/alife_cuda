@@ -94,6 +94,10 @@ add_executable(alife_cuda src/main.cu
         src/systems/Screen.h
         src/systems/Resources.cu
         src/systems/Resources.cuh
+        src/systems/CustomMath.cu
+        src/systems/CustomMath.cuh
+        src/systems/Kernels.cu
+        src/systems/Kernels.cuh
         src/spatial_sort.cu
         src/spatial_sort.cuh
         src/screens/TreeTest.cu
@@ -102,6 +106,8 @@ add_executable(alife_cuda src/main.cu
         src/systems/Trees.cuh
         src/systems/Fluid.cu
         src/systems/Fluid.cuh
+        src/systems/ParticleFluid.cuh
+        src/systems/ParticleFluid.cu
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
         src/systems/TreeTypes.cuh
