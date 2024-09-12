@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "external/FastNoiseLite.cuh"
+#include "FastNoiseLite.h"
 
 class FractalNoise {
 public:

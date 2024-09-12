@@ -9,7 +9,7 @@
 #include <glm/glm.hpp>
 #include <thrust/extrema.h>
 
-#include "external/FastNoiseLite.cuh"
+#include "FastNoiseLite.h"
 
 
 constexpr auto FILTER_WIDTH = 3;
