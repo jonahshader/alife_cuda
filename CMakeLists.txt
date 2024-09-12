@@ -50,10 +50,33 @@ if(NOT artery_font_POPULATED)
     target_include_directories(artery_font INTERFACE ${artery_font_SOURCE_DIR}/artery-font)
 endif()
 
+# lodepng
+FetchContent_Declare(
+  lodepng
+  GIT_REPOSITORY https://github.com/lvandeve/lodepng.git
+  GIT_TAG master
+)
+FetchContent_GetProperties(lodepng)
+if(NOT lodepng_POPULATED)
+  FetchContent_Populate(lodepng)
+endif()
+
+# FastNoiseLite
+FetchContent_Declare(
+  fastnoiselite
+  GIT_REPOSITORY https://github.com/Auburn/FastNoiseLite.git
+  GIT_TAG master
+)
+FetchContent_GetProperties(fastnoiselite)
+if(NOT fastnoiselite_POPULATED)
+  FetchContent_Populate(fastnoiselite)
+endif()
+
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
 add_executable(alife_cuda src/main.cu
+        ${lodepng_SOURCE_DIR}/lodepng.cpp
         src/graphics/ExtendViewport.cpp
         src/graphics/ExtendViewport.h
         src/graphics/Shader.cpp
@@ -64,8 +87,6 @@ add_executable(alife_cuda src/main.cu
         src/graphics/renderers/CircleRenderer.h
         src/graphics/renderers/FontRenderer.cpp
         src/graphics/renderers/FontRenderer.h
-        src/external/lodepng.cpp
-        src/external/lodepng.h
         src/graphics/renderers/RectRenderer.cu
         src/graphics/renderers/RectRenderer.cuh
         src/systems/Game.cu
@@ -97,7 +118,6 @@ add_executable(alife_cuda src/main.cu
         src/screens/SoilTest.cuh
         src/systems/terrain/FractalNoise.cu
         src/systems/terrain/FractalNoise.cuh
-        src/external/FastNoiseLite.cuh
         src/systems/terrain/Seamless.cu
         src/systems/terrain/Seamless.cuh
 )
@@ -108,7 +128,7 @@ set_target_properties(alife_cuda PROPERTIES
 )
 
 # Add src directory to include path
-target_include_directories(alife_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+# target_include_directories(alife_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 # Link libraries
 target_link_libraries(alife_cuda PRIVATE
@@ -119,8 +139,13 @@ target_link_libraries(alife_cuda PRIVATE
         OpenMP::OpenMP_CXX
 )
 
-# Include GLAD headers
-target_include_directories(alife_cuda PRIVATE ${glad_SOURCE_DIR}/include)
+# Include headers
+target_include_directories(alife_cuda PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${glad_SOURCE_DIR}/include
+        ${lodepng_SOURCE_DIR}
+        ${fastnoiselite_SOURCE_DIR}/Cpp
+)
 
 # Platform-specific configurations
 if(WIN32)
