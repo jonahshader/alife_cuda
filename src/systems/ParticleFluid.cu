@@ -1,19 +1,13 @@
 #include "ParticleFluid.cuh"
 
-// Constants expected to be defined elsewhere
-__constant__ float PARTICLE_MASS;
-__constant__ float KERNEL_RADIUS;
-__constant__ float TARGET_PRESSURE;
-__constant__ float PRESSURE_MULTIPLIER;
-__constant__ float VISCOSITY_MULTIPLIER;
-__constant__ float GRAVITY_ACCELERATION;
-__constant__ float WALL_ACCEL_PER_DIST;
+#include "Kernels.cuh"
 
-// Kernel functions expected to be defined elsewhere
-__device__ float sharp_kernel(float r);
-__device__ float sharp_kernel_derivative(float r);
-__device__ float smooth_kernel(float r);
-__device__ float smooth_kernel_derivative(float r);
+constexpr float PRESSURE_MULTIPLIER = 1200000.0f;
+constexpr float VISCOSITY_MULTIPLIER = 8.0f;
+constexpr float TARGET_PRESSURE = 2.0f;
+constexpr float PARTICLE_MASS = 1.0f;
+constexpr float GRAVITY_ACCELERATION = 108.0;
+constexpr float WALL_ACCEL_PER_DIST = 6600.0f;
 
 __host__ __device__ int particle_to_gid(float x, float y, int grid_width, float cell_size)
 {
@@ -53,7 +47,8 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
 }
 
 __global__ void compute_density(float *x_particle, float *y_particle, float *density, int *grid_indices, int *particles_per_cell,
-                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float cell_size)
+                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float cell_size,
+                                float kernel_radius, float kernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -91,10 +86,10 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
         float dy = y_other - y;
         float r = sqrtf(dx * dx + dy * dy);
 
-        if (r >= KERNEL_RADIUS)
+        if (r >= kernel_radius)
           continue;
 
-        float kernel_value = sharp_kernel(r);
+        float kernel_value = sharp_kernel(r, kernel_radius, kernel_vol_inv);
         density_i += PARTICLE_MASS * kernel_value;
       }
     }
@@ -106,7 +101,8 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 
 __global__ void compute_forces(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                float *x_acceleration, float *y_acceleration, int *grid_indices, int *particles_per_cell, int max_particles_per_cell,
-                               float *density, int max_particles, int grid_width, int grid_height, float cell_size)
+                               float *density, int max_particles, int grid_width, int grid_height, float cell_size,
+                               float kernel_radius, float kernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -153,7 +149,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float dy = y_other - y;
         float r = sqrtf(dx * dx + dy * dy);
 
-        if (r >= KERNEL_RADIUS || r < 1e-6f)
+        if (r >= kernel_radius || r < 1e-6f)
           continue;
 
         float dir_x = dx / r;
@@ -162,12 +158,12 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float density_j = density[other_i];
         float pressure_j = (density_j - TARGET_PRESSURE) * PRESSURE_MULTIPLIER;
         float shared_pressure = (pressure_i + pressure_j) * 0.5f;
-        float kernel_derivative = sharp_kernel_derivative(r);
+        float kernel_derivative = sharp_kernel_derivative(r, kernel_radius, kernel_vol_inv);
 
         pressure_grad_x += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_x / density_j;
         pressure_grad_y += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_y / density_j;
 
-        float influence = smooth_kernel(r);
+        float influence = smoothstep_kernel(r, kernel_radius, kernel_vol_inv);
         float vx_i = x_velocity[i];
         float vy_i = y_velocity[i];
         float vx_j = x_velocity[other_i];
@@ -240,4 +236,13 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
   {
     y_particle[i] -= bounds_y;
   }
+}
+
+namespace particles
+{
+
+void update() {
+  
+}
+
 }
