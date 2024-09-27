@@ -64,6 +64,8 @@ D(float, clay_proportion, 0)
 
 // gravity is just a bit of acceleration in the down direction
 
+// TODO: do the navier stokes trick where we only store the velocity on the edges
+
 
 DEFINE_STRUCTS(Soil, FOR_SOIL)
 
