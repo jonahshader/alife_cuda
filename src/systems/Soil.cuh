@@ -33,13 +33,9 @@ constexpr float CLAY_PERMEABILITY = 0.00f;
 #define FOR_SOIL(N, D) \
 D(float, water, 0) \
 D(float, water_give_left_per_sec, 0) \
-D(float, water_give_right_per_sec, 0) \
 D(float, water_give_up_per_sec, 0) \
-D(float, water_give_down_per_sec, 0) \
 D(float, water_give_left, 0) \
-D(float, water_give_right, 0) \
 D(float, water_give_up, 0) \
-D(float, water_give_down, 0) \
 D(float, sand_proportion, 0) \
 D(float, silt_proportion, 0) \
 D(float, clay_proportion, 0)
