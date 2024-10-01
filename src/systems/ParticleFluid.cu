@@ -1,5 +1,7 @@
 #include "ParticleFluid.cuh"
 
+#include <random>
+
 #include "Kernels.cuh"
 
 constexpr float PRESSURE_MULTIPLIER = 1200000.0f;
@@ -26,7 +28,8 @@ __global__ void reset_particles_per_cell(int *particles_per_cell, int particles_
 }
 
 __global__ void populate_grid_indices(float *x_particle, float *y_particle, int *grid_indices, int max_particles,
-                                      int *particles_per_cell, int max_particles_per_cell, int grid_width, int grid_height, float cell_size)
+                                      int *particles_per_cell, int max_particles_per_cell, 
+                                      int grid_width, int grid_height, float cell_size)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -180,14 +183,6 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   float acc_y = -pressure_grad_y / density_i + VISCOSITY_MULTIPLIER * viscosity_force_y / density_i + GRAVITY_ACCELERATION;
 
   // Wall accelerations
-  if (x < 0.0f)
-  {
-    acc_x += WALL_ACCEL_PER_DIST * -x;
-  }
-  else if (x > (grid_width * cell_size))
-  {
-    acc_x += WALL_ACCEL_PER_DIST * ((grid_width * cell_size) - x);
-  }
   if (y < 0.0f)
   {
     acc_y += WALL_ACCEL_PER_DIST * -y;
@@ -228,6 +223,7 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
     x_particle[i] -= bounds_x;
   }
 
+  // TODO: use walls instead. current walls are elastic which won't work as they will exit the grid.
   if (y_particle[i] < 0.0f)
   {
     y_particle[i] += bounds_y;
@@ -240,9 +236,50 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
 
 namespace particles
 {
+  ParticleFluid::ParticleFluid(int width, int height)
+  {
+    // configure grid
+    grid.reconfigure(width, height, 4);
+    // temp: init some particles in the bottom half
+    std::default_random_engine rand;
+    std::uniform_real_distribution<float> dist_x(0.0f, width * 0.5f);
+    std::uniform_real_distribution<float> dist_y(0.0f, height * 0.5f);
 
-void update() {
-  
-}
+    // velocity init with gaussian
+    std::normal_distribution<float> dist_vel(0.0f, 1.0f);
+
+    // temp: 1000 particles
+    constexpr int NUM_PARTICLES = 1000;
+    particles.resize_all(NUM_PARTICLES);
+    for (int i = 0; i < NUM_PARTICLES; ++i)
+    {
+      particles.x_particle[i] = dist_x(rand);
+    }
+    for (int i = 0; i < NUM_PARTICLES; ++i)
+    {
+      particles.y_particle[i] = dist_y(rand);
+    }
+    for (int i = 0; i < NUM_PARTICLES; ++i)
+    {
+      particles.x_velocity[i] = dist_vel(rand);
+    }
+    for (int i = 0; i < NUM_PARTICLES; ++i)
+    {
+      particles.y_velocity[i] = dist_vel(rand);
+    }
+    // accel is defaulted to 0
+    // density is defaulted to 0
+    // there are some vectors that are present in the C++ host version, but missing in the CUDA version. 
+    // TODO: verify correctness of algo
+
+    // send to device
+    particles_device.copy_from_host(particles);
+    grid_device.copy_from_host(grid);
+  }
+
+  void ParticleFluid::update(float dt)
+  {
+    // TODO: implement
+  }
 
 }

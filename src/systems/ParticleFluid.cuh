@@ -23,11 +23,11 @@ namespace particles
 {
   DEFINE_STRUCTS(Particles, FOR_PARTICLES)
 
-  struct ParticleGridHost {
-    std::vector<int> grid_indices{};
-    std::vector<int> particles_per_cell{};
+  struct ParticleGrid {
+    thrust::host_vector<int> grid_indices{};
+    thrust::host_vector<int> particles_per_cell{};
     int width{0};
-    int height{0};`
+    int height{0};
     int max_particles_per_cell{4};
 
     void reconfigure(int new_width, int new_height, int new_max_particles_per_cell) {
@@ -43,8 +43,30 @@ namespace particles
   struct ParticleGridDevice {
     thrust::device_vector<int> grid_indices{};
     thrust::device_vector<int> particles_per_cell{};
+
+    void copy_from_host(ParticleGrid &host) {
+      grid_indices = host.grid_indices;
+      particles_per_cell = host.particles_per_cell;
+    }
+
+    void copy_to_host(ParticleGrid &host) {
+      host.grid_indices = grid_indices;
+      host.particles_per_cell = particles_per_cell;
+    }
   };
 
-  // void update(ParticlesSoADevice &particles, );
+  class ParticleFluid {
+  public:
+    ParticleFluid(int width, int height);
+
+    void update(float dt);
+
+  private:
+    ParticlesSoA particles{};
+    ParticlesSoADevice particles_device{};
+
+    ParticleGrid grid{};
+    ParticleGridDevice grid_device{};
+  };
 
 } // namespace particles
