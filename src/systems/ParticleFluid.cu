@@ -18,10 +18,10 @@ __host__ __device__ int particle_to_gid(float x, float y, int grid_width, float 
   return grid_y * grid_width + grid_x;
 }
 
-__global__ void reset_particles_per_cell(int *particles_per_cell, int particles_per_cell_length)
+__global__ void reset_particles_per_cell(int *particles_per_cell, int grid_size)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // grid index
-  if (i < particles_per_cell_length)
+  if (i < grid_size)
   {
     particles_per_cell[i] = 0;
   }
@@ -105,7 +105,7 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 __global__ void compute_forces(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                float *x_acceleration, float *y_acceleration, int *grid_indices, int *particles_per_cell, int max_particles_per_cell,
                                float *density, int max_particles, int grid_width, int grid_height, float cell_size,
-                               float kernel_radius, float kernel_vol_inv)
+                               float kernel_radius, float smoothkernel_vol_inv, float sharpkernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -161,12 +161,12 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float density_j = density[other_i];
         float pressure_j = (density_j - TARGET_PRESSURE) * PRESSURE_MULTIPLIER;
         float shared_pressure = (pressure_i + pressure_j) * 0.5f;
-        float kernel_derivative = sharp_kernel_derivative(r, kernel_radius, kernel_vol_inv);
+        float kernel_derivative = sharp_kernel_derivative(r, kernel_radius, sharpkernel_vol_inv);
 
         pressure_grad_x += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_x / density_j;
         pressure_grad_y += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_y / density_j;
 
-        float influence = smoothstep_kernel(r, kernel_radius, kernel_vol_inv);
+        float influence = smoothstep_kernel(r, kernel_radius, smoothkernel_vol_inv);
         float vx_i = x_velocity[i];
         float vy_i = y_velocity[i];
         float vx_j = x_velocity[other_i];
@@ -279,7 +279,54 @@ namespace particles
 
   void ParticleFluid::update(float dt)
   {
-    // TODO: implement
+    // reset particles per cell
+    const int grid_size = grid.width * grid.height;
+    dim3 block(256);
+    dim3 grid_dim((grid_size + block.x - 1) / block.x);
+    reset_particles_per_cell<<<grid_dim, block>>>(grid_device.particles_per_cell.data().get(), grid_size);
+
+    // populate grid indices
+    const int particle_count = particles_device.x_particle.size();
+    const float cell_size = 1.0f;
+    block = dim3(256);
+    grid_dim = dim3((particle_count + block.x - 1) / block.x);
+    populate_grid_indices<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
+                                               grid_device.grid_indices.data().get(), particle_count, grid_device.particles_per_cell.data().get(),
+                                               grid.max_particles_per_cell, grid.width, grid.height, cell_size);
+
+    // compute density
+    // density is computed using sharp kernel
+    const float kernel_radius = 2.0f;
+    const float sharp_kernel_vol_inv = 1.0f / sharp_kernel_volume(kernel_radius);
+
+    block = dim3(256);
+    grid_dim = dim3((particle_count + block.x - 1) / block.x);
+    compute_density<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
+                                         particles_device.density.data().get(), grid_device.grid_indices.data().get(),
+                                         grid_device.particles_per_cell.data().get(), grid.max_particles_per_cell, particle_count,
+                                         grid.width, grid.height, cell_size, kernel_radius, sharp_kernel_vol_inv);
+
+    // compute forces
+    // compute_forces uses sharp kernel for pressure and smooth kernel for viscosity
+    const float smooth_kernel_vol_inv = 1.0f / smoothstep_kernel_volume(kernel_radius);
+    block = dim3(256);
+    grid_dim = dim3((particle_count + block.x - 1) / block.x);
+    compute_forces<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
+                                        particles_device.x_velocity.data().get(), particles_device.y_velocity.data().get(),
+                                        particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
+                                        grid_device.grid_indices.data().get(), grid_device.particles_per_cell.data().get(),
+                                        grid.max_particles_per_cell, particles_device.density.data().get(), particle_count,
+                                        grid.width, grid.height, cell_size, kernel_radius, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
+
+    // update positions and velocities
+    const float bounds_x = grid.width * cell_size;
+    const float bounds_y = grid.height * cell_size;
+    block = dim3(256);
+    grid_dim = dim3((particle_count + block.x - 1) / block.x);
+    update_positions_velocities<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
+                                                     particles_device.x_velocity.data().get(), particles_device.y_velocity.data().get(),
+                                                     particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
+                                                     particle_count, dt, bounds_x, bounds_y);
   }
 
 }

@@ -83,8 +83,8 @@ add_executable(alife_cuda src/main.cu
         src/graphics/Shader.h
         src/graphics/renderers/LineRenderer.cu
         src/graphics/renderers/LineRenderer.cuh
-        src/graphics/renderers/CircleRenderer.cpp
-        src/graphics/renderers/CircleRenderer.h
+        src/graphics/renderers/CircleRenderer.cu
+        src/graphics/renderers/CircleRenderer.cuh
         src/graphics/renderers/FontRenderer.cpp
         src/graphics/renderers/FontRenderer.h
         src/graphics/renderers/RectRenderer.cu
