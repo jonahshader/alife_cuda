@@ -8,7 +8,7 @@
 #include <thrust/device_vector.h>
 
 #include "SoAHelper.h"
-#include "graphics/renderers/CircleRenderer.h" // TODO: will need to be .cuh and support interop, similar to RectRenderer
+#include "graphics/renderers/CircleRenderer.cuh"
 
 #define FOR_PARTICLES(N, D) \
   D(float, x_particle, 0)   \
@@ -23,14 +23,16 @@ namespace particles
 {
   DEFINE_STRUCTS(Particles, FOR_PARTICLES)
 
-  struct ParticleGrid {
+  struct ParticleGrid
+  {
     thrust::host_vector<int> grid_indices{};
     thrust::host_vector<int> particles_per_cell{};
     int width{0};
     int height{0};
     int max_particles_per_cell{4};
 
-    void reconfigure(int new_width, int new_height, int new_max_particles_per_cell) {
+    void reconfigure(int new_width, int new_height, int new_max_particles_per_cell)
+    {
       width = new_width;
       height = new_height;
       max_particles_per_cell = new_max_particles_per_cell;
@@ -40,26 +42,31 @@ namespace particles
     }
   };
 
-  struct ParticleGridDevice {
+  struct ParticleGridDevice
+  {
     thrust::device_vector<int> grid_indices{};
     thrust::device_vector<int> particles_per_cell{};
 
-    void copy_from_host(ParticleGrid &host) {
+    void copy_from_host(ParticleGrid &host)
+    {
       grid_indices = host.grid_indices;
       particles_per_cell = host.particles_per_cell;
     }
 
-    void copy_to_host(ParticleGrid &host) {
+    void copy_to_host(ParticleGrid &host)
+    {
       host.grid_indices = grid_indices;
       host.particles_per_cell = particles_per_cell;
     }
   };
 
-  class ParticleFluid {
+  class ParticleFluid
+  {
   public:
-    ParticleFluid(int width, int height);
+    ParticleFluid(int width, int height, bool use_graphics);
 
     void update(float dt);
+    void render(const glm::mat4 &transform);
 
   private:
     ParticlesSoA particles{};
@@ -67,6 +74,8 @@ namespace particles
 
     ParticleGrid grid{};
     ParticleGridDevice grid_device{};
+
+    std::unique_ptr<CircleRenderer> circle_renderer{};
   };
 
 } // namespace particles

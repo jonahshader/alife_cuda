@@ -10,7 +10,8 @@ constexpr uint32_t SOIL_SIZE = 8;
 
 SoilTest::SoilTest(Game &game) :
 game(game),
-soil(SOIL_WIDTH, SOIL_HEIGHT, SOIL_SIZE, true) {
+soil(SOIL_WIDTH, SOIL_HEIGHT, SOIL_SIZE, true),
+fluid(SOIL_WIDTH, SOIL_HEIGHT, true) {
     vp.x_cam = SOIL_WIDTH * SOIL_SIZE / 2;
     vp.y_cam = SOIL_HEIGHT * SOIL_SIZE / 2;
 }
@@ -37,9 +38,11 @@ void SoilTest::render(float dt) {
 
     if (running) {
         soil.update_cuda(dt);
+        fluid.update(dt);
     }
 
     soil.render(vp.get_transform());
+    fluid.render(vp.get_transform());
 
     // bold.add_text(0.0f, 0.0f, 100, "hi", glm::vec4(0.9f));
 

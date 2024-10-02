@@ -5,7 +5,7 @@
 #pragma once
 
 #include "graphics/renderers/FontRenderer.h"
-#include "graphics/renderers/CircleRenderer.h"
+#include "graphics/renderers/CircleRenderer.cuh"
 #include "graphics/renderers/RectRenderer.cuh"
 #include "graphics/renderers/LineRenderer.cuh"
 #include "SDL.h"

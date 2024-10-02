@@ -10,6 +10,7 @@ constexpr float TARGET_PRESSURE = 2.0f;
 constexpr float PARTICLE_MASS = 1.0f;
 constexpr float GRAVITY_ACCELERATION = 108.0;
 constexpr float WALL_ACCEL_PER_DIST = 6600.0f;
+constexpr float KERNEL_RADIUS = 2.0f;
 
 __host__ __device__ int particle_to_gid(float x, float y, int grid_width, float cell_size)
 {
@@ -28,7 +29,7 @@ __global__ void reset_particles_per_cell(int *particles_per_cell, int grid_size)
 }
 
 __global__ void populate_grid_indices(float *x_particle, float *y_particle, int *grid_indices, int max_particles,
-                                      int *particles_per_cell, int max_particles_per_cell, 
+                                      int *particles_per_cell, int max_particles_per_cell,
                                       int grid_width, int grid_height, float cell_size)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
@@ -234,10 +235,30 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
   }
 }
 
+__global__
+void render_kernel(unsigned int* circle_vbo, float* x, float* y, float radius, size_t count)
+{
+  // circle_vbo format is (float x, float y, float radius, unsigned int color)
+  // for now, hard code color to white
+  unsigned int color = 0xFFFFFFFF;
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < count)
+  {
+    float diameter = radius * 2;
+    circle_vbo[i * 4 + 0] = reinterpret_cast<unsigned int &>(x[i]);
+    circle_vbo[i * 4 + 1] = reinterpret_cast<unsigned int &>(y[i]);
+    circle_vbo[i * 4 + 2] = reinterpret_cast<unsigned int &>(diameter);
+    circle_vbo[i * 4 + 3] = color;
+  }
+}
+
 namespace particles
 {
-  ParticleFluid::ParticleFluid(int width, int height)
+  ParticleFluid::ParticleFluid(int width, int height, bool use_graphics)
   {
+    if (use_graphics) {
+      circle_renderer = std::make_unique<CircleRenderer>();
+    }
     // configure grid
     grid.reconfigure(width, height, 4);
     // temp: init some particles in the bottom half
@@ -269,7 +290,7 @@ namespace particles
     }
     // accel is defaulted to 0
     // density is defaulted to 0
-    // there are some vectors that are present in the C++ host version, but missing in the CUDA version. 
+    // there are some vectors that are present in the C++ host version, but missing in the CUDA version.
     // TODO: verify correctness of algo
 
     // send to device
@@ -296,19 +317,18 @@ namespace particles
 
     // compute density
     // density is computed using sharp kernel
-    const float kernel_radius = 2.0f;
-    const float sharp_kernel_vol_inv = 1.0f / sharp_kernel_volume(kernel_radius);
+    const float sharp_kernel_vol_inv = 1.0f / sharp_kernel_volume(KERNEL_RADIUS);
 
     block = dim3(256);
     grid_dim = dim3((particle_count + block.x - 1) / block.x);
     compute_density<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
                                          particles_device.density.data().get(), grid_device.grid_indices.data().get(),
                                          grid_device.particles_per_cell.data().get(), grid.max_particles_per_cell, particle_count,
-                                         grid.width, grid.height, cell_size, kernel_radius, sharp_kernel_vol_inv);
+                                         grid.width, grid.height, cell_size, KERNEL_RADIUS, sharp_kernel_vol_inv);
 
     // compute forces
     // compute_forces uses sharp kernel for pressure and smooth kernel for viscosity
-    const float smooth_kernel_vol_inv = 1.0f / smoothstep_kernel_volume(kernel_radius);
+    const float smooth_kernel_vol_inv = 1.0f / smoothstep_kernel_volume(KERNEL_RADIUS);
     block = dim3(256);
     grid_dim = dim3((particle_count + block.x - 1) / block.x);
     compute_forces<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
@@ -316,7 +336,7 @@ namespace particles
                                         particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
                                         grid_device.grid_indices.data().get(), grid_device.particles_per_cell.data().get(),
                                         grid.max_particles_per_cell, particles_device.density.data().get(), particle_count,
-                                        grid.width, grid.height, cell_size, kernel_radius, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
+                                        grid.width, grid.height, cell_size, KERNEL_RADIUS, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
 
     // update positions and velocities
     const float bounds_x = grid.width * cell_size;
@@ -327,6 +347,29 @@ namespace particles
                                                      particles_device.x_velocity.data().get(), particles_device.y_velocity.data().get(),
                                                      particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
                                                      particle_count, dt, bounds_x, bounds_y);
+  }
+
+  void ParticleFluid::render(const glm::mat4 &transform)
+  {
+    // early return if we don't have a renderer
+    if (!circle_renderer) return;
+
+    circle_renderer->set_transform(transform);
+
+    const auto circle_count = particles_device.x_particle.size();
+    circle_renderer->ensure_vbo_capacity(circle_count);
+    // get a cuda compatible pointer to the vbo
+    auto vbo_ptr = circle_renderer->cuda_map_buffer();
+    // render the particles
+    dim3 block(256);
+    dim3 grid_dim((circle_count + block.x - 1) / block.x);
+    render_kernel<<<grid_dim, block>>>(static_cast<unsigned int*>(vbo_ptr), particles_device.x_particle.data().get(),
+                                       particles_device.y_particle.data().get(), KERNEL_RADIUS / 4, circle_count);
+    // unmap the buffer
+    circle_renderer->cuda_unmap_buffer();
+    // render the circles
+    circle_renderer->render();
+    circle_renderer->cuda_unregister_buffer(); // TODO: is this necessary?
   }
 
 }
