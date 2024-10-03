@@ -1,21 +1,23 @@
 #include "ParticleFluid.cuh"
 
 #include <random>
+#include <iostream>
 
 #include "Kernels.cuh"
 
-constexpr float PRESSURE_MULTIPLIER = 1200000.0f;
+constexpr float PRESSURE_MULTIPLIER = 120000.0f;
 constexpr float VISCOSITY_MULTIPLIER = 8.0f;
 constexpr float TARGET_PRESSURE = 2.0f;
 constexpr float PARTICLE_MASS = 1.0f;
-constexpr float GRAVITY_ACCELERATION = 108.0;
+constexpr float GRAVITY_ACCELERATION = -108.0;
 constexpr float WALL_ACCEL_PER_DIST = 6600.0f;
 constexpr float KERNEL_RADIUS = 2.0f;
+constexpr float CELL_SIZE = KERNEL_RADIUS * 2;
 
-__host__ __device__ int particle_to_gid(float x, float y, int grid_width, float cell_size)
+__host__ __device__ int particle_to_gid(float x, float y, int grid_width)
 {
-  int grid_x = x / cell_size;
-  int grid_y = y / cell_size;
+  int grid_x = x / CELL_SIZE;
+  int grid_y = y / CELL_SIZE;
   return grid_y * grid_width + grid_x;
 }
 
@@ -30,7 +32,7 @@ __global__ void reset_particles_per_cell(int *particles_per_cell, int grid_size)
 
 __global__ void populate_grid_indices(float *x_particle, float *y_particle, int *grid_indices, int max_particles,
                                       int *particles_per_cell, int max_particles_per_cell,
-                                      int grid_width, int grid_height, float cell_size)
+                                      int grid_width, int grid_height)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -41,7 +43,7 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
   float x = x_particle[i];
   float y = y_particle[i];
 
-  int grid_index = particle_to_gid(x, y, grid_width, cell_size);
+  int grid_index = particle_to_gid(x, y, grid_width);
 
   int slot_index = atomicAdd(&particles_per_cell[grid_index], 1);
   if (slot_index < max_particles_per_cell)
@@ -51,8 +53,7 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
 }
 
 __global__ void compute_density(float *x_particle, float *y_particle, float *density, int *grid_indices, int *particles_per_cell,
-                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float cell_size,
-                                float kernel_radius, float kernel_vol_inv)
+                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float kernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -63,8 +64,8 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
   float x = x_particle[i];
   float y = y_particle[i];
 
-  int x_cell = x / cell_size;
-  int y_cell = y / cell_size;
+  int x_cell = x / CELL_SIZE;
+  int y_cell = y / CELL_SIZE;
 
   int x_cell_min = max(0, x_cell - 1);
   int y_cell_min = max(0, y_cell - 1);
@@ -90,10 +91,10 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
         float dy = y_other - y;
         float r = sqrtf(dx * dx + dy * dy);
 
-        if (r >= kernel_radius)
+        if (r >= KERNEL_RADIUS)
           continue;
 
-        float kernel_value = sharp_kernel(r, kernel_radius, kernel_vol_inv);
+        float kernel_value = sharp_kernel(r, KERNEL_RADIUS, kernel_vol_inv);
         density_i += PARTICLE_MASS * kernel_value;
       }
     }
@@ -105,8 +106,8 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 
 __global__ void compute_forces(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                float *x_acceleration, float *y_acceleration, int *grid_indices, int *particles_per_cell, int max_particles_per_cell,
-                               float *density, int max_particles, int grid_width, int grid_height, float cell_size,
-                               float kernel_radius, float smoothkernel_vol_inv, float sharpkernel_vol_inv)
+                               float *density, int max_particles, int grid_width, int grid_height, 
+                               float smoothkernel_vol_inv, float sharpkernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -117,8 +118,8 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   float x = x_particle[i];
   float y = y_particle[i];
 
-  int x_cell = x / cell_size;
-  int y_cell = y / cell_size;
+  int x_cell = x / CELL_SIZE;
+  int y_cell = y / CELL_SIZE;
 
   int x_cell_min = max(0, x_cell - 1);
   int y_cell_min = max(0, y_cell - 1);
@@ -153,7 +154,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float dy = y_other - y;
         float r = sqrtf(dx * dx + dy * dy);
 
-        if (r >= kernel_radius || r < 1e-6f)
+        if (r >= KERNEL_RADIUS || r < 1e-6f)
           continue;
 
         float dir_x = dx / r;
@@ -162,12 +163,12 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float density_j = density[other_i];
         float pressure_j = (density_j - TARGET_PRESSURE) * PRESSURE_MULTIPLIER;
         float shared_pressure = (pressure_i + pressure_j) * 0.5f;
-        float kernel_derivative = sharp_kernel_derivative(r, kernel_radius, sharpkernel_vol_inv);
+        float kernel_derivative = sharp_kernel_derivative(r, KERNEL_RADIUS, sharpkernel_vol_inv);
 
         pressure_grad_x += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_x / density_j;
         pressure_grad_y += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_y / density_j;
 
-        float influence = smoothstep_kernel(r, kernel_radius, smoothkernel_vol_inv);
+        float influence = smoothstep_kernel(r, KERNEL_RADIUS, smoothkernel_vol_inv);
         float vx_i = x_velocity[i];
         float vy_i = y_velocity[i];
         float vx_j = x_velocity[other_i];
@@ -188,9 +189,9 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   {
     acc_y += WALL_ACCEL_PER_DIST * -y;
   }
-  else if (y > (grid_height * cell_size))
+  else if (y > (grid_height * CELL_SIZE))
   {
-    acc_y += WALL_ACCEL_PER_DIST * ((grid_height * cell_size) - y);
+    acc_y += WALL_ACCEL_PER_DIST * ((grid_height * CELL_SIZE) - y);
   }
 
   // Write accelerations
@@ -235,8 +236,7 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
   }
 }
 
-__global__
-void render_kernel(unsigned int* circle_vbo, float* x, float* y, float radius, size_t count)
+__global__ void render_kernel(unsigned int *circle_vbo, float *x, float *y, float radius, size_t count)
 {
   // circle_vbo format is (float x, float y, float radius, unsigned int color)
   // for now, hard code color to white
@@ -244,10 +244,9 @@ void render_kernel(unsigned int* circle_vbo, float* x, float* y, float radius, s
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < count)
   {
-    float diameter = radius * 2;
     circle_vbo[i * 4 + 0] = reinterpret_cast<unsigned int &>(x[i]);
     circle_vbo[i * 4 + 1] = reinterpret_cast<unsigned int &>(y[i]);
-    circle_vbo[i * 4 + 2] = reinterpret_cast<unsigned int &>(diameter);
+    circle_vbo[i * 4 + 2] = reinterpret_cast<unsigned int &>(radius);
     circle_vbo[i * 4 + 3] = color;
   }
 }
@@ -256,11 +255,12 @@ namespace particles
 {
   ParticleFluid::ParticleFluid(int width, int height, bool use_graphics)
   {
-    if (use_graphics) {
+    if (use_graphics)
+    {
       circle_renderer = std::make_unique<CircleRenderer>();
     }
     // configure grid
-    grid.reconfigure(width, height, 4);
+    grid.reconfigure(width, height, 32);
     // temp: init some particles in the bottom half
     std::default_random_engine rand;
     std::uniform_real_distribution<float> dist_x(0.0f, width * 0.5f);
@@ -308,12 +308,11 @@ namespace particles
 
     // populate grid indices
     const int particle_count = particles_device.x_particle.size();
-    const float cell_size = 1.0f;
     block = dim3(256);
     grid_dim = dim3((particle_count + block.x - 1) / block.x);
     populate_grid_indices<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
                                                grid_device.grid_indices.data().get(), particle_count, grid_device.particles_per_cell.data().get(),
-                                               grid.max_particles_per_cell, grid.width, grid.height, cell_size);
+                                               grid.max_particles_per_cell, grid.width, grid.height);
 
     // compute density
     // density is computed using sharp kernel
@@ -324,7 +323,7 @@ namespace particles
     compute_density<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
                                          particles_device.density.data().get(), grid_device.grid_indices.data().get(),
                                          grid_device.particles_per_cell.data().get(), grid.max_particles_per_cell, particle_count,
-                                         grid.width, grid.height, cell_size, KERNEL_RADIUS, sharp_kernel_vol_inv);
+                                         grid.width, grid.height, sharp_kernel_vol_inv);
 
     // compute forces
     // compute_forces uses sharp kernel for pressure and smooth kernel for viscosity
@@ -336,11 +335,11 @@ namespace particles
                                         particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
                                         grid_device.grid_indices.data().get(), grid_device.particles_per_cell.data().get(),
                                         grid.max_particles_per_cell, particles_device.density.data().get(), particle_count,
-                                        grid.width, grid.height, cell_size, KERNEL_RADIUS, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
+                                        grid.width, grid.height, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
 
     // update positions and velocities
-    const float bounds_x = grid.width * cell_size;
-    const float bounds_y = grid.height * cell_size;
+    const float bounds_x = grid.width * KERNEL_RADIUS;
+    const float bounds_y = grid.height * KERNEL_RADIUS;
     block = dim3(256);
     grid_dim = dim3((particle_count + block.x - 1) / block.x);
     update_positions_velocities<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
@@ -352,24 +351,41 @@ namespace particles
   void ParticleFluid::render(const glm::mat4 &transform)
   {
     // early return if we don't have a renderer
-    if (!circle_renderer) return;
+    if (!circle_renderer)
+      return;
 
     circle_renderer->set_transform(transform);
 
     const auto circle_count = particles_device.x_particle.size();
     circle_renderer->ensure_vbo_capacity(circle_count);
     // get a cuda compatible pointer to the vbo
+    circle_renderer->cuda_register_buffer();
     auto vbo_ptr = circle_renderer->cuda_map_buffer();
     // render the particles
     dim3 block(256);
     dim3 grid_dim((circle_count + block.x - 1) / block.x);
-    render_kernel<<<grid_dim, block>>>(static_cast<unsigned int*>(vbo_ptr), particles_device.x_particle.data().get(),
-                                       particles_device.y_particle.data().get(), KERNEL_RADIUS / 4, circle_count);
+
+    // print out sizes
+    std::cout << "particles_device.x_particle.size(): " << particles_device.x_particle.size() << std::endl;
+    std::cout << "particles_device.y_particle.size(): " << particles_device.y_particle.size() << std::endl;
+    std::cout << "circle_renderer->get_circle_count(): " << circle_renderer->get_circle_count() << std::endl;
+
+    // print out first particle position
+    particles_device.copy_to_host(particles);
+    std::cout << "particles.x_particle[0]: " << particles.x_particle[0] << std::endl;
+    std::cout << "particles.y_particle[0]: " << particles.y_particle[0] << std::endl;
+
+    std::cout << "before render kernel" << std::endl;
+    render_kernel<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), particles_device.x_particle.data().get(),
+                                       particles_device.y_particle.data().get(), KERNEL_RADIUS, circle_count);
     // unmap the buffer
     circle_renderer->cuda_unmap_buffer();
     // render the circles
-    circle_renderer->render();
+    std::cout << "before render" << std::endl;
+    circle_renderer->render(circle_count);
+    std::cout << "before cuda_unregister_buffer" << std::endl;
     circle_renderer->cuda_unregister_buffer(); // TODO: is this necessary?
+    std::cout << "after cuda_unregister_buffer" << std::endl;
   }
 
 }

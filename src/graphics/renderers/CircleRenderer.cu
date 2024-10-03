@@ -98,6 +98,14 @@ void CircleRenderer::render()
     glBindVertexArray(0);
 }
 
+void CircleRenderer::render(size_t circle_count)
+{
+    shader.use();
+    glBindVertexArray(vao);
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6, circle_count);
+    glBindVertexArray(0);
+}
+
 CircleRenderer::~CircleRenderer()
 {
     glDeleteVertexArrays(1, &vao);
@@ -164,7 +172,7 @@ void CircleRenderer::ensure_vbo_capacity(size_t circles)
             }
         }
 
-        std::cout << "LineRenderer buffer size changed to " << buffer_size << std::endl;
+        std::cout << "CircleRenderer buffer size changed to " << buffer_size << std::endl;
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
         glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
