@@ -5,14 +5,17 @@
 
 #include "Kernels.cuh"
 
-constexpr float PRESSURE_MULTIPLIER = 120000.0f;
-constexpr float VISCOSITY_MULTIPLIER = 8.0f;
-constexpr float TARGET_PRESSURE = 2.0f;
+constexpr float PRESSURE_MULTIPLIER = 4000.0f;
+constexpr float VISCOSITY_MULTIPLIER = 2.0f;
+constexpr float TARGET_PRESSURE = 0.6f;
 constexpr float PARTICLE_MASS = 1.0f;
-constexpr float GRAVITY_ACCELERATION = -108.0;
+constexpr float GRAVITY_ACCELERATION = -30.0;
 constexpr float WALL_ACCEL_PER_DIST = 6600.0f;
-constexpr float KERNEL_RADIUS = 2.0f;
-constexpr float CELL_SIZE = KERNEL_RADIUS * 2;
+constexpr float KERNEL_RADIUS = 16.0f;
+constexpr float CELL_SIZE = KERNEL_RADIUS * 1;
+constexpr float DRAG = 0.000f;
+
+constexpr int PARTICLES_PER_CELL = 64;
 
 __host__ __device__ int particle_to_gid(float x, float y, int grid_width)
 {
@@ -89,6 +92,7 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 
         float dx = x_other - x;
         float dy = y_other - y;
+        // TODO: wrap around for periodic boundary conditions (horizontal only)
         float r = sqrtf(dx * dx + dy * dy);
 
         if (r >= KERNEL_RADIUS)
@@ -106,7 +110,7 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 
 __global__ void compute_forces(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                float *x_acceleration, float *y_acceleration, int *grid_indices, int *particles_per_cell, int max_particles_per_cell,
-                               float *density, int max_particles, int grid_width, int grid_height, 
+                               float *density, int max_particles, int grid_width, int grid_height,
                                float smoothkernel_vol_inv, float sharpkernel_vol_inv)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
@@ -184,16 +188,6 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   float acc_x = -pressure_grad_x / density_i + VISCOSITY_MULTIPLIER * viscosity_force_x / density_i;
   float acc_y = -pressure_grad_y / density_i + VISCOSITY_MULTIPLIER * viscosity_force_y / density_i + GRAVITY_ACCELERATION;
 
-  // Wall accelerations
-  if (y < 0.0f)
-  {
-    acc_y += WALL_ACCEL_PER_DIST * -y;
-  }
-  else if (y > (grid_height * CELL_SIZE))
-  {
-    acc_y += WALL_ACCEL_PER_DIST * ((grid_height * CELL_SIZE) - y);
-  }
-
   // Write accelerations
   x_acceleration[i] = acc_x;
   y_acceleration[i] = acc_y;
@@ -209,30 +203,37 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
     return;
   }
 
-  x_velocity[i] += dt * x_acceleration[i];
-  y_velocity[i] += dt * y_acceleration[i];
+  // calculate drag
+  float x_drag = -x_velocity[i] * abs(x_velocity[i]) * DRAG;
+  float y_drag = -y_velocity[i] * abs(y_velocity[i]) * DRAG;
+
+  x_velocity[i] += dt * (x_acceleration[i] + x_drag);
+  y_velocity[i] += dt * (y_acceleration[i] + y_drag);
 
   x_particle[i] += dt * x_velocity[i];
   y_particle[i] += dt * y_velocity[i];
 
-  // Wrap positions (assuming periodic boundary conditions)
+  // Bounce off walls
   if (x_particle[i] < 0.0f)
   {
-    x_particle[i] += bounds_x;
+    x_velocity[i] = abs(x_velocity[i]);
+    x_particle[i] = 0.0f;
   }
   else if (x_particle[i] >= bounds_x)
   {
-    x_particle[i] -= bounds_x;
+    x_velocity[i] = -abs(x_velocity[i]);
+    x_particle[i] = bounds_x - 1e-3f; // TODO: i think there is a way to get the exact epsilon
   }
 
-  // TODO: use walls instead. current walls are elastic which won't work as they will exit the grid.
   if (y_particle[i] < 0.0f)
   {
-    y_particle[i] += bounds_y;
+    y_velocity[i] = abs(y_velocity[i]);
+    y_particle[i] = 0.0f;
   }
   else if (y_particle[i] >= bounds_y)
   {
-    y_particle[i] -= bounds_y;
+    y_velocity[i] = -abs(y_velocity[i]);
+    y_particle[i] = bounds_y - 1e-4f;
   }
 }
 
@@ -260,17 +261,17 @@ namespace particles
       circle_renderer = std::make_unique<CircleRenderer>();
     }
     // configure grid
-    grid.reconfigure(width, height, 32);
+    grid.reconfigure(width/2, height/2, PARTICLES_PER_CELL);
     // temp: init some particles in the bottom half
     std::default_random_engine rand;
-    std::uniform_real_distribution<float> dist_x(0.0f, width * 0.5f);
-    std::uniform_real_distribution<float> dist_y(0.0f, height * 0.5f);
+    std::uniform_real_distribution<float> dist_x(0.0f, width * 8 * 0.75f); // TODO: 8 is the soil cell size
+    std::uniform_real_distribution<float> dist_y(0.0f, height * 8 * 0.75f);
 
     // velocity init with gaussian
     std::normal_distribution<float> dist_vel(0.0f, 1.0f);
 
     // temp: 1000 particles
-    constexpr int NUM_PARTICLES = 1000;
+    constexpr int NUM_PARTICLES = 40000;
     particles.resize_all(NUM_PARTICLES);
     for (int i = 0; i < NUM_PARTICLES; ++i)
     {
@@ -338,8 +339,8 @@ namespace particles
                                         grid.width, grid.height, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
 
     // update positions and velocities
-    const float bounds_x = grid.width * KERNEL_RADIUS;
-    const float bounds_y = grid.height * KERNEL_RADIUS;
+    const float bounds_x = grid.width * CELL_SIZE;
+    const float bounds_y = grid.height * CELL_SIZE;
     block = dim3(256);
     grid_dim = dim3((particle_count + block.x - 1) / block.x);
     update_positions_velocities<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
@@ -365,27 +366,13 @@ namespace particles
     dim3 block(256);
     dim3 grid_dim((circle_count + block.x - 1) / block.x);
 
-    // print out sizes
-    std::cout << "particles_device.x_particle.size(): " << particles_device.x_particle.size() << std::endl;
-    std::cout << "particles_device.y_particle.size(): " << particles_device.y_particle.size() << std::endl;
-    std::cout << "circle_renderer->get_circle_count(): " << circle_renderer->get_circle_count() << std::endl;
-
-    // print out first particle position
-    particles_device.copy_to_host(particles);
-    std::cout << "particles.x_particle[0]: " << particles.x_particle[0] << std::endl;
-    std::cout << "particles.y_particle[0]: " << particles.y_particle[0] << std::endl;
-
-    std::cout << "before render kernel" << std::endl;
     render_kernel<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), particles_device.x_particle.data().get(),
-                                       particles_device.y_particle.data().get(), KERNEL_RADIUS, circle_count);
+                                       particles_device.y_particle.data().get(), KERNEL_RADIUS * 0.5f, circle_count);
     // unmap the buffer
     circle_renderer->cuda_unmap_buffer();
     // render the circles
-    std::cout << "before render" << std::endl;
     circle_renderer->render(circle_count);
-    std::cout << "before cuda_unregister_buffer" << std::endl;
     circle_renderer->cuda_unregister_buffer(); // TODO: is this necessary?
-    std::cout << "after cuda_unregister_buffer" << std::endl;
   }
 
 }

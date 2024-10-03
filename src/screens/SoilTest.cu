@@ -40,7 +40,7 @@ void SoilTest::render(float dt)
     if (running)
     {
         soil.update_cuda(dt);
-        fluid.update(1/3000.0f);
+        fluid.update(1 / 1200.0f);
     }
 
     soil.render(vp.get_transform());
