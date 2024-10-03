@@ -3,19 +3,15 @@
 #include <random>
 #include <iostream>
 
+#include "imgui.h"
+
 #include "Kernels.cuh"
 
-constexpr float PRESSURE_MULTIPLIER = 4000.0f;
-constexpr float VISCOSITY_MULTIPLIER = 2.0f;
-constexpr float TARGET_PRESSURE = 0.6f;
-constexpr float PARTICLE_MASS = 1.0f;
-constexpr float GRAVITY_ACCELERATION = -30.0;
-constexpr float WALL_ACCEL_PER_DIST = 6600.0f;
 constexpr float KERNEL_RADIUS = 16.0f;
 constexpr float CELL_SIZE = KERNEL_RADIUS * 1;
-constexpr float DRAG = 0.000f;
-
 constexpr int PARTICLES_PER_CELL = 64;
+
+
 
 __host__ __device__ int particle_to_gid(float x, float y, int grid_width)
 {
@@ -56,7 +52,8 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
 }
 
 __global__ void compute_density(float *x_particle, float *y_particle, float *density, int *grid_indices, int *particles_per_cell,
-                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float kernel_vol_inv)
+                                int max_particles_per_cell, int max_particles, int grid_width, int grid_height, float kernel_vol_inv,
+                                particles::TunableParams params)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -99,7 +96,7 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
           continue;
 
         float kernel_value = sharp_kernel(r, KERNEL_RADIUS, kernel_vol_inv);
-        density_i += PARTICLE_MASS * kernel_value;
+        density_i += params.particle_mass * kernel_value;
       }
     }
   }
@@ -111,7 +108,7 @@ __global__ void compute_density(float *x_particle, float *y_particle, float *den
 __global__ void compute_forces(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                float *x_acceleration, float *y_acceleration, int *grid_indices, int *particles_per_cell, int max_particles_per_cell,
                                float *density, int max_particles, int grid_width, int grid_height,
-                               float smoothkernel_vol_inv, float sharpkernel_vol_inv)
+                               float smoothkernel_vol_inv, float sharpkernel_vol_inv, particles::TunableParams params)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -131,7 +128,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   int y_cell_max = min(grid_height - 1, y_cell + 1);
 
   float density_i = density[i];
-  float pressure_i = (density_i - TARGET_PRESSURE) * PRESSURE_MULTIPLIER;
+  float pressure_i = (density_i - params.target_pressure) * params.pressure_multiplier;
 
   // Compute pressure gradient and viscosity forces
   float pressure_grad_x = 0.0f;
@@ -165,12 +162,12 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float dir_y = dy / r;
 
         float density_j = density[other_i];
-        float pressure_j = (density_j - TARGET_PRESSURE) * PRESSURE_MULTIPLIER;
+        float pressure_j = (density_j - params.target_pressure) * params.pressure_multiplier;
         float shared_pressure = (pressure_i + pressure_j) * 0.5f;
         float kernel_derivative = sharp_kernel_derivative(r, KERNEL_RADIUS, sharpkernel_vol_inv);
 
-        pressure_grad_x += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_x / density_j;
-        pressure_grad_y += PARTICLE_MASS * shared_pressure * kernel_derivative * dir_y / density_j;
+        pressure_grad_x += params.particle_mass * shared_pressure * kernel_derivative * dir_x / density_j;
+        pressure_grad_y += params.particle_mass * shared_pressure * kernel_derivative * dir_y / density_j;
 
         float influence = smoothstep_kernel(r, KERNEL_RADIUS, smoothkernel_vol_inv);
         float vx_i = x_velocity[i];
@@ -185,8 +182,8 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   }
 
   // Compute total acceleration
-  float acc_x = -pressure_grad_x / density_i + VISCOSITY_MULTIPLIER * viscosity_force_x / density_i;
-  float acc_y = -pressure_grad_y / density_i + VISCOSITY_MULTIPLIER * viscosity_force_y / density_i + GRAVITY_ACCELERATION;
+  float acc_x = -pressure_grad_x / density_i + params.viscosity_multiplier * viscosity_force_x / density_i;
+  float acc_y = -pressure_grad_y / density_i + params.viscosity_multiplier * viscosity_force_y / density_i + params.gravity_acceleration;
 
   // Write accelerations
   x_acceleration[i] = acc_x;
@@ -195,7 +192,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
 
 __global__ void update_positions_velocities(float *x_particle, float *y_particle, float *x_velocity, float *y_velocity,
                                             float *x_acceleration, float *y_acceleration, int max_particles,
-                                            float dt, float bounds_x, float bounds_y)
+                                            float dt, float bounds_x, float bounds_y, particles::TunableParams params)
 {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
@@ -204,8 +201,8 @@ __global__ void update_positions_velocities(float *x_particle, float *y_particle
   }
 
   // calculate drag
-  float x_drag = -x_velocity[i] * abs(x_velocity[i]) * DRAG;
-  float y_drag = -y_velocity[i] * abs(y_velocity[i]) * DRAG;
+  float x_drag = -x_velocity[i] * abs(x_velocity[i]) * params.drag;
+  float y_drag = -y_velocity[i] * abs(y_velocity[i]) * params.drag;
 
   x_velocity[i] += dt * (x_acceleration[i] + x_drag);
   y_velocity[i] += dt * (y_acceleration[i] + y_drag);
@@ -261,7 +258,7 @@ namespace particles
       circle_renderer = std::make_unique<CircleRenderer>();
     }
     // configure grid
-    grid.reconfigure(width/2, height/2, PARTICLES_PER_CELL);
+    grid.reconfigure(width / 2, height / 2, PARTICLES_PER_CELL);
     // temp: init some particles in the bottom half
     std::default_random_engine rand;
     std::uniform_real_distribution<float> dist_x(0.0f, width * 8 * 0.75f); // TODO: 8 is the soil cell size
@@ -324,7 +321,7 @@ namespace particles
     compute_density<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
                                          particles_device.density.data().get(), grid_device.grid_indices.data().get(),
                                          grid_device.particles_per_cell.data().get(), grid.max_particles_per_cell, particle_count,
-                                         grid.width, grid.height, sharp_kernel_vol_inv);
+                                         grid.width, grid.height, sharp_kernel_vol_inv, params);
 
     // compute forces
     // compute_forces uses sharp kernel for pressure and smooth kernel for viscosity
@@ -336,7 +333,7 @@ namespace particles
                                         particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
                                         grid_device.grid_indices.data().get(), grid_device.particles_per_cell.data().get(),
                                         grid.max_particles_per_cell, particles_device.density.data().get(), particle_count,
-                                        grid.width, grid.height, smooth_kernel_vol_inv, sharp_kernel_vol_inv);
+                                        grid.width, grid.height, smooth_kernel_vol_inv, sharp_kernel_vol_inv, params);
 
     // update positions and velocities
     const float bounds_x = grid.width * CELL_SIZE;
@@ -346,7 +343,7 @@ namespace particles
     update_positions_velocities<<<grid_dim, block>>>(particles_device.x_particle.data().get(), particles_device.y_particle.data().get(),
                                                      particles_device.x_velocity.data().get(), particles_device.y_velocity.data().get(),
                                                      particles_device.x_accel.data().get(), particles_device.y_accel.data().get(),
-                                                     particle_count, dt, bounds_x, bounds_y);
+                                                     particle_count, dt, bounds_x, bounds_y, params);
   }
 
   void ParticleFluid::render(const glm::mat4 &transform)
@@ -354,6 +351,24 @@ namespace particles
     // early return if we don't have a renderer
     if (!circle_renderer)
       return;
+
+    // float pressure_multiplier = 4000.0f;
+    // float viscosity_multiplier = 2.0f;
+    // float target_pressure = 0.6f;
+    // float particle_mass = 1.0f;
+    // float gravity_acceleration = -30.0f;
+    // float drag = 0.000f;
+
+    // connect tunable params to imgui
+    ImGui::Begin("Particle Fluid");
+    ImGui::SliderFloat("Pressure Multiplier", &params.pressure_multiplier, 0.0f, 10000.0f);
+    ImGui::SliderFloat("Viscosity Multiplier", &params.viscosity_multiplier, 0.0f, 32.0f);
+    ImGui::SliderFloat("Target Pressure", &params.target_pressure, 0.0f, 4.0f);
+    ImGui::SliderFloat("Particle Mass", &params.particle_mass, 0.0f, 4.0f);
+    ImGui::SliderFloat("Gravity Acceleration", &params.gravity_acceleration, -200.0f, 0.0f);
+    ImGui::SliderFloat("Drag", &params.drag, 0.0f, 0.01f);
+    ImGui::End();
+
 
     circle_renderer->set_transform(transform);
 

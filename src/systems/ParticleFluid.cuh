@@ -23,6 +23,16 @@ namespace particles
 {
   DEFINE_STRUCTS(Particles, FOR_PARTICLES)
 
+  struct TunableParams
+  {
+    float pressure_multiplier = 4000.0f;
+    float viscosity_multiplier = 2.0f;
+    float target_pressure = 0.6f;
+    float particle_mass = 1.0f;
+    float gravity_acceleration = -30.0f;
+    float drag = 0.000f;
+  };
+
   struct ParticleGrid
   {
     thrust::host_vector<int> grid_indices{};
@@ -69,6 +79,7 @@ namespace particles
     void render(const glm::mat4 &transform);
 
   private:
+    TunableParams params{};
     ParticlesSoA particles{};
     ParticlesSoADevice particles_device{};
 

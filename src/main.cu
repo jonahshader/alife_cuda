@@ -140,11 +140,10 @@ int main(int argc, char* argv[]) {
     while (game.isRunning()) {
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL2_ProcessEvent(&event);
-            // check if imgui consumed the event
-            if (ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard) {
-                continue;
+            // skip game input handling if ImGui wants to capture the event
+            if (!ImGui::GetIO().WantCaptureKeyboard && !ImGui::GetIO().WantCaptureMouse) {
+                game.handleInput(event);
             }
-            game.handleInput(event);
             if (event.type == SDL_QUIT) {
                 game.stopGame();
             } else if (event.type == SDL_WINDOWEVENT) {
@@ -161,7 +160,6 @@ int main(int argc, char* argv[]) {
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
-        ImGui::ShowDemoWindow(); // Show demo window! :)
 
         game.render(1/165.0f);
 

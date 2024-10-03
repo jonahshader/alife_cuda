@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "glad/glad.h"
+#include "imgui.h"
 
 constexpr uint32_t SOIL_WIDTH = 1 << 10;
 constexpr uint32_t SOIL_HEIGHT = 1 << 8;
@@ -37,10 +38,15 @@ void SoilTest::render(float dt)
 
     // TODO: time things
 
+    static float fluid_dt = 1/ 165.0f;
+    ImGui::Begin("Particle Fluid");
+    ImGui::SliderFloat("Fluid Frequency", &fluid_dt, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+    ImGui::Checkbox("Running", &running);
+    ImGui::End();
     if (running)
     {
         soil.update_cuda(dt);
-        fluid.update(1 / 1200.0f);
+        fluid.update(fluid_dt);
     }
 
     soil.render(vp.get_transform());
@@ -93,24 +99,24 @@ void SoilTest::handleInput(SDL_Event event)
     case SDL_KEYDOWN:
         switch (event.key.keysym.sym)
         {
-        case SDLK_u:
-            running = true;
-            break;
-        case SDLK_i:
-            soil.update_cuda(1 / 165.0f); // TODO: dt should be set in World, not passed around
-            break;
+        // case SDLK_u:
+        //     running = true;
+        //     break;
+        // case SDLK_i:
+        //     soil.update_cuda(1 / 165.0f); // TODO: dt should be set in World, not passed around
+        //     break;
         case SDLK_r:
             soil.reset();
         default:
             break;
         }
         break;
-    case SDL_KEYUP:
-        if (event.key.keysym.sym == SDLK_u)
-        {
-            running = false;
-        }
-        break;
+    // case SDL_KEYUP:
+    //     if (event.key.keysym.sym == SDLK_u)
+    //     {
+    //         running = false;
+    //     }
+    //     break;
     default:
         break;
     }
