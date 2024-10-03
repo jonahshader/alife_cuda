@@ -72,6 +72,31 @@ if(NOT fastnoiselite_POPULATED)
   FetchContent_Populate(fastnoiselite)
 endif()
 
+# Dear ImGui
+FetchContent_Declare(
+  imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG v1.91.2
+)
+FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+  FetchContent_Populate(imgui)
+  add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+  )
+  target_include_directories(imgui PUBLIC 
+    ${imgui_SOURCE_DIR} 
+    ${imgui_SOURCE_DIR}/backends
+  )
+  target_link_libraries(imgui PRIVATE SDL2::SDL2)
+endif()
+
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -133,9 +158,6 @@ set_target_properties(alife_cuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
 )
 
-# Add src directory to include path
-# target_include_directories(alife_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
 # Link libraries
 target_link_libraries(alife_cuda PRIVATE
         SDL2::SDL2
@@ -143,6 +165,7 @@ target_link_libraries(alife_cuda PRIVATE
         glm::glm
         artery_font
         OpenMP::OpenMP_CXX
+        imgui
 )
 
 # Include headers
@@ -151,6 +174,8 @@ target_include_directories(alife_cuda PRIVATE
         ${glad_SOURCE_DIR}/include
         ${lodepng_SOURCE_DIR}
         ${fastnoiselite_SOURCE_DIR}/Cpp
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
 )
 
 # Platform-specific configurations

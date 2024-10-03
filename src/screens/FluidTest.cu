@@ -58,8 +58,6 @@ void FluidTest::render(float dt) {
 
     bold.render();
     rect.render();
-
-    SDL_GL_SwapWindow(game.getResources().window);
 }
 
 void FluidTest::resize(int width, int height) {

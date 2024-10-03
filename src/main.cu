@@ -19,6 +19,9 @@
 
 #include <SDL.h>
 #include "glad/glad.h"
+#include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_opengl3.h"
 
 static int viewport_width = 1920;
 static int viewport_height = 1080;
@@ -89,6 +92,17 @@ void init_screen(const char * caption) {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 }
 
+void init_imgui() {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+    // setup platform/renderer backends
+    ImGui_ImplSDL2_InitForOpenGL(window, main_context);
+    ImGui_ImplOpenGL3_Init("#version 430"); // TODO: try without version
+}
+
 int main(int argc, char* argv[]) {
     cudaDeviceProp cuda_prop;
     cudaGetDeviceProperties(&cuda_prop, 0);
@@ -105,7 +119,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Shared memory per SM: " << cuda_prop.sharedMemPerMultiprocessor << " bytes" << std::endl;
     std::cout << "Warp size: " << cuda_prop.warpSize << std::endl;
     std::cout << "Number of floating point units: " << cuda_prop.multiProcessorCount * cuda_prop.maxThreadsPerMultiProcessor << std::endl;
+
     init_screen("OpenGL 4.3");
+    init_imgui();
 
     //    jl_init();
     //
@@ -123,6 +139,11 @@ int main(int argc, char* argv[]) {
     SDL_Event event;
     while (game.isRunning()) {
         while (SDL_PollEvent(&event)) {
+            ImGui_ImplSDL2_ProcessEvent(&event);
+            // check if imgui consumed the event
+            if (ImGui::GetIO().WantCaptureMouse || ImGui::GetIO().WantCaptureKeyboard) {
+                continue;
+            }
             game.handleInput(event);
             if (event.type == SDL_QUIT) {
                 game.stopGame();
@@ -136,12 +157,23 @@ int main(int argc, char* argv[]) {
             }
         }
 
+        // Start the Dear ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::NewFrame();
+        ImGui::ShowDemoWindow(); // Show demo window! :)
+
         game.render(1/165.0f);
 
-        //        SDL_GL_SwapWindow(window);
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        SDL_GL_SwapWindow(game.getResources().window);
         time += 1/165.0f;
     }
 
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL2_Shutdown();
+    ImGui::DestroyContext();
 
     SDL_GL_DeleteContext(main_context);
     SDL_DestroyWindow(window);

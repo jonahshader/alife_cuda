@@ -57,8 +57,6 @@ void SoilTest::render(float dt)
     line.render();
 
     // TODO: render timings
-
-    SDL_GL_SwapWindow(game.getResources().window);
 }
 
 void SoilTest::resize(int width, int height)
