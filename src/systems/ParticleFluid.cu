@@ -45,10 +45,14 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
   int grid_index = particle_to_gid(x, y, grid_width);
 
   int slot_index = atomicAdd(&particles_per_cell[grid_index], 1);
-  if (slot_index < max_particles_per_cell)
-  {
+  if (slot_index < max_particles_per_cell) {
     grid_indices[grid_index * max_particles_per_cell + slot_index] = i;
+  } else {
+    // atomicSub(&particles_per_cell[grid_index], 1);
+    // TODO: mark this particle as not in a cell and move it somewhere else
+    // TODO: implement near field repulsion to see if it fixes this issue
   }
+
 }
 
 __global__ void compute_density(float *x_particle, float *y_particle, float *density, int *grid_indices, int *particles_per_cell,
@@ -382,7 +386,7 @@ namespace particles
     dim3 grid_dim((circle_count + block.x - 1) / block.x);
 
     render_kernel<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), particles_device.x_particle.data().get(),
-                                       particles_device.y_particle.data().get(), KERNEL_RADIUS * 0.5f, circle_count);
+                                       particles_device.y_particle.data().get(), KERNEL_RADIUS, circle_count);
     // unmap the buffer
     circle_renderer->cuda_unmap_buffer();
     // render the circles

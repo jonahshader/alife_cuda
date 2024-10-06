@@ -26,13 +26,16 @@ void SoilTest::render(float dt)
     glClearColor(0.08f, 0.6f, 0.8f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     auto &bold = game.getResources().extra_bold_font;
+    auto &regular = game.getResources().main_font;
     auto &rect = game.getResources().rect_renderer;
     auto &line = game.getResources().line_renderer;
     bold.set_transform(vp.get_transform());
+    regular.set_transform(hud_vp.get_transform());
     rect.set_transform(vp.get_transform());
     line.set_transform(vp.get_transform());
 
     bold.begin();
+    regular.begin();
     rect.begin();
     line.begin();
 
@@ -40,8 +43,8 @@ void SoilTest::render(float dt)
 
     static float fluid_dt = 1/ 165.0f;
     ImGui::Begin("Particle Fluid");
-    ImGui::SliderFloat("Fluid Frequency", &fluid_dt, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
     ImGui::Checkbox("Running", &running);
+    ImGui::SliderFloat("Fluid Frequency", &fluid_dt, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
     ImGui::End();
     if (running)
     {
@@ -54,15 +57,26 @@ void SoilTest::render(float dt)
 
     // bold.add_text(0.0f, 0.0f, 100, "hi", glm::vec4(0.9f));
 
+    // TODO: render timings
+    auto now = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - last_time).count();
+    auto left = hud_vp.get_left();
+    auto bottom = hud_vp.get_bottom();
+    regular.add_text(left, bottom + 30.0f, 100, "dt: " + std::to_string(duration) + "us", glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), FontRenderer::HAlign::RIGHT);
+    regular.add_text(left, bottom + 00.0f, 150, "fps: " + std::to_string(1.0f / (duration / 1e6f)), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f), FontRenderer::HAlign::RIGHT);
+    last_time = now;
+
     bold.end();
+    regular.end();
     rect.end();
     line.end();
 
     bold.render();
+    regular.render();
     rect.render();
     line.render();
 
-    // TODO: render timings
+
 }
 
 void SoilTest::resize(int width, int height)

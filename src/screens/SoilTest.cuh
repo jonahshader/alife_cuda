@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+
 #include "systems/Screen.h"
 #include "systems/Game.cuh"
 #include "systems/Soil.cuh"
@@ -25,5 +27,7 @@ private:
     SoilSystem soil;
     particles::ParticleFluid fluid;
     bool running{false};
+
+    std::chrono::high_resolution_clock::time_point last_time;
 
 };

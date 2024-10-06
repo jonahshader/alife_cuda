@@ -595,13 +595,13 @@ void SoilSystem::update_cuda(float dt) {
     auto min = *min_iter;
     auto max = *max_iter;
 
-    // get sum
-    auto sum = thrust::reduce(read.water_density.begin(), read.water_density.end(), 0.0f);
+    // // get sum
+    // auto sum = thrust::reduce(read.water_density.begin(), read.water_density.end(), 0.0f);
 
-    std::cout << "water_density statistics:\n";
-    std::cout << "min: " << min << "\n";
-    std::cout << "max: " << max << std::endl;
-    std::cout << "sum: " << sum << std::endl;
+    // std::cout << "water_density statistics:\n";
+    // std::cout << "min: " << min << "\n";
+    // std::cout << "max: " << max << std::endl;
+    // std::cout << "sum: " << sum << std::endl;
 
     mix_give_take_3_cuda(dt);
 }
