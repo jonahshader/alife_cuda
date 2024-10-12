@@ -11,9 +11,7 @@ constexpr float KERNEL_RADIUS = 16.0f;
 constexpr float CELL_SIZE = KERNEL_RADIUS * 1;
 constexpr int PARTICLES_PER_CELL = 64;
 
-
-
-__host__ __device__ int particle_to_gid(float x, float y, int grid_width)
+__host__ __device__ int particle_to_cid(float x, float y, int grid_width)
 {
   int grid_x = x / CELL_SIZE;
   int grid_y = y / CELL_SIZE;
@@ -42,17 +40,19 @@ __global__ void populate_grid_indices(float *x_particle, float *y_particle, int 
   float x = x_particle[i];
   float y = y_particle[i];
 
-  int grid_index = particle_to_gid(x, y, grid_width);
+  int grid_index = particle_to_cid(x, y, grid_width);
 
   int slot_index = atomicAdd(&particles_per_cell[grid_index], 1);
-  if (slot_index < max_particles_per_cell) {
+  if (slot_index < max_particles_per_cell)
+  {
     grid_indices[grid_index * max_particles_per_cell + slot_index] = i;
-  } else {
+  }
+  else
+  {
     // atomicSub(&particles_per_cell[grid_index], 1);
     // TODO: mark this particle as not in a cell and move it somewhere else
     // TODO: implement near field repulsion to see if it fixes this issue
   }
-
 }
 
 __global__ void compute_density(float *x_particle, float *y_particle, float *density, int *grid_indices, int *particles_per_cell,
@@ -372,7 +372,6 @@ namespace particles
     ImGui::SliderFloat("Gravity Acceleration", &params.gravity_acceleration, -200.0f, 0.0f);
     ImGui::SliderFloat("Drag", &params.drag, 0.0f, 0.01f);
     ImGui::End();
-
 
     circle_renderer->set_transform(transform);
 

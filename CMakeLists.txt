@@ -114,6 +114,8 @@ add_executable(alife_cuda src/main.cu
         src/graphics/renderers/FontRenderer.h
         src/graphics/renderers/RectRenderer.cu
         src/graphics/renderers/RectRenderer.cuh
+        src/graphics/renderers/RectTexRenderer.cu
+        src/graphics/renderers/RectTexRenderer.cuh
         src/systems/Game.cu
         src/systems/Game.cuh
         src/systems/Screen.h
@@ -133,8 +135,12 @@ add_executable(alife_cuda src/main.cu
         src/systems/Fluid.cuh
         src/systems/ParticleFluid.cuh
         src/systems/ParticleFluid.cu
+        src/systems/ParticleFluid2.cuh
+        src/systems/ParticleFluid2.cu
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
+        src/screens/FluidTest2.cu
+        src/screens/FluidTest2.cuh
         src/systems/TreeTypes.cuh
         src/systems/ui/Container.cu
         src/systems/ui/Container.cuh
