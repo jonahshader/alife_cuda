@@ -1,4 +1,7 @@
-#pragma once
+#include "ParticleFluid2.cuh"
+
+namespace p2 {
+
 
 constexpr float KERNEL_RADIUS = 16.0f;
 constexpr float CELL_SIZE = KERNEL_RADIUS * 1;
@@ -95,3 +98,5 @@ void procedure() {
   // move
   // resolve wall collisions
 }
+
+} // namespace p2

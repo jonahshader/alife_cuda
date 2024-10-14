@@ -141,6 +141,8 @@ add_executable(alife_cuda src/main.cu
         src/screens/FluidTest.cuh
         src/screens/FluidTest2.cu
         src/screens/FluidTest2.cuh
+        src/screens/TexCUDATest.cu
+        src/screens/TexCUDATest.cuh
         src/systems/TreeTypes.cuh
         src/systems/ui/Container.cu
         src/systems/ui/Container.cuh

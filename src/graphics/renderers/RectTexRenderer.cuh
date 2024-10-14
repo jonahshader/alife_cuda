@@ -20,6 +20,10 @@ public:
   // glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
   void set_filtering(int min, int mag);
 
+  int get_width() const { return width; }
+  int get_height() const { return height; }
+  int get_channels() const { return channels; }
+
   // CUDA interop functions
   // TODO: look into making this more dry
   // for this renderer, the buffer is referring to the texture, not the vbo
@@ -30,6 +34,9 @@ public:
 
 private:
   Shader shader;
+  int width;
+  int height;
+  int channels;
   std::vector<float> data{};
   unsigned int vbo_data{};
   unsigned int tex{};

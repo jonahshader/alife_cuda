@@ -4,7 +4,9 @@
 #include <glad/glad.h>
 #include <iostream>
 
-RectTexRenderer::RectTexRenderer(int width, int height, int channels) : shader("shaders/rect_tex.vert", "shaders/rect_tex.frag")
+RectTexRenderer::RectTexRenderer(int width, int height, int channels) : 
+shader("shaders/rect_tex.vert", "shaders/rect_tex.frag"),
+width(width), height(height), channels(channels)
 {
   glGenTextures(1, &tex);
   glBindTexture(GL_TEXTURE_2D, tex);
