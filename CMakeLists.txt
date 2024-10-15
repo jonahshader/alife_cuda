@@ -116,6 +116,7 @@ add_executable(alife_cuda src/main.cu
         src/graphics/renderers/RectRenderer.cuh
         src/graphics/renderers/RectTexRenderer.cu
         src/graphics/renderers/RectTexRenderer.cuh
+        src/systems/ParameterManager.h
         src/systems/Game.cu
         src/systems/Game.cuh
         src/systems/Screen.h
