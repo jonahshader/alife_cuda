@@ -119,6 +119,8 @@ add_executable(alife_cuda src/main.cu
         src/systems/Game.cu
         src/systems/Game.cuh
         src/systems/Screen.h
+        src/systems/DefaultScreen.cuh
+        src/systems/DefaultScreen.cu
         src/systems/Resources.cu
         src/systems/Resources.cuh
         src/systems/CustomMath.cu

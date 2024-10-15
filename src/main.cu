@@ -101,7 +101,7 @@ void init_imgui() {
 
     // setup platform/renderer backends
     ImGui_ImplSDL2_InitForOpenGL(window, main_context);
-    ImGui_ImplOpenGL3_Init("#version 430"); // TODO: try without version
+    ImGui_ImplOpenGL3_Init("#version 430");
 }
 
 int main(int argc, char* argv[]) {
@@ -121,7 +121,7 @@ int main(int argc, char* argv[]) {
     std::cout << "Warp size: " << cuda_prop.warpSize << std::endl;
     std::cout << "Number of floating point units: " << cuda_prop.multiProcessorCount * cuda_prop.maxThreadsPerMultiProcessor << std::endl;
 
-    init_screen("OpenGL 4.3");
+    init_screen("ALife CUDA");
     init_imgui();
 
     //    jl_init();
@@ -134,8 +134,8 @@ int main(int argc, char* argv[]) {
     //    game.pushScreen(std::make_shared<MainMenu>(game));
     // game.pushScreen(std::make_shared<FluidTest>(game));
     // game.pushScreen(std::make_shared<TreeTest>(game));
-    // game.pushScreen(std::make_shared<SoilTest>(game));
-    game.pushScreen(std::make_shared<TexCUDATest>(game));
+    game.pushScreen(std::make_shared<SoilTest>(game));
+    // game.pushScreen(std::make_shared<TexCUDATest>(game));
 
     float time = 0;
     SDL_Event event;
