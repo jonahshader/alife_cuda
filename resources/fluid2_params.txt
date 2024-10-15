@@ -1,3 +1,0 @@
-dt=0.0163217
-particle_mass=1
-kernel_radius=0.1

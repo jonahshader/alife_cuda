@@ -11,7 +11,7 @@ constexpr uint32_t SOIL_SIZE = 8;
 
 SoilTest::SoilTest(Game &game) : DefaultScreen(game),
                                  soil(SOIL_WIDTH, SOIL_HEIGHT, SOIL_SIZE, true),
-                                 fluid(SOIL_WIDTH, SOIL_HEIGHT, true)
+                                 fluid(20, 20, true)
 {
     vp.x_cam = SOIL_WIDTH * SOIL_SIZE / 2;
     vp.y_cam = SOIL_HEIGHT * SOIL_SIZE / 2;
@@ -21,7 +21,7 @@ void SoilTest::render(float dt)
 {
     render_start();
 
-    static float fluid_dt = 1/165.0f;
+    static float fluid_dt = 1/60.0f;
     ImGui::Begin("Particle Fluid");
     ImGui::Checkbox("Running", &running);
     ImGui::SliderFloat("Fluid Frequency", &fluid_dt, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);

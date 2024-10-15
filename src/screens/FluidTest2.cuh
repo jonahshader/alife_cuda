@@ -3,6 +3,8 @@
 #include "systems/DefaultScreen.cuh"
 #include "systems/ParameterManager.h"
 
+#include "systems/ParticleFluid2.cuh"
+
 class FluidTest2 : public DefaultScreen
 {
 public:
@@ -11,9 +13,8 @@ public:
   void render(float dt) override;
 
 private:
-  ParameterManager pm{"fluid2_params.txt"};
-  float dt{0.05f};
-  float particle_mass{1.0f};
-  float kernel_radius{0.1f};
+  // ParameterManager pm{"fluid2_params.txt"}; // todo: move to p2::ParticleFluid, combine with TunableParams
+
+  p2::ParticleFluid fluid{20.0f, 15.0f, true};
 
 };

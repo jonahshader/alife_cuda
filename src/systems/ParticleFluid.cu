@@ -7,9 +7,9 @@
 
 #include "Kernels.cuh"
 
-constexpr float KERNEL_RADIUS = 16.0f;
+constexpr float KERNEL_RADIUS = 0.2f;
 constexpr float CELL_SIZE = KERNEL_RADIUS * 1;
-constexpr int PARTICLES_PER_CELL = 64;
+constexpr int PARTICLES_PER_CELL = 8;
 
 __host__ __device__ int particle_to_cid(float x, float y, int grid_width)
 {
@@ -132,7 +132,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
   int y_cell_max = min(grid_height - 1, y_cell + 1);
 
   float density_i = density[i];
-  float pressure_i = (density_i - params.target_pressure) * params.pressure_multiplier;
+  float pressure_i = (density_i - params.target_density) * params.pressure_multiplier;
 
   // Compute pressure gradient and viscosity forces
   float pressure_grad_x = 0.0f;
@@ -166,7 +166,7 @@ __global__ void compute_forces(float *x_particle, float *y_particle, float *x_ve
         float dir_y = dy / r;
 
         float density_j = density[other_i];
-        float pressure_j = (density_j - params.target_pressure) * params.pressure_multiplier;
+        float pressure_j = (density_j - params.target_density) * params.pressure_multiplier;
         float shared_pressure = (pressure_i + pressure_j) * 0.5f;
         float kernel_derivative = sharp_kernel_derivative(r, KERNEL_RADIUS, sharpkernel_vol_inv);
 
@@ -272,7 +272,7 @@ namespace particles
     std::normal_distribution<float> dist_vel(0.0f, 1.0f);
 
     // temp: 1000 particles
-    constexpr int NUM_PARTICLES = 40000;
+    constexpr int NUM_PARTICLES = 10000;
     particles.resize_all(NUM_PARTICLES);
     for (int i = 0; i < NUM_PARTICLES; ++i)
     {
@@ -358,7 +358,7 @@ namespace particles
 
     // float pressure_multiplier = 4000.0f;
     // float viscosity_multiplier = 2.0f;
-    // float target_pressure = 0.6f;
+    // float target_density = 0.6f;
     // float particle_mass = 1.0f;
     // float gravity_acceleration = -30.0f;
     // float drag = 0.000f;
@@ -367,7 +367,7 @@ namespace particles
     ImGui::Begin("Particle Fluid");
     ImGui::SliderFloat("Pressure Multiplier", &params.pressure_multiplier, 0.0f, 10000.0f);
     ImGui::SliderFloat("Viscosity Multiplier", &params.viscosity_multiplier, 0.0f, 32.0f);
-    ImGui::SliderFloat("Target Pressure", &params.target_pressure, 0.0f, 4.0f);
+    ImGui::SliderFloat("Target Pressure", &params.target_density, 0.0f, 4.0f);
     ImGui::SliderFloat("Particle Mass", &params.particle_mass, 0.0f, 4.0f);
     ImGui::SliderFloat("Gravity Acceleration", &params.gravity_acceleration, -200.0f, 0.0f);
     ImGui::SliderFloat("Drag", &params.drag, 0.0f, 0.01f);

@@ -25,12 +25,12 @@ namespace particles
 
   struct TunableParams
   {
-    float pressure_multiplier = 4000.0f;
-    float viscosity_multiplier = 2.0f;
-    float target_pressure = 0.6f;
-    float particle_mass = 1.0f;
-    float gravity_acceleration = -30.0f;
-    float drag = 0.000f;
+    float pressure_multiplier = 225.0f; //4000.0f
+    float viscosity_multiplier = 0.03f;  //2.0f
+    float target_density = 234.0f; //0.6f
+    float particle_mass = 1.0f; //1.0f
+    float gravity_acceleration = -13.0f; //-30.0f
+    float drag = 0.000f; //0.000f
   };
 
   struct ParticleGrid
