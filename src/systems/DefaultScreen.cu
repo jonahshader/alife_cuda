@@ -82,8 +82,8 @@ void DefaultScreen::render_end()
   float dt = std::chrono::duration_cast<std::chrono::duration<float>>(now - last_time).count();
   auto left = hud_vp.get_left();
   auto bottom = hud_vp.get_bottom();
-  regular.add_text(left, bottom + 30.0f, 100, "dt: " + std::to_string(dt) + "us", glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), FontRenderer::HAlign::RIGHT);
-  regular.add_text(left, bottom + 00.0f, 150, "fps: " + std::to_string(1.0f / (dt / 1e6f)), glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), FontRenderer::HAlign::RIGHT);
+  regular.add_text(left, bottom + 30.0f, 100, "dt: " + std::to_string(dt) + "s", glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), FontRenderer::HAlign::RIGHT);
+  regular.add_text(left, bottom + 00.0f, 150, "fps: " + std::to_string(1.0f / dt), glm::vec4(0.5f, 0.5f, 0.5f, 1.0f), FontRenderer::HAlign::RIGHT);
   last_time = now;
 
   auto &bold = game.getResources().extra_bold_font;

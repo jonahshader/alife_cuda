@@ -60,6 +60,7 @@ void FluidTest2::render(float _dt)
     return;
   }
   // Wait for GPU to finish before accessing on host
+  fluid.update();
   cudaDeviceSynchronize();
   density_renderer.update_texture_from_cuda(density_texture_data.data().get());
   cudaError_t cudaStatus = cudaGetLastError();
