@@ -135,9 +135,9 @@ int main(int argc, char* argv[]) {
     //    game.pushScreen(std::make_shared<MainMenu>(game));
     // game.pushScreen(std::make_shared<FluidTest>(game));
     // game.pushScreen(std::make_shared<TreeTest>(game));
-    game.pushScreen(std::make_shared<SoilTest>(game));
+    // game.pushScreen(std::make_shared<SoilTest>(game));
     // game.pushScreen(std::make_shared<TexCUDATest>(game));
-    // game.pushScreen(std::make_shared<FluidTest2>(game));
+    game.pushScreen(std::make_shared<FluidTest2>(game));
 
     float time = 0;
     SDL_Event event;

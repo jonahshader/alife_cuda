@@ -17,18 +17,9 @@ RectTexRenderer::RectTexRenderer(int width, int height, int channels) : shader("
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
   // determine format from number of channels
-  int format = 0;
+  GLenum format;
   switch (channels)
   {
-  case 1:
-    format = GL_RED;
-    break;
-  case 2:
-    format = GL_RG;
-    break;
-  case 3:
-    format = GL_RGB;
-    break;
   case 4:
     format = GL_RGBA;
     break;
@@ -36,6 +27,9 @@ RectTexRenderer::RectTexRenderer(int width, int height, int channels) : shader("
     std::cerr << "RectTexRenderer: Invalid number of channels: " << channels << std::endl;
     exit(1);
   }
+
+  // Ensure that the texture is 4-byte aligned
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
 
   // Allocate texture memory
   glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, nullptr);
@@ -232,7 +226,6 @@ void RectTexRenderer::destroy_texture_object(cudaTextureObject_t texObj)
 
 void RectTexRenderer::update_texture_from_cuda(void *device_data)
 {
-  // Copy data from device memory to the CUDA array
   cudaError_t err = cudaMemcpy2DToArray(cuda_array, 0, 0, device_data, width * channels, width * channels, height, cudaMemcpyDeviceToDevice);
   if (err != cudaSuccess)
   {

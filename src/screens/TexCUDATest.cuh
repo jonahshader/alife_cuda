@@ -20,5 +20,5 @@ private:
     ExtendViewport vp{720, 720};
     ExtendViewport hud_vp{720, 720};
 
-    RectTexRenderer rect{640, 480, 3};
+    RectTexRenderer rect{640, 480, 4};
 };

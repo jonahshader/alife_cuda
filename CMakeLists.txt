@@ -156,6 +156,7 @@ add_executable(alife_cuda src/main.cu
         src/systems/Soil.cu
         src/systems/Soil.cuh
         src/systems/SoAHelper.h
+        src/systems/float2_ops.cuh
         src/screens/SoilTest.cu
         src/screens/SoilTest.cuh
         src/systems/terrain/FractalNoise.cu

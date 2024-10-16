@@ -15,28 +15,22 @@ void TexCUDATest::hide()
 {
 }
 
-__global__ void write_tex_test(cudaTextureObject_t texObj, int width, int height, int channels, unsigned char *output)
+__global__ void write_tex_test(int width, int height, int channels, unsigned char *output)
 {
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   if (x < width && y < height)
   {
-    float4 pixel = tex2D<float4>(texObj, x, y);
     int index = (y * width + x) * channels;
-    // output[index] = static_cast<unsigned char>(255 * pixel.x);
-    // output[index + 1] = static_cast<unsigned char>(255 * pixel.y);
-    // output[index + 2] = static_cast<unsigned char>(255 * pixel.z);
-    // if (channels == 4)
-    // {
-    //   output[index + 3] = static_cast<unsigned char>(255 * pixel.w);
-    // }
+    unsigned char brightness = x % 2 == 0 ? (y % 256) : 0;
 
-    output[index] = x % 256;
-    output[index + 1] = y % 256;
-    output[index + 2] = (x + y) % 256;
+    output[index] = brightness;
+    output[index + 1] = brightness;
+    output[index + 2] = brightness;
+
     if (channels == 4)
     {
-      output[index + 3] = 255;
+      output[index + 3] = 255; // Full alpha for RGBA
     }
   }
 }
@@ -74,7 +68,7 @@ void TexCUDATest::render(float dt)
   // Launch CUDA kernel
   dim3 block(16, 16);
   dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-  write_tex_test<<<grid, block>>>(texObj, width, height, channels, d_output);
+  write_tex_test<<<grid, block>>>(width, height, channels, d_output);
 
   // Check for kernel launch errors
   cudaError_t cudaStatus = cudaGetLastError();
@@ -101,7 +95,7 @@ void TexCUDATest::render(float dt)
   // Render the texture
   rect.set_transform(vp.get_transform());
   rect.begin();
-  rect.add_rect(0.0f, 0.0f, 32.0f, 16.0f, glm::vec3(1.0f, 1.0f, 1.0f));
+  rect.add_rect(0.0f, 0.0f, 64.0f, 48.0f, glm::vec3(1.0f, 1.0f, 1.0f));
   rect.end();
   rect.render();
 }

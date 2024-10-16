@@ -11,6 +11,7 @@
 #define FOR_SPH(N, D) \
   N(float2, pos)      \
   N(float2, vel)      \
+  D(float, mass, 1)   \
   D(float, density, 0)
 
 namespace p2
@@ -28,7 +29,6 @@ namespace p2
     float pressure_mult = 225.0f;
     float near_pressure_mult = 18.0f;
     float viscosity_strength = 0.03f;
-    float target_density = 1.0f;
 
     int particles_per_cell = 64;
   };
@@ -77,6 +77,8 @@ namespace p2
 
     void update();
     void render(const glm::mat4 &transform);
+
+    void calculate_density_grid(thrust::device_vector<float> &density_grid, int width, int height);
 
   private:
     TunableParams params{};
