@@ -44,10 +44,6 @@ void FluidTest2::render(float _dt)
   // ImGui::End();
 
   fluid.calculate_density_grid(density_data, tex_size.x, tex_size.y);
-  for (int i = 0; i < 10; ++i) {
-    std::cout << density_data[i] << ", ";
-  }
-  std::cout << std::endl;
   auto max_density_addr = thrust::max_element(density_data.begin(), density_data.end());
   if (max_density_addr == density_data.end())
   {
@@ -60,7 +56,7 @@ void FluidTest2::render(float _dt)
     return;
   }
   float max_density = *max_density_addr;
-  std::cout << "max_density: " << max_density << std::endl;
+  // std::cout << "max_density: " << max_density << std::endl;
   density_to_texture<<<(density_data.size() + 255) / 256, 256>>>(density_data.data().get(), density_texture_data.data().get(), density_data.size(), max_density);
 
   cudaArray *cuda_array = density_renderer.cuda_map_texture();

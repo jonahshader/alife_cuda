@@ -20,9 +20,9 @@ public:
 
 private:
   // ParameterManager pm{"fluid2_params.txt"}; // todo: move to p2::ParticleFluid, combine with TunableParams
-  const int pixels_per_meter{100};
+  const int pixels_per_meter{60}; // 100
 
-  const float2 bounds{10.0f, 10.0f};
+  const float2 bounds{8.0f, 8.0f}; // 10 10
   const int2 tex_size{(int)std::round(bounds.x * pixels_per_meter), (int)std::round(bounds.y *pixels_per_meter)};
 
   p2::ParticleFluid fluid{bounds.x, bounds.y, true};

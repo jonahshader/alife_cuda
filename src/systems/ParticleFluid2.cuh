@@ -70,6 +70,24 @@ namespace p2
     }
   };
 
+  struct ParticleGridPtrs
+  {
+    int *grid_indices;
+    int *particles_per_cell;
+
+    void get_ptrs(ParticleGridDevice &grid_device)
+    {
+      grid_indices = grid_device.grid_indices.data().get();
+      particles_per_cell = grid_device.particles_per_cell.data().get();
+    }
+
+    void get_ptrs(ParticleGrid &grid)
+    {
+      grid_indices = grid.grid_indices.data();
+      particles_per_cell = grid.particles_per_cell.data();
+    }
+  };
+
   class ParticleFluid
   {
   public:
