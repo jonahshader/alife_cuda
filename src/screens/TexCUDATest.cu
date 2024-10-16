@@ -19,10 +19,15 @@ __global__ void write_tex_test(int width, int height, int channels, unsigned cha
 {
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
+  int x_center = width / 2;
+  int y_center = height / 2;
   if (x < width && y < height)
   {
     int index = (y * width + x) * channels;
-    unsigned char brightness = x % 2 == 0 ? (y % 256) : 0;
+    long distance = (x - (long)x_center) * (x - (long)x_center) + (y - (long)y_center) * (y - (long)y_center);
+    // unsigned char brightness = x % 2 == 0 ? (y % 256) : 0;
+    // unsigned char brightness = distance < height * height / 4 ? 255 : 0;
+    unsigned char brightness = x % 2 != y % 2 ? 255 : 0;
 
     output[index] = brightness;
     output[index + 1] = brightness;
@@ -49,13 +54,13 @@ void TexCUDATest::render(float dt)
   }
 
   // Create CUDA texture object
-  cudaTextureObject_t texObj = rect.create_texture_object();
-  if (texObj == 0)
-  {
-    std::cerr << "Failed to create CUDA texture object" << std::endl;
-    rect.cuda_unmap_texture();
-    return;
-  }
+  // cudaTextureObject_t texObj = rect.create_texture_object();
+  // if (texObj == 0)
+  // {
+  //   std::cerr << "Failed to create CUDA texture object" << std::endl;
+  //   rect.cuda_unmap_texture();
+  //   return;
+  // }
 
   // Allocate device memory for output
   int width = rect.get_width();
@@ -75,7 +80,7 @@ void TexCUDATest::render(float dt)
   if (cudaStatus != cudaSuccess)
   {
     std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
-    rect.destroy_texture_object(texObj);
+    // rect.destroy_texture_object(texObj);
     rect.cuda_unmap_texture();
     cudaFree(d_output);
     return;
@@ -88,7 +93,7 @@ void TexCUDATest::render(float dt)
   rect.update_texture_from_cuda(d_output);
 
   // Clean up
-  rect.destroy_texture_object(texObj);
+  // rect.destroy_texture_object(texObj);
   rect.cuda_unmap_texture();
   cudaFree(d_output);
 

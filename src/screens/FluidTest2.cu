@@ -8,8 +8,8 @@
 #include <iostream>
 
 FluidTest2::FluidTest2(Game &game) : DefaultScreen(game),
-                                     density_data(2000 * 1500),
-                                     density_texture_data(2000 * 1500 * 4)
+                                     density_data(tex_size.x * tex_size.y),
+                                     density_texture_data(tex_size.x * tex_size.y * 4)
 {
 }
 
@@ -19,6 +19,8 @@ __global__ void density_to_texture(float *density_data, unsigned char *density_t
   if (i < size)
   {
     float d = density_data[i] / max_density;
+    // if (i % 3 == 0)
+    //   d = 1.0f;
     density_texture_data[i * 4] = 255 * d;
     density_texture_data[i * 4 + 1] = 255 * d;
     density_texture_data[i * 4 + 2] = 255 * d;
@@ -41,8 +43,23 @@ void FluidTest2::render(float _dt)
   //   pm.save_params();
   // ImGui::End();
 
-  fluid.calculate_density_grid(density_data, 2000, 1500);
-  float max_density = *thrust::max_element(density_data.begin(), density_data.end());
+  fluid.calculate_density_grid(density_data, tex_size.x, tex_size.y);
+  for (int i = 0; i < 10; ++i) {
+    std::cout << density_data[i] << ", ";
+  }
+  std::cout << std::endl;
+  auto max_density_addr = thrust::max_element(density_data.begin(), density_data.end());
+  if (max_density_addr == density_data.end())
+  {
+    std::cerr << "Failed to find max density" << std::endl;
+    // print a few values
+    for (int i = 0; i < 10; ++i)
+    {
+      std::cout << density_data[i] << std::endl;
+    }
+    return;
+  }
+  float max_density = *max_density_addr;
   std::cout << "max_density: " << max_density << std::endl;
   density_to_texture<<<(density_data.size() + 255) / 256, 256>>>(density_data.data().get(), density_texture_data.data().get(), density_data.size(), max_density);
 
@@ -77,7 +94,15 @@ void FluidTest2::render(float _dt)
 
   density_renderer.set_transform(vp.get_transform());
   density_renderer.begin();
-  density_renderer.add_rect(0.0f, 0.0f, 20.0f, 15.0f, glm::vec3(1.0f));
+  for (int x_offset = -1; x_offset <= 1; ++x_offset)
+  {
+    for (int y_offset = -1; y_offset <= 1; ++y_offset)
+    {
+      float x_offset_f = x_offset * bounds.x;
+      float y_offset_f = y_offset * bounds.y;
+      density_renderer.add_rect(x_offset_f + -bounds.x / 2, y_offset_f + -bounds.y / 2, bounds.x, bounds.y, glm::vec3(1.0f));
+    }
+  }
   density_renderer.end();
   density_renderer.render();
 

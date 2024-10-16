@@ -10,7 +10,6 @@ namespace p2
   // given a particle's position, return the cell index it belongs to
   __host__ __device__ int particle_to_cid(float2 pos, int grid_width, float cell_size)
   {
-    // TODO: wrap here or after position update?
     int grid_x = pos.x / cell_size;
     int grid_y = pos.y / cell_size;
     return grid_y * grid_width + grid_x;
@@ -93,7 +92,7 @@ namespace p2
     return density;
   }
 
-  ParticleFluid::ParticleFluid(float width, float height, bool use_graphics)
+  ParticleFluid::ParticleFluid(float width, float height, bool use_graphics) : bounds(make_float2(width, height))
   {
     if (use_graphics)
       circle_renderer = std::make_unique<CircleRenderer>();
@@ -114,7 +113,7 @@ namespace p2
 
     // temp: 1000 particles
     // TODO: make particle count proportional to the grid size
-    constexpr int NUM_PARTICLES = 100000;
+    const int NUM_PARTICLES = 16 * grid_width * grid_height;
     particles.resize_all(NUM_PARTICLES);
     for (int i = 0; i < NUM_PARTICLES; ++i)
       particles.pos[i] = make_float2(dist_x(rand), dist_y(rand));
@@ -138,11 +137,11 @@ namespace p2
     // wrap around
     if (new_pos.x < 0.0f)
       new_pos.x += bounds.x;
-    else if (new_pos.x > bounds.x)
+    else if (new_pos.x >= bounds.x)
       new_pos.x -= bounds.x;
     if (new_pos.y < 0.0f)
       new_pos.y += bounds.y;
-    else if (new_pos.y > bounds.y)
+    else if (new_pos.y >= bounds.y)
       new_pos.y -= bounds.y;
 
     pos[i] = new_pos;
@@ -151,7 +150,7 @@ namespace p2
   void ParticleFluid::update() {
     // move particles
     move_particles<<<(particles_device.pos.size() + 255) / 256, 256>>>(
-      particles_device.pos.data().get(), particles_device.vel.data().get(), params.dt, particles_device.pos.size(), make_float2(20.0f, 15.0f));
+      particles_device.pos.data().get(), particles_device.vel.data().get(), params.dt, particles_device.pos.size(), bounds);
     // // update device
     // particles_device.copy_to_host(particles);
   }
@@ -169,7 +168,7 @@ namespace p2
       return;
 
     int cell_x = i % density_grid_dims.x;
-    int cell_y = i / density_grid_dims.y;
+    int cell_y = i / density_grid_dims.x;
     float2 pos = make_float2(cell_x * sample_interval, cell_y * sample_interval);
     density_grid[i] = calculate_density_at_pos(
       pos, p_pos, mass, grid_indices, 
@@ -180,7 +179,7 @@ namespace p2
   void ParticleFluid::calculate_density_grid(thrust::device_vector<float> &density_grid, int width, int height)
   {
     float cell_size = params.smoothing_radius;
-    float sample_interval = grid.width * cell_size / width;
+    float sample_interval = bounds.x / width;
 
     int density_grid_size = width * height;
     int particle_grid_size = grid.width * grid.height;

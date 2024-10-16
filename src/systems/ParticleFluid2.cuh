@@ -81,6 +81,7 @@ namespace p2
     void calculate_density_grid(thrust::device_vector<float> &density_grid, int width, int height);
 
   private:
+    float2 bounds;
     TunableParams params{};
     SPHSoA particles{};
     SPHSoADevice particles_device{};
