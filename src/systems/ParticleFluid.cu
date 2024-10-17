@@ -378,7 +378,6 @@ namespace particles
     const auto circle_count = particles_device.x_particle.size();
     circle_renderer->ensure_vbo_capacity(circle_count);
     // get a cuda compatible pointer to the vbo
-    circle_renderer->cuda_register_buffer();
     auto vbo_ptr = circle_renderer->cuda_map_buffer();
     // render the particles
     dim3 block(256);
@@ -390,7 +389,6 @@ namespace particles
     circle_renderer->cuda_unmap_buffer();
     // render the circles
     circle_renderer->render(circle_count);
-    circle_renderer->cuda_unregister_buffer(); // TODO: is this necessary?
   }
 
 }

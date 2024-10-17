@@ -91,7 +91,7 @@ namespace p2
   class ParticleFluid
   {
   public:
-    ParticleFluid(float width, float height, bool use_graphics);
+    ParticleFluid(float width, float height, int particles_per_cell, bool use_graphics);
 
     void update();
     void render(const glm::mat4 &transform);

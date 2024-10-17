@@ -5,6 +5,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 #include <glm/glm.hpp>
 #include "graphics/Shader.h"
 
@@ -22,8 +23,6 @@ public:
     void set_transform(glm::mat4 transform);
 
     // CUDA interop functions
-    void cuda_register_buffer();
-    void cuda_unregister_buffer();
     void *cuda_map_buffer();
     void cuda_unmap_buffer();
 
@@ -43,4 +42,8 @@ private:
     unsigned int vao{};
     unsigned int buffer_size{};
     cudaGraphicsResource_t cuda_resource{nullptr}; // CUDA graphics resource handle
+
+    void cuda_register_buffer();
+
+    void check_cuda(const std::string &msg);
 };

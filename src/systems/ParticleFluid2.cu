@@ -7,6 +7,15 @@
 
 namespace p2
 {
+  void check_cuda(const std::string &msg)
+  {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+      std::cerr << "ParticleFluid2: " << msg << ": " << cudaGetErrorString(err) << std::endl;
+    }
+  }
+
   // given a particle's position, return the cell index it belongs to
   __host__ __device__ int particle_to_cid(float2 pos, int grid_width, float cell_size)
   {
@@ -26,7 +35,7 @@ namespace p2
   }
 
   // put particle IDs into the cells they belong to
-  __global__ void populate_grid_indices(SPHPtrs sph, ParticleGridPtrs grid, 
+  __global__ void populate_grid_indices(SPHPtrs sph, ParticleGridPtrs grid,
                                         int max_particles, int max_particles_per_cell,
                                         int2 p_grid_dims, float cell_size)
   {
@@ -92,7 +101,7 @@ namespace p2
     return density;
   }
 
-  ParticleFluid::ParticleFluid(float width, float height, bool use_graphics) : bounds(make_float2(width, height))
+  ParticleFluid::ParticleFluid(float width, float height, int particles_per_cell, bool use_graphics) : bounds(make_float2(width, height))
   {
     if (use_graphics)
       circle_renderer = std::make_unique<CircleRenderer>();
@@ -102,18 +111,18 @@ namespace p2
     int grid_width = std::ceil(width / smoothing_radius);
     int grid_height = std::ceil(height / smoothing_radius);
 
-    grid.reconfigure(grid_width, grid_height, 64); // TODO: want the ability to reconfigure with imgui
+    grid.reconfigure(grid_width, grid_height, particles_per_cell * 8); // TODO: want the ability to reconfigure with imgui
     // init some particles
     std::default_random_engine rand;
     std::uniform_real_distribution<float> dist_x(0.0f, width);
     std::uniform_real_distribution<float> dist_y(0.0f, height);
 
     // velocity init with gaussian
-    std::normal_distribution<float> dist_vel(0.0f, 0.1f);
+    std::normal_distribution<float> dist_vel(0.0f, 0.01f);
 
     // temp: 1000 particles
     // TODO: make particle count proportional to the grid size
-    const int NUM_PARTICLES = 8 * grid_width * grid_height;
+    const int NUM_PARTICLES = particles_per_cell * grid_width * grid_height;
     particles.resize_all(NUM_PARTICLES);
     for (int i = 0; i < NUM_PARTICLES; ++i)
       particles.pos[i] = make_float2(dist_x(rand), dist_y(rand));
@@ -149,11 +158,52 @@ namespace p2
     // move particles
     move_particles<<<(particles_device.pos.size() + 255) / 256, 256>>>(
         particles_device.pos.data().get(), particles_device.vel.data().get(), params.dt, particles_device.pos.size(), bounds);
-    // // update device
-    // particles_device.copy_to_host(particles);
   }
 
-  void ParticleFluid::render(const glm::mat4 &transform) {}
+  __global__ void render_particles(unsigned int *circle_vbo, SPHPtrs sph, TunableParams params, size_t num_particles)
+  {
+    unsigned int color = 0x7FFFA077;
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= num_particles)
+      return;
+
+    auto pos = sph.pos[i];
+    auto radius = params.smoothing_radius / 4;
+
+    circle_vbo[i * 4 + 0] = reinterpret_cast<unsigned int &>(pos.x);
+    circle_vbo[i * 4 + 1] = reinterpret_cast<unsigned int &>(pos.y);
+    circle_vbo[i * 4 + 2] = reinterpret_cast<unsigned int &>(radius);
+    circle_vbo[i * 4 + 3] = color;
+  }
+
+  void ParticleFluid::render(const glm::mat4 &transform)
+  {
+    // early return if we don't hvae a renderer
+    if (!circle_renderer)
+      return;
+
+    circle_renderer->set_transform(transform);
+
+    const auto circle_count = particles_device.pos.size();
+    circle_renderer->ensure_vbo_capacity(circle_count);
+    check_cuda("ensure_vbo_capacity");
+    // get a cuda compatible pointer to the vbo
+    auto vbo_ptr = circle_renderer->cuda_map_buffer();
+
+    // render the particles
+    dim3 block(256);
+    dim3 grid_dim((circle_count + block.x - 1) / block.x);
+
+    SPHPtrs sph;
+    sph.get_ptrs(particles_device);
+    render_particles<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), sph, params, circle_count);
+    check_cuda("render_particles");
+
+    // unmap the buffer
+    circle_renderer->cuda_unmap_buffer();
+    // render the particles
+    circle_renderer->render(circle_count);
+  }
 
   __global__ void calculate_density_grid_kernel(int density_grid_size, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
                                                 int2 density_grid_dims, float sample_interval,
@@ -189,13 +239,14 @@ namespace p2
 
     // reset particles_per_cell counters
     reset_particles_per_cell<<<(particle_grid_size + 255) / 256, 256>>>(grid_ptrs.particles_per_cell, particle_grid_size);
+    check_cuda("reset_particles_per_cell");
 
     // populate grid indices
     auto particle_count = particles_device.pos.size();
-    populate_grid_indices<<<(particle_count + 255) / 256, 256>>>(sph, grid_ptrs, 
+    populate_grid_indices<<<(particle_count + 255) / 256, 256>>>(sph, grid_ptrs,
                                                                  particle_count, grid.max_particles_per_cell,
                                                                  particle_grid_dims, cell_size);
-
+    check_cuda("populate_grid_indices");
 
     // calculate density grid
     calculate_density_grid_kernel<<<(density_grid_size + 255) / 256, 256>>>(
@@ -203,6 +254,7 @@ namespace p2
         density_grid_dims, sample_interval,
         particle_grid_dims, cell_size,
         params.smoothing_radius, density_grid.data().get());
+    check_cuda("calculate_density_grid_kernel");
   }
 
 } // namespace p2

@@ -7,6 +7,15 @@
 #include <cuda_gl_interop.h>
 #include <iostream>
 
+void CircleRenderer::check_cuda(const std::string &msg)
+{
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        std::cerr << "CircleRenderer: " << msg << ": " << cudaGetErrorString(err) << std::endl;
+    }
+}
+
 CircleRenderer::CircleRenderer() : shader("shaders/circle.vert", "shaders/circle.frag")
 {
     float baseMesh[] = {
@@ -36,6 +45,7 @@ CircleRenderer::CircleRenderer() : shader("shaders/circle.vert", "shaders/circle
     glBufferData(GL_ARRAY_BUFFER, sizeof(baseMesh), baseMesh, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
     glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW); // TODO: eval GL_DYNAMIC_DRAW
+    cuda_register_buffer();
 
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_base_mesh);
@@ -78,6 +88,7 @@ void CircleRenderer::end()
         // resize buffer
         buffer_size = data_bytes * 2;
         glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
+        cuda_register_buffer();
         std::cout << "Doubled CircleRenderer buffer size from " << buffer_size / 2 << " to " << buffer_size << std::endl;
     }
     glBufferSubData(GL_ARRAY_BUFFER, 0, data_bytes, data.data());
@@ -110,6 +121,8 @@ CircleRenderer::~CircleRenderer()
 {
     glDeleteVertexArrays(1, &vao);
     glDeleteBuffers(1, &vbo_base_mesh);
+    // unregister cuda resource
+    cudaGraphicsUnregisterResource(cuda_resource);
     glDeleteBuffers(1, &vbo_data);
 }
 
@@ -139,11 +152,7 @@ void CircleRenderer::add_circle(float x, float y, float radius, unsigned char r,
 void CircleRenderer::cuda_register_buffer()
 {
     cudaGraphicsGLRegisterBuffer(&cuda_resource, vbo_data, cudaGraphicsMapFlagsWriteDiscard);
-}
-
-void CircleRenderer::cuda_unregister_buffer()
-{
-    cudaGraphicsUnregisterResource(cuda_resource);
+    check_cuda("cuda_register_buffer");
 }
 
 void *CircleRenderer::cuda_map_buffer()
@@ -152,22 +161,29 @@ void *CircleRenderer::cuda_map_buffer()
     size_t size;
     cudaGraphicsMapResources(1, &cuda_resource, 0);
     cudaGraphicsResourceGetMappedPointer(&device_ptr, &size, cuda_resource);
+    check_cuda("cuda_map_buffer");
     return device_ptr;
 }
 
 void CircleRenderer::cuda_unmap_buffer()
 {
     cudaGraphicsUnmapResources(1, &cuda_resource, 0);
+    check_cuda("cuda_unmap_buffer");
 }
 
 void CircleRenderer::ensure_vbo_capacity(size_t circles)
 {
     const auto size_bytes = circles * CIRCLE_SIZE;
-    if (buffer_size < size_bytes) {
-        if (buffer_size == 0) {
+    if (buffer_size < size_bytes)
+    {
+        if (buffer_size == 0)
+        {
             buffer_size = size_bytes;
-        } else {
-            while (buffer_size < size_bytes) {
+        }
+        else
+        {
+            while (buffer_size < size_bytes)
+            {
                 buffer_size *= 2;
             }
         }
@@ -177,10 +193,14 @@ void CircleRenderer::ensure_vbo_capacity(size_t circles)
         glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
         glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
-    } else if (buffer_size > size_bytes * 4) {
+        cuda_register_buffer();
+    }
+    else if (buffer_size > size_bytes * 4)
+    {
         buffer_size = size_bytes;
         glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
         glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
+        cuda_register_buffer();
     }
 }
