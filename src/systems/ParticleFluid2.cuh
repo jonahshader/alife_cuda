@@ -99,7 +99,7 @@ namespace p2
     void update();
     void render(const glm::mat4 &transform);
 
-    void calculate_density_grid(thrust::device_vector<float> &density_grid, int width, int height);
+    void calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width, int height, float max_density);
 
   private:
     float2 bounds;

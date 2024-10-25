@@ -383,7 +383,7 @@ namespace p2
   __global__ void calculate_density_grid_kernel(int density_grid_size, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
                                                 int2 density_grid_dims, float sample_interval,
                                                 int2 particle_grid_dims, float cell_size,
-                                                float smoothing_radius, float2 bounds, float *density_grid)
+                                                float smoothing_radius, float2 bounds, unsigned char *texture_data, float max_density)
   {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= density_grid_size)
@@ -392,12 +392,39 @@ namespace p2
     int cell_x = i % density_grid_dims.x;
     int cell_y = i / density_grid_dims.x;
     float2 pos = make_float2(cell_x * sample_interval, cell_y * sample_interval);
-    density_grid[i] = calculate_density_at_pos(
+    float density = calculate_density_at_pos(
         pos, sph, grid, max_particles_per_cell,
         particle_grid_dims, cell_size, smoothing_radius);
+
+    // determine particles per cell
+    int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
+    int num_particles = grid.particles_per_cell[grid_index];
+
+    // normalize density
+    density = density / max_density;
+
+    if (num_particles > max_particles_per_cell) {
+      // red if too many particles per cell
+      texture_data[i * 4] = 255;
+      texture_data[i * 4 + 1] = 0;
+      texture_data[i * 4 + 2] = 0;
+    } else if (density > 1.0f) {
+      // blue if density over max
+      texture_data[i * 4] = 0;
+      texture_data[i * 4 + 1] = 0;
+      texture_data[i * 4 + 2] = 255;
+    } else {
+      // normal, grayscale rendering
+      texture_data[i * 4] = 255 * density;
+      texture_data[i * 4 + 1] = 255 * density;
+      texture_data[i * 4 + 2] = 255 * density;
+    }
+    texture_data[i * 4 + 3] = 255;
+
+
   }
 
-  void ParticleFluid::calculate_density_grid(thrust::device_vector<float> &density_grid, int width, int height)
+  void ParticleFluid::calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width, int height, float max_density)
   {
     float cell_size = params.smoothing_radius;
     float sample_interval = bounds.x / width;
@@ -418,7 +445,7 @@ namespace p2
         density_grid_size, sph, grid_ptrs, grid.max_particles_per_cell,
         density_grid_dims, sample_interval,
         particle_grid_dims, cell_size,
-        params.smoothing_radius, bounds, density_grid.data().get());
+        params.smoothing_radius, bounds, texture_data.data().get(), max_density);
     check_cuda("calculate_density_grid_kernel");
   }
 

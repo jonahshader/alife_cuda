@@ -28,6 +28,6 @@ private:
 
   p2::ParticleFluid fluid{bounds.x, bounds.y, particles_per_cell, true};
   RectTexRenderer density_renderer{tex_size.x, tex_size.y, 4};
-  thrust::device_vector<float> density_data;
+  // thrust::device_vector<float> density_data;
   thrust::device_vector<unsigned char> density_texture_data;
 };
