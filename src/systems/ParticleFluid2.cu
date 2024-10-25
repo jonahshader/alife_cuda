@@ -220,12 +220,13 @@ namespace p2
     }
 
     // apply pressure force
-    // sph.acc[i] = make_float2(0.0f, params.gravity) + pressure_force / density;
     float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
     sph.vel[i] = vel + acc * params.dt;
   }
 
-  ParticleFluid::ParticleFluid(float width, float height, int particles_per_cell, bool use_graphics) : bounds(make_float2(width, height))
+  ParticleFluid::ParticleFluid(float width, float height, const TunableParams& params, bool use_graphics) : 
+  bounds(make_float2(width, height)),
+  params(params)
   {
     if (use_graphics)
       circle_renderer = std::make_unique<CircleRenderer>();
@@ -235,7 +236,7 @@ namespace p2
     int grid_width = std::ceil(width / smoothing_radius);
     int grid_height = std::ceil(height / smoothing_radius);
 
-    grid.reconfigure(grid_width, grid_height, particles_per_cell * 16); // TODO: want the ability to reconfigure with imgui
+    grid.reconfigure(grid_width, grid_height, params.max_particles_per_cell); // TODO: want the ability to reconfigure with imgui
     // init some particles
     std::default_random_engine rand;
     std::uniform_real_distribution<float> dist_x(0.0f, width);
@@ -249,12 +250,20 @@ namespace p2
 
     // temp: 1000 particles
     // TODO: make particle count proportional to the grid size
-    const int NUM_PARTICLES = particles_per_cell * grid_width * grid_height;
+    const int NUM_PARTICLES = params.particles_per_cell * grid_width * grid_height;
     particles.resize_all(NUM_PARTICLES);
-    for (int i = 0; i < NUM_PARTICLES; ++i)
-      particles.pos[i] = make_float2(dist_x(rand), dist_y(rand));
+
     for (int i = 0; i < NUM_PARTICLES; ++i)
       particles.vel[i] = make_float2(dist_vel(rand), dist_vel(rand));
+
+    for (int i = 0; i < NUM_PARTICLES; ++i) {
+      auto pos = make_float2(dist_x(rand), dist_y(rand));
+      auto vel = particles.vel[i];
+      particles.pos[i] = pos + vel * (1/120.0f); // TODO: pull out constant
+      particles.ppos[i] = pos;
+    }
+      
+
     // density is already defaulted to 0, mass to 1
     for (int i = 0; i < NUM_PARTICLES; ++i)
       particles.sym_break[i] = dist_sym(rand);
@@ -270,7 +279,9 @@ namespace p2
     if (i >= num_particles)
       return;
 
-    float2 new_pos = sph.pos[i] + sph.vel[i] * dt;
+    auto vel = sph.vel[i];
+    // use previous position to calculate new position
+    float2 new_pos = sph.ppos[i] + vel * dt;
     // wrap around
     if (new_pos.x < 0.0f)
       new_pos.x += bounds.x;
@@ -280,15 +291,32 @@ namespace p2
     if (new_pos.y < 0.0f)
     {
       new_pos.y = -new_pos.y;
-      sph.vel[i].y = -sph.vel[i].y * damping;
+      sph.vel[i].y = -vel.y * damping;
     }
     else if (new_pos.y > bounds.y)
     {
       new_pos.y = (2.0f * bounds.y - new_pos.y) - 1e-4f;
-      sph.vel[i].y = -sph.vel[i].y * damping;
+      sph.vel[i].y = -vel.y * damping;
     }
 
-    sph.pos[i] = new_pos;
+    float2 new_pos2 = new_pos + vel * (1/120.0f); // TODO: pull out constant
+    // wrap around
+    if (new_pos2.x < 0.0f)
+      new_pos2.x += bounds.x;
+    new_pos2.x = fmodf(new_pos2.x, bounds.x);
+
+    // reflect y over bounds. don't manipulate vel here
+    if (new_pos2.y < 0.0f)
+    {
+      new_pos2.y = -new_pos2.y;
+    }
+    else if (new_pos2.y > bounds.y)
+    {
+      new_pos2.y = (2.0f * bounds.y - new_pos2.y) - 1e-4f;
+    }
+
+    sph.ppos[i] = new_pos;
+    sph.pos[i] = new_pos2;
   }
 
   void ParticleFluid::update()
@@ -420,8 +448,6 @@ namespace p2
       texture_data[i * 4 + 2] = 255 * density;
     }
     texture_data[i * 4 + 3] = 255;
-
-
   }
 
   void ParticleFluid::calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width, int height, float max_density)

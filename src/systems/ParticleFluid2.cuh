@@ -9,12 +9,13 @@
 #include "SoAHelper.h"
 #include "graphics/renderers/CircleRenderer.cuh"
 
-#define FOR_SPH(N, D)               \
-  D(float2, pos, make_float2(0, 0)) \
-  D(float2, vel, make_float2(0, 0)) \
-  D(float2, acc, make_float2(0, 0)) \
-  D(float, mass, 1)                 \
-  D(float, density, 0)              \
+#define FOR_SPH(N, D)                \
+  D(float2, pos, make_float2(0, 0))  \
+  D(float2, ppos, make_float2(0, 0)) \
+  D(float2, vel, make_float2(0, 0))  \
+  D(float2, acc, make_float2(0, 0))  \
+  D(float, mass, 1)                  \
+  D(float, density, 0)               \
   D(uint8_t, sym_break, 0)
 
 namespace p2
@@ -25,7 +26,7 @@ namespace p2
   {
     // TODO: grab these from screenshot
     float dt = 1 / 600.0f; // 1/60.0f;
-    float gravity = 0.0f; // -13.0f
+    float gravity = -13.0f; // -13.0f
     float collision_damping = 0.5f;
     float smoothing_radius = 0.2f;
     float target_density = 23.40f; // 234.0f
@@ -33,7 +34,8 @@ namespace p2
     float near_pressure_mult = 18.0f;
     float viscosity_strength = 0.03f;
 
-    int particles_per_cell = 64;
+    int particles_per_cell = 4;
+    int max_particles_per_cell = particles_per_cell * 32;
   };
 
   struct ParticleGrid
@@ -94,7 +96,7 @@ namespace p2
   class ParticleFluid
   {
   public:
-    ParticleFluid(float width, float height, int particles_per_cell, bool use_graphics);
+    ParticleFluid(float width, float height, const TunableParams &params, bool use_graphics);
 
     void update();
     void render(const glm::mat4 &transform);
@@ -103,7 +105,7 @@ namespace p2
 
   private:
     float2 bounds;
-    TunableParams params{};
+    TunableParams params;
     SPHSoA particles{};
     SPHSoADevice particles_device{};
 
