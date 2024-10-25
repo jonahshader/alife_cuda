@@ -4,15 +4,18 @@
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
 #include <vector>
+#include <cstdint>
 
 #include "SoAHelper.h"
 #include "graphics/renderers/CircleRenderer.cuh"
 
-#define FOR_SPH(N, D) \
-  N(float2, pos)      \
-  N(float2, vel)      \
-  D(float, mass, 1)   \
-  D(float, density, 0)
+#define FOR_SPH(N, D)               \
+  D(float2, pos, make_float2(0, 0)) \
+  D(float2, vel, make_float2(0, 0)) \
+  D(float2, acc, make_float2(0, 0)) \
+  D(float, mass, 1)                 \
+  D(float, density, 0)              \
+  D(uint8_t, sym_break, 0)
 
 namespace p2
 {
@@ -21,12 +24,12 @@ namespace p2
   struct TunableParams
   {
     // TODO: grab these from screenshot
-    float dt = 1/60.0f;
-    float gravity = -13.0f;
+    float dt = 1 / 600.0f; // 1/60.0f;
+    float gravity = 0.0f; // -13.0f
     float collision_damping = 0.5f;
     float smoothing_radius = 0.2f;
-    float target_density = 234.0f;
-    float pressure_mult = 225.0f;
+    float target_density = 23.40f; // 234.0f
+    float pressure_mult = 22.50f; // 225.0f;
     float near_pressure_mult = 18.0f;
     float viscosity_strength = 0.03f;
 

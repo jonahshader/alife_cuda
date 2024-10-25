@@ -151,7 +151,17 @@ void CircleRenderer::add_circle(float x, float y, float radius, unsigned char r,
 
 void CircleRenderer::cuda_register_buffer()
 {
-    cudaGraphicsGLRegisterBuffer(&cuda_resource, vbo_data, cudaGraphicsMapFlagsWriteDiscard);
+    // check if its already registered
+    if (cuda_resource != nullptr)
+    {
+        cudaGraphicsUnregisterResource(cuda_resource);
+        std::cout << "CircleRenderer: Unregistered cuda resource" << std::endl;
+    }
+    auto error = cudaGraphicsGLRegisterBuffer(&cuda_resource, vbo_data, cudaGraphicsMapFlagsWriteDiscard);
+    if (error != cudaSuccess)
+    {
+        std::cerr << "CircleRenderer: cudaGraphicsGLRegisterBuffer failed: " << cudaGetErrorString(error) << std::endl;
+    }
     check_cuda("cuda_register_buffer");
 }
 

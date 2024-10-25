@@ -50,7 +50,7 @@ void check_cuda(const std::string &msg)
 void FluidTest2::render(float _dt)
 {
   render_start();
-  check_cuda("render_start");
+  fluid.update();
   fluid.calculate_density_grid(density_data, tex_size.x, tex_size.y);
 
   auto max_density_addr = thrust::max_element(density_data.begin(), density_data.end());
@@ -74,8 +74,6 @@ void FluidTest2::render(float _dt)
     return;
   }
 
-  fluid.update();
-  check_cuda("fluid.update");
   cudaDeviceSynchronize();
   density_renderer.update_texture_from_cuda(density_texture_data.data().get());
   check_cuda("update_texture_from_cuda");

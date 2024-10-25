@@ -48,4 +48,6 @@ private:
   cudaArray *cuda_array{nullptr};
 
   void add_vertex(float x, float y, glm::vec3 color, float tex_x, float tex_y);
+
+  void check_cuda(const std::string &msg);
 };

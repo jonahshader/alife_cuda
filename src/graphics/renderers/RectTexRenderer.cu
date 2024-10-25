@@ -4,6 +4,15 @@
 #include <glad/glad.h>
 #include <iostream>
 
+void RectTexRenderer::check_cuda(const std::string &msg)
+{
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+    {
+        std::cerr << "RectTexRenderer: " << msg << ": " << cudaGetErrorString(err) << std::endl;
+    }
+}
+
 RectTexRenderer::RectTexRenderer(int width, int height, int channels) : shader("shaders/rect_tex.vert", "shaders/rect_tex.frag"),
                                                                         width(width), height(height), channels(channels)
 {
@@ -150,6 +159,7 @@ void RectTexRenderer::cuda_register_texture()
     std::cerr << "Failed to register OpenGL texture with CUDA: " << cudaGetErrorString(err) << std::endl;
     exit(1);
   }
+  check_cuda("cuda_register_texture");
 }
 
 void RectTexRenderer::cuda_unregister_texture()
@@ -158,6 +168,7 @@ void RectTexRenderer::cuda_unregister_texture()
   {
     cudaGraphicsUnregisterResource(cuda_resource);
     cuda_resource = nullptr;
+    check_cuda("cuda_unregister_texture");
   }
 }
 
@@ -170,6 +181,7 @@ cudaArray *RectTexRenderer::cuda_map_texture()
     std::cerr << "Failed to map CUDA resource: " << cudaGetErrorString(err) << std::endl;
     return nullptr;
   }
+  check_cuda("cudaGraphicsMapResources");
 
   // Get the mapped array
   err = cudaGraphicsSubResourceGetMappedArray(&cuda_array, cuda_resource, 0, 0);
@@ -179,6 +191,7 @@ cudaArray *RectTexRenderer::cuda_map_texture()
     cudaGraphicsUnmapResources(1, &cuda_resource, 0);
     return nullptr;
   }
+  check_cuda("cudaGraphicsSubResourceGetMappedArray");
 
   return cuda_array;
 }
@@ -190,6 +203,7 @@ void RectTexRenderer::cuda_unmap_texture()
   {
     std::cerr << "Failed to unmap CUDA resource: " << cudaGetErrorString(err) << std::endl;
   }
+  check_cuda("cudaGraphicsUnmapResources");
 }
 
 cudaTextureObject_t RectTexRenderer::create_texture_object() {
@@ -215,6 +229,7 @@ cudaTextureObject_t RectTexRenderer::create_texture_object() {
     std::cerr << "Failed to create CUDA texture object: " << cudaGetErrorString(err) << std::endl;
     return 0;
   }
+  check_cuda("create_texture_object");
 
   return texObj;
 }
@@ -222,6 +237,7 @@ cudaTextureObject_t RectTexRenderer::create_texture_object() {
 void RectTexRenderer::destroy_texture_object(cudaTextureObject_t texObj)
 {
   cudaDestroyTextureObject(texObj);
+  check_cuda("destroy_texture_object");
 }
 
 void RectTexRenderer::update_texture_from_cuda(void *device_data)
@@ -231,6 +247,7 @@ void RectTexRenderer::update_texture_from_cuda(void *device_data)
   {
     std::cerr << "Failed to copy data to CUDA array: " << cudaGetErrorString(err) << std::endl;
   }
+  check_cuda("update_texture_from_cuda");
 }
 
 void RectTexRenderer::set_filtering(int min, int mag)
