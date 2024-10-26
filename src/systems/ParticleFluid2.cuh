@@ -8,6 +8,7 @@
 
 #include "SoAHelper.h"
 #include "graphics/renderers/CircleRenderer.cuh"
+#include "ParameterManager.h"
 
 #define FOR_SPH(N, D)                \
   D(float2, pos, make_float2(0, 0))  \
@@ -26,11 +27,12 @@ namespace p2
   {
     // TODO: grab these from screenshot
     float dt = 1 / 600.0f; // 1/60.0f;
+    float dt_predict = 1 / 120.0f;
     float gravity = -13.0f; // -13.0f
     float collision_damping = 0.5f;
     float smoothing_radius = 0.2f;
-    float target_density = 23.40f; // 234.0f
-    float pressure_mult = 22.50f; // 225.0f;
+    float target_density = 234.0f; // 234.0f
+    float pressure_mult = 225.0f;  // 225.0f;
     float near_pressure_mult = 18.0f;
     float viscosity_strength = 0.03f;
 
@@ -97,6 +99,7 @@ namespace p2
   {
   public:
     ParticleFluid(float width, float height, const TunableParams &params, bool use_graphics);
+    ParticleFluid(float width, float height, bool use_graphics);
 
     void update();
     void render(const glm::mat4 &transform);
@@ -106,6 +109,8 @@ namespace p2
   private:
     float2 bounds;
     TunableParams params;
+    bool use_internal_params;
+    std::unique_ptr<ParameterManager> pm{};
     SPHSoA particles{};
     SPHSoADevice particles_device{};
 
@@ -113,6 +118,11 @@ namespace p2
     ParticleGridDevice grid_device{};
 
     std::unique_ptr<CircleRenderer> circle_renderer{};
+
+    void load_params();
+    void save_params();
+    void init();
+    void init_grid();
   };
 
 } // namespace p2

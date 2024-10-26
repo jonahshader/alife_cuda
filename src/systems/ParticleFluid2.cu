@@ -4,6 +4,7 @@
 
 #include "float2_ops.cuh"
 #include "CustomMath.cuh"
+#include "imgui.h"
 
 namespace p2
 {
@@ -50,33 +51,33 @@ namespace p2
   }
 
   // TODO: the provided dst is calculated using sqrt, but we square it here...
-  // __device__ float smoothing_kernel(float radius, float dst)
-  // {
-  //   float q = dst / radius;
-  //   if (q > 1.0f)
-  //     return 0.0f;
+  __device__ float viscosity_kernel(float radius, float dst)
+  {
+    float q = dst / radius;
+    if (q > 1.0f)
+      return 0.0f;
 
-  //   const float normalization_factor_2d = 4.0f / (M_PI_F * powf(radius, 8));
+    const float normalization_factor_2d = 4.0f / (M_PI_F * powf(radius, 8));
 
-  //   float value = radius * radius - dst * dst;
-  //   return normalization_factor_2d * value * value * value;
-  // }
-  // // gradient of the smoothing kernel
-  // __device__ float2 smoothing_kernel_gradient(float radius, float2 diff)
-  // {
-  //   float dst2 = length2(diff);
-  //   float dst = sqrtf(dst2);
-  //   float q = dst / radius;
-  //   if (q > 1.0f)
-  //     return make_float2(0.0f, 0.0f);
+    float value = radius * radius - dst * dst;
+    return normalization_factor_2d * value * value * value;
+  }
+  // gradient of the smoothing kernel
+  __device__ float2 viscosity_kernel_gradient(float radius, float2 diff)
+  {
+    float dst2 = length2(diff);
+    float dst = sqrtf(dst2);
+    float q = dst / radius;
+    if (q > 1.0f)
+      return make_float2(0.0f, 0.0f);
 
-  //   const float normalization_factor_2d = 4.0f / (M_PI_F * powf(radius, 8));
+    const float normalization_factor_2d = 4.0f / (M_PI_F * powf(radius, 8));
 
-  //   float value = radius * radius - dst2;
-  //   return -6.0f * normalization_factor_2d * diff * value * value;
-  // }
+    float value = radius * radius - dst2;
+    return -6.0f * normalization_factor_2d * diff * value * value;
+  }
 
-  __host__ __device__ float smoothing_kernel(float radius, float dst)
+  __host__ __device__ float sharp_kernel(float radius, float dst)
   {
     if (dst >= radius)
       return 0;
@@ -86,16 +87,8 @@ namespace p2
     return normalization_factor_2d * value * value;
   }
 
-  __host__ __device__ float2 smoothing_kernel_gradient(float radius, float2 diff)
+  __host__ __device__ float2 sharp_kernel_gradient(float radius, float2 diff)
   {
-    // float dst2 = length2(diff);
-    // float dst = sqrtf(dst2);
-    // if (dst >= radius) return make_float2(0.0f, 0.0f);
-
-    // float normalization_factor_2d = 6.0f / (M_PI_F * powf(radius, 4));
-    // float value = radius - dst;
-    // return -2.0f * normalization_factor_2d * diff * value;
-
     float dst = length(diff);
     float2 grad = make_float2(0.0f, 0.0f);
     if (dst < radius && dst > 1e-5)
@@ -109,7 +102,7 @@ namespace p2
   }
 
   __host__ __device__ float calculate_density_at_pos(float2 pos, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                            int2 particle_grid_dims, float cell_size, float smoothing_radius)
+                                                     int2 particle_grid_dims, float cell_size, float smoothing_radius)
   {
     float density = 0.0f;
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
@@ -139,7 +132,7 @@ namespace p2
           else if (xi == particle_grid_dims.x)
             other_pos.x += particle_grid_dims.x * cell_size;
           float distance = length(pos - other_pos);
-          density += sph.mass[particle_id] * smoothing_kernel(smoothing_radius, distance);
+          density += sph.mass[particle_id] * sharp_kernel(smoothing_radius, distance);
         }
       }
     }
@@ -174,19 +167,20 @@ namespace p2
                                   int2 particle_grid_dims, float cell_size, TunableParams params,
                                   size_t particle_count)
   {
-    size_t i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
-    if (i >= particle_count)
+    size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
+    if (pid >= particle_count)
       return;
 
-    auto pos = sph.pos[i];
-    auto vel = sph.vel[i];
-    auto density = sph.density[i];
+    auto pos = sph.pos[pid];
+    auto vel = sph.vel[pid];
+    auto density = sph.density[pid];
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
     int cell_x = grid_index % particle_grid_dims.x;
     int cell_y = grid_index / particle_grid_dims.x;
 
     float pressure = calculate_pressure(density, params);
     float2 pressure_force = make_float2(0.0f, 0.0f);
+    float2 viscosity_force = make_float2(0.0f, 0.0f);
 
     // iterate through cell neighborhood
     for (int yi = cell_y - 1; yi <= cell_y + 1; yi++)
@@ -214,33 +208,43 @@ namespace p2
           float other_pressure = calculate_pressure(other_density, params);
           float other_mass = sph.mass[particle_id];
           pressure_force = pressure_force - other_mass * ((pressure + other_pressure) / (2.0f * other_density)) *
-                                                smoothing_kernel_gradient(params.smoothing_radius, pos - other_pos);
+                                                sharp_kernel_gradient(params.smoothing_radius, pos - other_pos);
+          
+          // viscosity
+          // TODO: distance is calculated twice. once here and once above.
+          if (particle_id != pid)
+          {
+            float2 diff = sph.vel[particle_id] - vel;
+            float dist = length(pos - other_pos);
+            float influence = viscosity_kernel(params.smoothing_radius, dist);
+            viscosity_force = viscosity_force + influence * diff; // scale with mass?
+          }
         }
       }
     }
 
     // apply pressure force
-    float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
-    sph.vel[i] = vel + acc * params.dt;
+    // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
+    float2 acc = make_float2(0.0f, params.gravity) + (pressure_force + viscosity_force * params.viscosity_strength) / density;
+    sph.vel[pid] = vel + acc * params.dt;
   }
 
-  ParticleFluid::ParticleFluid(float width, float height, const TunableParams& params, bool use_graphics) : 
-  bounds(make_float2(width, height)),
-  params(params)
+  void ParticleFluid::init_grid()
   {
-    if (use_graphics)
-      circle_renderer = std::make_unique<CircleRenderer>();
-
     // configure grid
-    auto smoothing_radius = params.smoothing_radius;
-    int grid_width = std::ceil(width / smoothing_radius);
-    int grid_height = std::ceil(height / smoothing_radius);
+    int grid_width = std::ceil(bounds.x / params.smoothing_radius);
+    int grid_height = std::ceil(bounds.y / params.smoothing_radius);
 
-    grid.reconfigure(grid_width, grid_height, params.max_particles_per_cell); // TODO: want the ability to reconfigure with imgui
+    grid.reconfigure(grid_width, grid_height, params.max_particles_per_cell);
+  }
+
+  void ParticleFluid::init()
+  {
+    init_grid();
     // init some particles
     std::default_random_engine rand;
-    std::uniform_real_distribution<float> dist_x(0.0f, width);
-    std::uniform_real_distribution<float> dist_y(0.0f, height);
+    std::uniform_real_distribution<float> dist_x(0.0f, bounds.x);
+    std::uniform_real_distribution<float> dist_y(0.0f, bounds.y);
 
     // velocity init with gaussian
     std::normal_distribution<float> dist_vel(0.0f, 0.001f);
@@ -248,21 +252,21 @@ namespace p2
     // sym_break, random uint8_t
     std::uniform_int_distribution<int> dist_sym(0, 255);
 
-    // temp: 1000 particles
-    // TODO: make particle count proportional to the grid size
+    int grid_width = std::ceil(bounds.x / params.smoothing_radius);
+    int grid_height = std::ceil(bounds.y / params.smoothing_radius);
     const int NUM_PARTICLES = params.particles_per_cell * grid_width * grid_height;
     particles.resize_all(NUM_PARTICLES);
 
     for (int i = 0; i < NUM_PARTICLES; ++i)
       particles.vel[i] = make_float2(dist_vel(rand), dist_vel(rand));
 
-    for (int i = 0; i < NUM_PARTICLES; ++i) {
+    for (int i = 0; i < NUM_PARTICLES; ++i)
+    {
       auto pos = make_float2(dist_x(rand), dist_y(rand));
       auto vel = particles.vel[i];
-      particles.pos[i] = pos + vel * (1/120.0f); // TODO: pull out constant
+      particles.pos[i] = pos + vel * params.dt_predict;
       particles.ppos[i] = pos;
     }
-      
 
     // density is already defaulted to 0, mass to 1
     for (int i = 0; i < NUM_PARTICLES; ++i)
@@ -273,7 +277,56 @@ namespace p2
     grid_device.copy_from_host(grid);
   }
 
-  __global__ void move_particles(SPHPtrs sph, float dt, size_t num_particles, float2 bounds, float damping)
+  ParticleFluid::ParticleFluid(float width, float height, const TunableParams &params, bool use_graphics) : bounds(make_float2(width, height)),
+                                                                                                            params(params)
+  {
+    if (use_graphics)
+      circle_renderer = std::make_unique<CircleRenderer>();
+
+    init();
+  }
+
+  ParticleFluid::ParticleFluid(float width, float height, bool use_graphics) : ParticleFluid(width, height, TunableParams{}, use_graphics)
+  {
+    load_params();
+  }
+
+  void ParticleFluid::load_params()
+  {
+    if (pm == nullptr)
+      pm = std::make_unique<ParameterManager>("fluid2_params.txt");
+    pm->get<float>("dt", params.dt);
+    pm->get<float>("dt_predict", params.dt_predict);
+    pm->get<float>("gravity", params.gravity);
+    pm->get<float>("collision_damping", params.collision_damping);
+    pm->get<float>("smoothing_radius", params.smoothing_radius);
+    pm->get<float>("target_density", params.target_density);
+    pm->get<float>("pressure_mult", params.pressure_mult);
+    pm->get<float>("near_pressure_mult", params.near_pressure_mult);
+    pm->get<float>("viscosity_strength", params.viscosity_strength);
+    pm->get<int>("particles_per_cell", params.particles_per_cell);
+    pm->get<int>("max_particles_per_cell", params.max_particles_per_cell);
+  }
+
+  void ParticleFluid::save_params()
+  {
+    if (pm == nullptr)
+      return;
+    pm->set<float>("dt", params.dt);
+    pm->set<float>("dt_predict", params.dt_predict);
+    pm->set<float>("gravity", params.gravity);
+    pm->set<float>("collision_damping", params.collision_damping);
+    pm->set<float>("smoothing_radius", params.smoothing_radius);
+    pm->set<float>("target_density", params.target_density);
+    pm->set<float>("pressure_mult", params.pressure_mult);
+    pm->set<float>("near_pressure_mult", params.near_pressure_mult);
+    pm->set<float>("viscosity_strength", params.viscosity_strength);
+    pm->set<int>("particles_per_cell", params.particles_per_cell);
+    pm->set<int>("max_particles_per_cell", params.max_particles_per_cell);
+    pm->save();
+  }
+
+  __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t num_particles, float2 bounds, float damping)
   {
     size_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= num_particles)
@@ -283,9 +336,7 @@ namespace p2
     // use previous position to calculate new position
     float2 new_pos = sph.ppos[i] + vel * dt;
     // wrap around
-    if (new_pos.x < 0.0f)
-      new_pos.x += bounds.x;
-    new_pos.x = fmodf(new_pos.x, bounds.x);
+    new_pos.x = fmodf(new_pos.x + bounds.x, bounds.x);
 
     // reflect y over bounds
     if (new_pos.y < 0.0f)
@@ -299,7 +350,7 @@ namespace p2
       sph.vel[i].y = -vel.y * damping;
     }
 
-    float2 new_pos2 = new_pos + vel * (1/120.0f); // TODO: pull out constant
+    float2 new_pos2 = new_pos + vel * dt_predict; // TODO: pull out constant
     // wrap around
     if (new_pos2.x < 0.0f)
       new_pos2.x += bounds.x;
@@ -357,7 +408,8 @@ namespace p2
     check_cuda("calculate_accel");
 
     // move particles
-    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, num_particles, bounds, params.collision_damping);
+    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict,
+                                                num_particles, bounds, params.collision_damping);
     check_cuda("move_particles");
   }
 
@@ -381,9 +433,37 @@ namespace p2
 
   void ParticleFluid::render(const glm::mat4 &transform)
   {
-    // early return if we don't hvae a renderer
+    // early return if we don't have a renderer
     if (!circle_renderer)
       return;
+
+    // imgui
+    if (pm)
+    {
+      // TODO: need to reconfigure when some of this changes
+      ImGui::Begin("Particle Fluid");
+      ImGui::SliderFloat("dt", &params.dt, 0.0f, 0.1f);
+      ImGui::SliderFloat("dt_predict", &params.dt_predict, 0.0f, 0.1f);
+      ImGui::SliderFloat("gravity", &params.gravity, -30.0f, 0.0f);
+      ImGui::SliderFloat("collision_damping", &params.collision_damping, 0.0f, 1.0f);
+      if (ImGui::SliderFloat("smoothing_radius", &params.smoothing_radius, 0.001f, 0.5f))
+        init_grid(); 
+      ImGui::SliderFloat("target_density", &params.target_density, 0.0f, 400.0f);
+      ImGui::SliderFloat("pressure_mult", &params.pressure_mult, 0.0f, 400.0f);
+      ImGui::SliderFloat("near_pressure_mult", &params.near_pressure_mult, 0.0f, 100.0f);
+      ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 1.0f);
+      if (ImGui::SliderInt("particles_per_cell", &params.particles_per_cell, 1, 32))
+        init();
+      if (ImGui::SliderInt("max_particles_per_cell", &params.max_particles_per_cell, 1, 1024))
+        init();
+      if (ImGui::Button("Save"))
+        save_params();
+      if (ImGui::Button("Load"))
+        load_params();
+      if (ImGui::Button("Reset Simulation"))
+        init();
+      ImGui::End();
+    }
 
     circle_renderer->set_transform(transform);
 
@@ -431,17 +511,22 @@ namespace p2
     // normalize density
     density = density / max_density;
 
-    if (num_particles > max_particles_per_cell) {
+    if (num_particles > max_particles_per_cell)
+    {
       // red if too many particles per cell
       texture_data[i * 4] = 255;
       texture_data[i * 4 + 1] = 0;
       texture_data[i * 4 + 2] = 0;
-    } else if (density > 1.0f) {
+    }
+    else if (density > 1.0f)
+    {
       // blue if density over max
       texture_data[i * 4] = 0;
       texture_data[i * 4 + 1] = 0;
       texture_data[i * 4 + 2] = 255;
-    } else {
+    }
+    else
+    {
       // normal, grayscale rendering
       texture_data[i * 4] = 255 * density;
       texture_data[i * 4 + 1] = 255 * density;

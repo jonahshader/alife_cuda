@@ -1,3 +1,5 @@
+#pragma once
+
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -54,11 +56,11 @@ public:
   }
 
   template <typename T>
-  void get_param(const std::string &param_name, T &value)
+  void get(const std::string &param_name, T &value)
   {
     if (params.find(param_name) == params.end())
     {
-      set_param(param_name, value);
+      set(param_name, value);
       return;
     }
 
@@ -70,11 +72,11 @@ public:
   }
 
   template <typename T>
-  void get_param(const std::string &param_name, std::vector<T> &value)
+  void get(const std::string &param_name, std::vector<T> &value)
   {
     if (params.find(param_name) == params.end())
     {
-      set_param(param_name, value);
+      set(param_name, value);
       return;
     }
 
@@ -97,7 +99,7 @@ public:
   }
 
   template <typename T>
-  void set_param(const std::string &param_name, const T &value)
+  void set(const std::string &param_name, const T &value)
   {
     std::ostringstream oss;
     oss << value;
@@ -105,7 +107,7 @@ public:
   }
 
   template <typename T>
-  void set_param(const std::string &param_name, const std::vector<T> &value)
+  void set(const std::string &param_name, const std::vector<T> &value)
   {
     std::ostringstream oss;
     for (size_t i = 0; i < value.size(); ++i)
@@ -117,7 +119,7 @@ public:
     params[param_name] = oss.str();
   }
 
-  void save_params()
+  void save()
   {
     std::ofstream file(filename);
     if (!file)
