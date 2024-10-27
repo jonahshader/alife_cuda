@@ -102,17 +102,20 @@ namespace p2
   }
 
   __host__ __device__ float calculate_density_at_pos(float2 pos, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                                     int2 particle_grid_dims, float cell_size, float smoothing_radius)
+                                                     int2 particle_grid_dims, float cell_size, float smoothing_radius, float2 bounds)
   {
     float density = 0.0f;
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
     int cell_x = grid_index % particle_grid_dims.x;
     int cell_y = grid_index / particle_grid_dims.x;
 
+    int xi_neg_dist = cell_x == 0 ? 2 : 1;
+    int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
+
     // iterate through cell neighborhood
     for (int yi = cell_y - 1; yi <= cell_y + 1; yi++)
     {
-      for (int xi = cell_x - 1; xi <= cell_x + 1; xi++)
+      for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) // TEMP
       {
         // skip if cell is out of vertical bounds
         if (yi < 0 || yi >= particle_grid_dims.y)
@@ -127,10 +130,10 @@ namespace p2
         {
           int particle_id = grid.grid_indices[neighbour_index * max_particles_per_cell + i];
           float2 other_pos = sph.pos[particle_id];
-          if (xi == -1) // wrap around
-            other_pos.x -= particle_grid_dims.x * cell_size;
-          else if (xi == particle_grid_dims.x)
-            other_pos.x += particle_grid_dims.x * cell_size;
+          if (xi < 0) // wrap around
+            other_pos.x -= bounds.x;
+          else if (xi >= particle_grid_dims.x)
+            other_pos.x += bounds.x;
           float distance = length(pos - other_pos);
           density += sph.mass[particle_id] * sharp_kernel(smoothing_radius, distance);
         }
@@ -141,14 +144,15 @@ namespace p2
   }
 
   __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                             int2 particle_grid_dims, float cell_size, float smoothing_radius, size_t num_particles)
+                                             int2 particle_grid_dims, float cell_size, float smoothing_radius, 
+                                             size_t num_particles, float2 bounds)
   {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= num_particles)
       return;
 
     sph.density[i] = calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell,
-                                              particle_grid_dims, cell_size, smoothing_radius);
+                                              particle_grid_dims, cell_size, smoothing_radius, bounds);
   }
 
   __host__ __device__ float calculate_pressure(float density, const TunableParams &params)
@@ -165,7 +169,7 @@ namespace p2
 
   __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
                                   int2 particle_grid_dims, float cell_size, TunableParams params,
-                                  size_t particle_count)
+                                  size_t particle_count, float2 bounds)
   {
     size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
     if (pid >= particle_count)
@@ -182,10 +186,13 @@ namespace p2
     float2 pressure_force = make_float2(0.0f, 0.0f);
     float2 viscosity_force = make_float2(0.0f, 0.0f);
 
+    int xi_neg_dist = cell_x == 0 ? 2 : 1;
+    int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
+
     // iterate through cell neighborhood
     for (int yi = cell_y - 1; yi <= cell_y + 1; yi++)
     {
-      for (int xi = cell_x - 1; xi <= cell_x + 1; xi++)
+      for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++)
       {
         // skip if cell is out of vertical bounds
         if (yi < 0 || yi >= particle_grid_dims.y)
@@ -200,10 +207,10 @@ namespace p2
         {
           int particle_id = grid.grid_indices[neighbour_index * max_particles_per_cell + i];
           float2 other_pos = sph.pos[particle_id];
-          if (xi == -1) // wrap around
-            other_pos.x -= particle_grid_dims.x * cell_size;
-          else if (xi == particle_grid_dims.x)
-            other_pos.x += particle_grid_dims.x * cell_size;
+          if (xi < 0) // wrap around
+            other_pos.x -= bounds.x;
+          else if (xi >= particle_grid_dims.x)
+            other_pos.x += bounds.x;
           float other_density = sph.density[particle_id];
           float other_pressure = calculate_pressure(other_density, params);
           float other_mass = sph.mass[particle_id];
@@ -350,11 +357,9 @@ namespace p2
       sph.vel[i].y = -vel.y * damping;
     }
 
-    float2 new_pos2 = new_pos + vel * dt_predict; // TODO: pull out constant
+    float2 new_pos2 = new_pos + vel * dt_predict;
     // wrap around
-    if (new_pos2.x < 0.0f)
-      new_pos2.x += bounds.x;
-    new_pos2.x = fmodf(new_pos2.x, bounds.x);
+    new_pos2.x = fmodf(new_pos2.x + bounds.x, bounds.x);
 
     // reflect y over bounds. don't manipulate vel here
     if (new_pos2.y < 0.0f)
@@ -399,12 +404,13 @@ namespace p2
 
     // calculate density
     calculate_particle_density<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-                                                            grid_dims, cell_size, params.smoothing_radius, num_particles);
+                                                            grid_dims, cell_size, params.smoothing_radius, 
+                                                            num_particles, bounds);
     check_cuda("calculate_particle_density");
 
     // calculate acceleration
     calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-                                                 grid_dims, cell_size, params, num_particles);
+                                                 grid_dims, cell_size, params, num_particles, bounds);
     check_cuda("calculate_accel");
 
     // move particles
@@ -502,7 +508,7 @@ namespace p2
     float2 pos = make_float2(cell_x * sample_interval, cell_y * sample_interval);
     float density = calculate_density_at_pos(
         pos, sph, grid, max_particles_per_cell,
-        particle_grid_dims, cell_size, smoothing_radius);
+        particle_grid_dims, cell_size, smoothing_radius, bounds);
 
     // determine particles per cell
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
