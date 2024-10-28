@@ -154,8 +154,6 @@ void TreeTest::render(float dt) {
     bold.end();
 
     bold.render();
-
-    SDL_GL_SwapWindow(game.getResources().window);
 }
 
 void TreeTest::resize(int width, int height) {

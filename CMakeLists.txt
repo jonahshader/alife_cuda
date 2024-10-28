@@ -72,6 +72,31 @@ if(NOT fastnoiselite_POPULATED)
   FetchContent_Populate(fastnoiselite)
 endif()
 
+# Dear ImGui
+FetchContent_Declare(
+  imgui
+  GIT_REPOSITORY https://github.com/ocornut/imgui.git
+  GIT_TAG v1.91.2
+)
+FetchContent_GetProperties(imgui)
+if(NOT imgui_POPULATED)
+  FetchContent_Populate(imgui)
+  add_library(imgui STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_demo.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
+    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+  )
+  target_include_directories(imgui PUBLIC 
+    ${imgui_SOURCE_DIR} 
+    ${imgui_SOURCE_DIR}/backends
+  )
+  target_link_libraries(imgui PRIVATE SDL2::SDL2)
+endif()
+
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -83,17 +108,26 @@ add_executable(alife_cuda src/main.cu
         src/graphics/Shader.h
         src/graphics/renderers/LineRenderer.cu
         src/graphics/renderers/LineRenderer.cuh
-        src/graphics/renderers/CircleRenderer.cpp
-        src/graphics/renderers/CircleRenderer.h
+        src/graphics/renderers/CircleRenderer.cu
+        src/graphics/renderers/CircleRenderer.cuh
         src/graphics/renderers/FontRenderer.cpp
         src/graphics/renderers/FontRenderer.h
         src/graphics/renderers/RectRenderer.cu
         src/graphics/renderers/RectRenderer.cuh
+        src/graphics/renderers/RectTexRenderer.cu
+        src/graphics/renderers/RectTexRenderer.cuh
+        src/systems/ParameterManager.h
         src/systems/Game.cu
         src/systems/Game.cuh
         src/systems/Screen.h
+        src/systems/DefaultScreen.cuh
+        src/systems/DefaultScreen.cu
         src/systems/Resources.cu
         src/systems/Resources.cuh
+        src/systems/CustomMath.cu
+        src/systems/CustomMath.cuh
+        src/systems/Kernels.cu
+        src/systems/Kernels.cuh
         src/spatial_sort.cu
         src/spatial_sort.cuh
         src/screens/TreeTest.cu
@@ -102,8 +136,16 @@ add_executable(alife_cuda src/main.cu
         src/systems/Trees.cuh
         src/systems/Fluid.cu
         src/systems/Fluid.cuh
+        src/systems/ParticleFluid.cuh
+        src/systems/ParticleFluid.cu
+        src/systems/ParticleFluid2.cuh
+        src/systems/ParticleFluid2.cu
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
+        src/screens/FluidTest2.cu
+        src/screens/FluidTest2.cuh
+        src/screens/TexCUDATest.cu
+        src/screens/TexCUDATest.cuh
         src/systems/TreeTypes.cuh
         src/systems/ui/Container.cu
         src/systems/ui/Container.cuh
@@ -114,6 +156,7 @@ add_executable(alife_cuda src/main.cu
         src/systems/Soil.cu
         src/systems/Soil.cuh
         src/systems/SoAHelper.h
+        src/systems/float2_ops.cuh
         src/screens/SoilTest.cu
         src/screens/SoilTest.cuh
         src/systems/terrain/FractalNoise.cu
@@ -127,9 +170,6 @@ set_target_properties(alife_cuda PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON
 )
 
-# Add src directory to include path
-# target_include_directories(alife_cuda PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
 # Link libraries
 target_link_libraries(alife_cuda PRIVATE
         SDL2::SDL2
@@ -137,6 +177,7 @@ target_link_libraries(alife_cuda PRIVATE
         glm::glm
         artery_font
         OpenMP::OpenMP_CXX
+        imgui
 )
 
 # Include headers
@@ -145,6 +186,8 @@ target_include_directories(alife_cuda PRIVATE
         ${glad_SOURCE_DIR}/include
         ${lodepng_SOURCE_DIR}
         ${fastnoiselite_SOURCE_DIR}/Cpp
+        ${imgui_SOURCE_DIR}
+        ${imgui_SOURCE_DIR}/backends
 )
 
 # Platform-specific configurations

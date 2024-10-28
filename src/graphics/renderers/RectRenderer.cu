@@ -7,7 +7,7 @@
 
 
 RectRenderer::RectRenderer() : shader("shaders/rect.vert", "shaders/rect.frag")  {
-    float baseMesh[] = {
+    float base_mesh[] = {
             // t1
             -0.5f, -0.5f, // bottom left
             0.5f, -0.5f,  // bottom right
@@ -18,6 +18,8 @@ RectRenderer::RectRenderer() : shader("shaders/rect.vert", "shaders/rect.frag") 
             -0.5f, -0.5f,
     };
 
+
+
     // create vao, buffers
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo_data);
@@ -25,7 +27,7 @@ RectRenderer::RectRenderer() : shader("shaders/rect.vert", "shaders/rect.frag") 
 
     // buffer baseMesh
     glBindBuffer(GL_ARRAY_BUFFER, vbo_base_mesh);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(baseMesh), baseMesh, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(base_mesh), base_mesh, GL_STATIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
     glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_STATIC_DRAW); // TODO: eval GL_DYNAMIC_DRAW
 
@@ -75,7 +77,6 @@ void RectRenderer::end() {
         std::cout << "Doubled RectRenderer buffer size from " << buffer_size / 2 << " to " << buffer_size << std::endl;
     }
     glBufferSubData(GL_ARRAY_BUFFER, 0, data_bytes, data.data());
-
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
