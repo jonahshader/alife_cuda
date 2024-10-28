@@ -77,7 +77,7 @@ namespace p2
     return -6.0f * normalization_factor_2d * diff * value * value;
   }
 
-  __host__ __device__ float sharp_kernel(float radius, float dst)
+  __host__ __device__ float density_kernel(float radius, float dst)
   {
     if (dst >= radius)
       return 0;
@@ -87,7 +87,7 @@ namespace p2
     return normalization_factor_2d * value * value;
   }
 
-  __host__ __device__ float2 sharp_kernel_gradient(float radius, float2 diff)
+  __host__ __device__ float2 density_kernel_gradient(float radius, float2 diff)
   {
     float dst = length(diff);
     float2 grad = make_float2(0.0f, 0.0f);
@@ -101,10 +101,35 @@ namespace p2
     return grad;
   }
 
-  __host__ __device__ float calculate_density_at_pos(float2 pos, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
+  __host__ __device__ float near_density_kernel(float radius, float dst)
+  {
+    if (dst >= radius)
+      return 0;
+
+    float normalization_factor_2d = 20.0f / (M_PI_F * powf(radius, 5));
+    float value = radius - dst;
+    return normalization_factor_2d * value * value * value;
+  }
+
+  __host__ __device__ float2 near_density_kernel_gradient(float radius, float2 diff)
+  {
+    float dst = length(diff);
+    float2 grad = make_float2(0.0f, 0.0f);
+    if (dst < radius && dst > 1e-5)
+    {
+      float normalization_factor_2d = 20.0f / (M_PI_F * powf(radius, 5));
+      float value = radius - dst;
+      grad = -3.0f * normalization_factor_2d * diff * value * value / dst;
+    }
+
+    return grad;
+  }
+
+  __host__ __device__ float2 calculate_density_at_pos(float2 pos, SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
                                                      int2 particle_grid_dims, float cell_size, float smoothing_radius, float2 bounds)
   {
     float density = 0.0f;
+    float near_density = 0.0f;
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
     int cell_x = grid_index % particle_grid_dims.x;
     int cell_y = grid_index / particle_grid_dims.x;
@@ -135,12 +160,13 @@ namespace p2
           else if (xi >= particle_grid_dims.x)
             other_pos.x += bounds.x;
           float distance = length(pos - other_pos);
-          density += sph.mass[particle_id] * sharp_kernel(smoothing_radius, distance);
+          density += sph.mass[particle_id] * density_kernel(smoothing_radius, distance);
+          near_density += sph.mass[particle_id] * near_density_kernel(smoothing_radius, distance);
         }
       }
     }
 
-    return density;
+    return make_float2(density, near_density);
   }
 
   __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
@@ -150,15 +176,21 @@ namespace p2
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= num_particles)
       return;
-
-    sph.density[i] = calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell,
+    float2 density = calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell,
                                               particle_grid_dims, cell_size, smoothing_radius, bounds);
+    sph.density[i] = density.x;
+    sph.near_density[i] = density.y;
   }
 
   __host__ __device__ float calculate_pressure(float density, const TunableParams &params)
   {
     // TODO: this mostly describes gas, not liquid. better options might exist.
     return params.pressure_mult * (density - params.target_density);
+  }
+
+  __host__ __device__ float calculate_near_pressure(float near_density, const TunableParams &params)
+  {
+    return params.near_pressure_mult * near_density;
   }
 
   __host__ __device__ float2 sym_break_to_dir(uint8_t sym_break)
@@ -178,11 +210,13 @@ namespace p2
     auto pos = sph.pos[pid];
     auto vel = sph.vel[pid];
     auto density = sph.density[pid];
+    auto near_density = sph.near_density[pid];
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
     int cell_x = grid_index % particle_grid_dims.x;
     int cell_y = grid_index / particle_grid_dims.x;
 
     float pressure = calculate_pressure(density, params);
+    float near_pressure = calculate_near_pressure(near_density, params);
     float2 pressure_force = make_float2(0.0f, 0.0f);
     float2 viscosity_force = make_float2(0.0f, 0.0f);
 
@@ -212,10 +246,12 @@ namespace p2
           else if (xi >= particle_grid_dims.x)
             other_pos.x += bounds.x;
           float other_density = sph.density[particle_id];
+          float other_near_density = sph.near_density[particle_id];
           float other_pressure = calculate_pressure(other_density, params);
+          float other_near_pressure = calculate_near_pressure(other_near_density, params);
           float other_mass = sph.mass[particle_id];
-          pressure_force = pressure_force - other_mass * ((pressure + other_pressure) / (2.0f * other_density)) *
-                                                sharp_kernel_gradient(params.smoothing_radius, pos - other_pos);
+          pressure_force = pressure_force - other_mass * ((pressure + other_pressure + near_pressure + other_near_pressure) / (4.0f * other_density)) *
+                                                density_kernel_gradient(params.smoothing_radius, pos - other_pos);
           
           // viscosity
           // TODO: distance is calculated twice. once here and once above.
@@ -234,6 +270,51 @@ namespace p2
     // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
     float2 acc = make_float2(0.0f, params.gravity) + (pressure_force + viscosity_force * params.viscosity_strength) / density;
     sph.vel[pid] = vel + acc * params.dt;
+  }
+
+  __host__ __device__ void attract_particles_at_pos(float2 pos, float max_thrust, float radius, SPHPtrs sph,
+                                                    ParticleGridPtrs grid, int max_ppc, int2 p_grid_dims, 
+                                                    float c_size, float2 bounds)
+  {
+    int grid_index = particle_to_cid(pos, p_grid_dims.x, c_size);
+    int cell_x = grid_index % p_grid_dims.x;
+    int cell_y = grid_index / p_grid_dims.x;
+
+    int xi_neg_dist = cell_x == 0 ? 2 : 1;
+    int xi_pos_dist = cell_x >= p_grid_dims.x - 2 ? 2 : 1;
+
+    // iterate through cell neighborhood
+    for (int yi = cell_y - 1; yi <= cell_y + 1; yi++)
+    {
+      for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++)
+      {
+        // skip if cell is out of vertical bounds
+        if (yi < 0 || yi >= p_grid_dims.y)
+          continue;
+        // wrap x if out of horizontal bounds
+        int wrapped_x = (xi + p_grid_dims.x) % p_grid_dims.x;
+
+        int neighbour_index = yi * p_grid_dims.x + wrapped_x;
+        int num_particles = min(grid.particles_per_cell[neighbour_index], max_ppc);
+        // iterate through particles within the cell
+        for (int i = 0; i < num_particles; i++)
+        {
+          int particle_id = grid.grid_indices[neighbour_index * max_ppc + i];
+          float2 other_pos = sph.pos[particle_id];
+          float2 other_vel = sph.vel[particle_id];
+          if (xi < 0) // wrap around
+            other_pos.x -= bounds.x;
+          else if (xi >= p_grid_dims.x)
+            other_pos.x += bounds.x;
+          float distance = length(pos - other_pos);
+          if (distance < radius)
+          {
+            float2 dir = normalize(pos - other_pos);
+            sph.vel[particle_id] = other_vel + dir * max_thrust;
+          }
+        }
+      }
+    }
   }
 
   void ParticleFluid::init_grid()
@@ -508,7 +589,7 @@ namespace p2
     float2 pos = make_float2(cell_x * sample_interval, cell_y * sample_interval);
     float density = calculate_density_at_pos(
         pos, sph, grid, max_particles_per_cell,
-        particle_grid_dims, cell_size, smoothing_radius, bounds);
+        particle_grid_dims, cell_size, smoothing_radius, bounds).x; // TODO: also report near density
 
     // determine particles per cell
     int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);

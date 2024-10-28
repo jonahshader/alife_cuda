@@ -17,6 +17,7 @@
   D(float2, acc, make_float2(0, 0))  \
   D(float, mass, 1)                  \
   D(float, density, 0)               \
+  D(float, near_density, 0)          \
   D(uint8_t, sym_break, 0)
 
 namespace p2
