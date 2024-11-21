@@ -165,7 +165,7 @@ void TreeTest::hide() {
 
 }
 
-void TreeTest::handleInput(SDL_Event event) {
+bool TreeTest::handleInput(SDL_Event event) {
     if (event.type == SDL_KEYDOWN) {
         if (event.key.keysym.sym == SDLK_ESCAPE) {
             game.stopGame();
@@ -197,4 +197,6 @@ void TreeTest::handleInput(SDL_Event event) {
             vp.handle_pan(event.motion.xrel, event.motion.yrel);
         }
     }
+
+    return true;
 }

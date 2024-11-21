@@ -107,6 +107,8 @@ namespace p2
 
     void calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width, int height, float max_density);
 
+    void attract(float2 pos, float max_thrust, float radius);
+
   private:
     float2 bounds;
     TunableParams params;

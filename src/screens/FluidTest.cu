@@ -68,6 +68,6 @@ void FluidTest::hide() {
 
 }
 
-void FluidTest::handleInput(SDL_Event event) {
-
+bool FluidTest::handleInput(SDL_Event event) {
+    return false;
 }

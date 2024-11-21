@@ -111,7 +111,7 @@ void TexCUDATest::resize(int width, int height)
   hud_vp.update(width, height);
 }
 
-void TexCUDATest::handleInput(SDL_Event event)
+bool TexCUDATest::handleInput(SDL_Event event)
 {
   if (event.type == SDL_KEYDOWN)
   {
@@ -135,4 +135,6 @@ void TexCUDATest::handleInput(SDL_Event event)
       vp.handle_pan(event.motion.xrel, event.motion.yrel);
     }
   }
+
+  return true;
 }

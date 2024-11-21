@@ -17,6 +17,7 @@ public:
   explicit FluidTest2(Game &game);
 
   void render(float dt) override;
+  bool handleInput(SDL_Event event) override;
 
 private:
   const int pixels_per_meter{100};
@@ -28,4 +29,6 @@ private:
   RectTexRenderer density_renderer{tex_size.x, tex_size.y, 4};
   // thrust::device_vector<float> density_data;
   thrust::device_vector<unsigned char> density_texture_data;
+  bool grabbing{false};
+  int2 mouse_pos{0, 0};
 };

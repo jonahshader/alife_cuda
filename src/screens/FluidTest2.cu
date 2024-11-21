@@ -25,6 +25,34 @@ FluidTest2::FluidTest2(Game &game) : DefaultScreen(game),
 {
 }
 
+bool FluidTest2::handleInput(SDL_Event event)
+{
+  if (DefaultScreen::handleInput(event))
+    return true;
+
+  if (event.type == SDL_MOUSEBUTTONDOWN)
+  {
+    if (event.button.button == SDL_BUTTON_LEFT)
+    {
+      grabbing = true;
+      return true;
+    }
+  } else if (event.type == SDL_MOUSEBUTTONUP)
+  {
+    if (event.button.button == SDL_BUTTON_LEFT)
+    {
+      grabbing = false;
+      return true;
+    }
+  } else if (event.type == SDL_MOUSEMOTION)
+  {
+    mouse_pos = {event.motion.x, event.motion.y};
+    return true;
+  }
+
+  return false;
+}
+
 // __global__ void density_to_texture(float *density_data, unsigned char *density_texture_data, int size, float max_density)
 
 void check_cuda(const std::string &msg)
@@ -40,6 +68,11 @@ void FluidTest2::render(float _dt)
 {
   render_start();
   fluid.update();
+  if (grabbing)
+  {
+    const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
+    fluid.attract({world_coords.x, world_coords.y}, 0.5f, 0.5f);
+  }
   // TODO: calculate expected max_density from particles per cell
   fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
 

@@ -15,7 +15,7 @@ public:
     explicit SoilTest(Game &game);
 
     void render(float dt) override;
-    void handleInput(SDL_Event event) override;
+    bool handleInput(SDL_Event event) override;
 
 private:
     SoilSystem soil;

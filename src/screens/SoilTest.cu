@@ -21,7 +21,7 @@ void SoilTest::render(float dt)
 {
     render_start();
 
-    static float fluid_dt = 1/60.0f;
+    static float fluid_dt = 1 / 60.0f;
     ImGui::Begin("Particle Fluid");
     ImGui::Checkbox("Running", &running);
     ImGui::SliderFloat("Fluid Frequency", &fluid_dt, 0.0001f, 0.1f, "%.4f", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
@@ -38,14 +38,15 @@ void SoilTest::render(float dt)
     render_end();
 }
 
-void SoilTest::handleInput(SDL_Event event)
+bool SoilTest::handleInput(SDL_Event event)
 {
-    DefaultScreen::handleInput(event);
+    if (DefaultScreen::handleInput(event))
+        return true;
     switch (event.type)
     {
     case SDL_MOUSEMOTION:
     {
-        if (event.motion.state & SDL_BUTTON_RMASK)
+        if (event.motion.state & SDL_BUTTON_LMASK)
         {
             // get mouse x y, project to world
             const auto world_coords = vp.unproject({event.motion.x, event.motion.y});
@@ -65,4 +66,6 @@ void SoilTest::handleInput(SDL_Event event)
     default:
         break;
     }
+
+    return false;
 }

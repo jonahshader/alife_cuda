@@ -29,7 +29,7 @@ void DefaultScreen::hide()
 {
 }
 
-void DefaultScreen::handleInput(SDL_Event event)
+bool DefaultScreen::handleInput(SDL_Event event)
 {
   if (event.type == SDL_KEYDOWN)
   {
@@ -37,7 +37,7 @@ void DefaultScreen::handleInput(SDL_Event event)
     {
     case SDLK_ESCAPE:
       game.stopGame();
-      break;
+      return true;
     default:
       break;
     }
@@ -45,14 +45,18 @@ void DefaultScreen::handleInput(SDL_Event event)
   else if (event.type == SDL_MOUSEWHEEL)
   {
     vp.handle_scroll(event.wheel.y);
+    return true;
   }
   else if (event.type == SDL_MOUSEMOTION)
   {
-    if (event.motion.state & SDL_BUTTON_LMASK)
+    if (event.motion.state & (SDL_BUTTON_RMASK | SDL_BUTTON_MMASK))
     {
       vp.handle_pan(event.motion.xrel, event.motion.yrel);
+      return true;
     }
   }
+
+  return false;
 }
 
 void DefaultScreen::render_start()

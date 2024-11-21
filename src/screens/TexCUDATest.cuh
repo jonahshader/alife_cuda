@@ -5,6 +5,7 @@
 #include "graphics/ExtendViewport.h"
 #include "graphics/renderers/RectTexRenderer.cuh"
 
+// TODO: should use DefaultScreen instead of Screen
 class TexCUDATest : public Screen {
 public:
     explicit TexCUDATest(Game &game);
@@ -13,7 +14,7 @@ public:
     void render(float dt) override;
     void resize(int width, int height) override;
     void hide() override;
-    void handleInput(SDL_Event event) override;
+    bool handleInput(SDL_Event event) override;
 
 private:
     Game& game;

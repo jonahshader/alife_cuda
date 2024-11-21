@@ -16,7 +16,7 @@ public:
   virtual void render(float dt) override;
   virtual void resize(int width, int height) override;
   virtual void hide() override;
-  virtual void handleInput(SDL_Event event) override;
+  virtual bool handleInput(SDL_Event event) override;
 
 protected:
   Game &game;
