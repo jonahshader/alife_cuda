@@ -23,7 +23,7 @@ private:
   const float soil_size = 0.4; // TODO: this should be 2x particle radius
   const int pixels_per_meter{100};
 
-  const float2 bounds{10.0f, 10.0f};
+  const float2 bounds{32.0f, 16.0f};
   const int2 tex_size{(int)std::round(bounds.x * pixels_per_meter),
                       (int)std::round(bounds.y *pixels_per_meter)};
 

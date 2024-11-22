@@ -22,6 +22,7 @@ RectRenderer::RectRenderer() : shader("shaders/rect.vert", "shaders/rect.frag") 
       -0.5f,
   };
 
+
   // create vao, buffers
   glGenVertexArrays(1, &vao);
   glGenBuffers(1, &vbo_data);

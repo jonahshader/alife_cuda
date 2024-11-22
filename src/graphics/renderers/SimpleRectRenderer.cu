@@ -4,22 +4,40 @@
 
 #include <cuda_gl_interop.h>
 
-SimpleRectRenderer::SimpleRectRenderer() : shader("shaders/rect_simple.vert", "shaders/rect_simple.frag") {
+SimpleRectRenderer::SimpleRectRenderer()
+    : shader("shaders/rect_simple.vert", "shaders/rect_simple.frag") {
+  // float base_mesh[] = {
+  //     // t1
+  //     -0.5f,
+  //     -0.5f, // bottom left
+  //     0.5f,
+  //     -0.5f, // bottom right
+  //     0.5f,
+  //     0.5f, // top right
+  //     // t2
+  //     0.5f,
+  //     0.5f,
+  //     -0.5f,
+  //     0.5f,
+  //     -0.5f,
+  //     -0.5f,
+  // };
+
   float base_mesh[] = {
       // t1
-      -0.5f,
-      -0.5f, // bottom left
-      0.5f,
-      -0.5f, // bottom right
-      0.5f,
-      0.5f, // top right
+      0.0f,
+      0.0f, // bottom left
+      1.0f,
+      0.0f, // bottom right
+      1.0f,
+      1.0f, // top right
       // t2
-      0.5f,
-      0.5f,
-      -0.5f,
-      0.5f,
-      -0.5f,
-      -0.5f,
+      1.0f,
+      1.0f,
+      0.0f,
+      1.0f,
+      0.0f,
+      0.0f,
   };
 
   // create vao, buffers
@@ -79,8 +97,7 @@ void SimpleRectRenderer::end() {
   glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-void SimpleRectRenderer::add_rect(float x, float y, float width, float height,
-                            glm::vec4 color) {
+void SimpleRectRenderer::add_rect(float x, float y, float width, float height, glm::vec4 color) {
   data.emplace_back(x);
   data.emplace_back(y);
   data.emplace_back(width);

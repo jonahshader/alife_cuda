@@ -389,18 +389,17 @@ __global__ void copy_take_back_kernel(SoilPtrs read, SoilPtrs write, uint width,
   copy_take_back(read, write, width, height, dt, x, y);
 }
 
-__host__ __device__ inline void add_rect(float x, float y, float width, float height, float radius,
+__host__ __device__ inline void add_rect(float x, float y, float width, float height,
                                          glm::vec4 color, float *vbo, size_t i) {
-  const auto s = i * RectRenderer::FLOATS_PER_RECT;
+  const auto s = i * SimpleRectRenderer::FLOATS_PER_RECT;
   vbo[s + 0] = x;
   vbo[s + 1] = y;
   vbo[s + 2] = width;
   vbo[s + 3] = height;
-  vbo[s + 4] = radius;
-  vbo[s + 5] = color.r;
-  vbo[s + 6] = color.g;
-  vbo[s + 7] = color.b;
-  vbo[s + 8] = color.a;
+  vbo[s + 4] = color.r;
+  vbo[s + 5] = color.g;
+  vbo[s + 6] = color.b;
+  vbo[s + 7] = color.a;
 }
 
 __global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, float cell_size,
@@ -434,15 +433,15 @@ __global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, float 
 
   const auto x = i % width;
   const auto y = i / width;
-  add_rect(x * cell_size + cell_size / 2, y * cell_size + cell_size / 2, cell_size + 1, cell_size + 1, 1,
-           glm::vec4(color, opacity), rect_vbo, i);
+  add_rect(x * cell_size, y * cell_size, cell_size,
+           cell_size, glm::vec4(color, opacity), rect_vbo, i);
 }
 
 SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphics)
     : width(width), height(height), cell_size(cell_size) {
   reset();
   if (use_graphics) {
-    rect_renderer = std::make_unique<RectRenderer>();
+    rect_renderer = std::make_unique<SimpleRectRenderer>();
   }
 }
 

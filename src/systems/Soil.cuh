@@ -8,7 +8,7 @@
 #include <thrust/device_vector.h>
 
 #include "SoAHelper.h"
-#include "graphics/renderers/RectRenderer.cuh"
+#include "graphics/renderers/SimpleRectRenderer.cuh"
 
 constexpr float SAND_RELATIVE_DENSITY = 0.5f;
 constexpr float SILT_RELATIVE_DENSITY = 0.7f;
@@ -49,7 +49,7 @@ private:
   uint width, height;
   float cell_size;
   SoilSoADevice read{}, write{};
-  std::unique_ptr<RectRenderer> rect_renderer{};
+  std::unique_ptr<SimpleRectRenderer> rect_renderer{};
 
   void mix_give_take_cuda(float dt);
   void mix_give_take_3_cuda(float dt);
