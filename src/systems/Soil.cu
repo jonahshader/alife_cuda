@@ -591,16 +591,12 @@ void SoilSystem::update_cpu(float dt) {
 }
 
 void SoilSystem::update_cuda(float dt) {
-  // for now, just mix give take
-  // mix_give_take_cuda(dt);
 
-  // SoilSoA soil;
-  // read.copy_to_host(soil);
-  // find min and max water density
-  auto min_iter = thrust::min_element(read.water_density.begin(), read.water_density.end());
-  auto max_iter = thrust::max_element(read.water_density.begin(), read.water_density.end());
-  auto min = *min_iter;
-  auto max = *max_iter;
+  // // find min and max water density
+  // auto min_iter = thrust::min_element(read.water_density.begin(), read.water_density.end());
+  // auto max_iter = thrust::max_element(read.water_density.begin(), read.water_density.end());
+  // auto min = *min_iter;
+  // auto max = *max_iter;
 
   // // get sum
   // auto sum = thrust::reduce(read.water_density.begin(), read.water_density.end(), 0.0f);
@@ -610,7 +606,7 @@ void SoilSystem::update_cuda(float dt) {
   // std::cout << "max: " << max << std::endl;
   // std::cout << "sum: " << sum << std::endl;
 
-  mix_give_take_3_cuda(dt);
+  // mix_give_take_3_cuda(dt);
 }
 
 void SoilSystem::render(const glm::mat4 &transform) {
