@@ -1,11 +1,11 @@
-dt=0.008
 gravity=-9.818
-dt_predict=0.003
+dt=0.007
+dt_predict=0.001
 collision_damping=0.5
 smoothing_radius=0.2
 target_density=204.34
 pressure_mult=637.693
 near_pressure_mult=18
-viscosity_strength=1
+viscosity_strength=0.51
 particles_per_cell=4
 max_particles_per_cell=128

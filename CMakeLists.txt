@@ -90,8 +90,8 @@ if(NOT imgui_POPULATED)
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
   )
-  target_include_directories(imgui PUBLIC 
-    ${imgui_SOURCE_DIR} 
+  target_include_directories(imgui PUBLIC
+    ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
   )
   target_link_libraries(imgui PRIVATE SDL2::SDL2)
@@ -144,6 +144,8 @@ add_executable(alife_cuda src/main.cu
         src/screens/FluidTest.cuh
         src/screens/FluidTest2.cu
         src/screens/FluidTest2.cuh
+        src/screens/FluidSoil.cu
+        src/screens/FluidSoil.cuh
         src/screens/TexCUDATest.cu
         src/screens/TexCUDATest.cuh
         src/systems/TreeTypes.cuh

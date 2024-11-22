@@ -403,7 +403,7 @@ __host__ __device__ inline void add_rect(float x, float y, float width, float he
   vbo[s + 8] = color.a;
 }
 
-__global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, uint size,
+__global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, float cell_size,
                               size_t rect_count) {
   const auto i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= rect_count) {
@@ -434,12 +434,12 @@ __global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, uint s
 
   const auto x = i % width;
   const auto y = i / width;
-  add_rect(x * size + size / 2, y * size + size / 2, size + 1, size + 1, 1,
+  add_rect(x * cell_size + cell_size / 2, y * cell_size + cell_size / 2, cell_size + 1, cell_size + 1, 1,
            glm::vec4(color, opacity), rect_vbo, i);
 }
 
-SoilSystem::SoilSystem(uint width, uint height, uint size, bool use_graphics)
-    : width(width), height(height), size(size) {
+SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphics)
+    : width(width), height(height), cell_size(cell_size) {
   reset();
   if (use_graphics) {
     rect_renderer = std::make_unique<RectRenderer>();
@@ -630,7 +630,7 @@ void SoilSystem::render(const glm::mat4 &transform) {
 
   dim3 block(256);
   dim3 grid((rect_count + block.x - 1) / block.x);
-  render_kernel<<<grid, block>>>(static_cast<float *>(vbo_ptr), ptrs, width, size, rect_count);
+  render_kernel<<<grid, block>>>(static_cast<float *>(vbo_ptr), ptrs, width, cell_size, rect_count);
   rect_renderer->cuda_unmap_buffer();
 
   rect_renderer->render(rect_count);
@@ -638,8 +638,8 @@ void SoilSystem::render(const glm::mat4 &transform) {
 }
 
 void SoilSystem::add_water(int x, int y, float amount) {
-  x /= size;
-  y /= size;
+  x /= cell_size;
+  y /= cell_size;
   if (x > 0 && x < width && y > 0 && y < height) {
     read.water_density[x + y * width] += amount;
   }

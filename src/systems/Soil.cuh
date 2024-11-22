@@ -35,7 +35,7 @@ DEFINE_STRUCTS(Soil, FOR_SOIL)
 class SoilSystem {
 public:
   using uint = std::uint32_t;
-  SoilSystem(uint width, uint height, uint size, bool use_graphics);
+  SoilSystem(uint width, uint height, float cell_size, bool use_graphics);
   ~SoilSystem() = default;
 
   void update_cpu(float dt);
@@ -46,7 +46,8 @@ public:
   void add_water(int x, int y, float amount);
 
 private:
-  uint width, height, size;
+  uint width, height;
+  float cell_size;
   SoilSoADevice read{}, write{};
   std::unique_ptr<RectRenderer> rect_renderer{};
 

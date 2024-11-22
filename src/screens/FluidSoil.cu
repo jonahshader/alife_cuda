@@ -46,7 +46,7 @@ bool FluidSoil::handleInput(SDL_Event event) {
 // __global__ void density_to_texture(float *density_data, unsigned char *density_texture_data, int
 // size, float max_density)
 
-void check_cuda(const std::string &msg) {
+void FluidSoil::check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     std::cerr << "FluidSoil: " << msg << ": " << cudaGetErrorString(err) << std::endl;
@@ -55,38 +55,41 @@ void check_cuda(const std::string &msg) {
 
 void FluidSoil::render(float _dt) {
   render_start();
+  soil.update_cuda(_dt); // TODO: need proper dt parameter
   fluid.update();
   if (grabbing) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
     fluid.attract({world_coords.x, world_coords.y}, 0.5f, 0.5f);
   }
-  // TODO: calculate expected max_density from particles per cell
-  fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+  // // TODO: calculate expected max_density from particles per cell
+  // fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
 
-  cudaArray *cuda_array = density_renderer.cuda_map_texture();
-  if (cuda_array == nullptr) {
-    std::cerr << "Failed to map texture to CUDA" << std::endl;
-    return;
-  }
+  // cudaArray *cuda_array = density_renderer.cuda_map_texture();
+  // if (cuda_array == nullptr) {
+  //   std::cerr << "Failed to map texture to CUDA" << std::endl;
+  //   return;
+  // }
 
-  cudaDeviceSynchronize();
-  density_renderer.update_texture_from_cuda(density_texture_data.data().get());
-  check_cuda("update_texture_from_cuda");
+  // cudaDeviceSynchronize();
+  // density_renderer.update_texture_from_cuda(density_texture_data.data().get());
+  // check_cuda("update_texture_from_cuda");
 
-  density_renderer.cuda_unmap_texture();
+  // density_renderer.cuda_unmap_texture();
 
-  density_renderer.set_transform(vp.get_transform());
-  density_renderer.begin();
-  for (int x_offset = -1; x_offset <= 1; ++x_offset) {
-    for (int y_offset = -1; y_offset <= 1; ++y_offset) {
-      float x_offset_f = x_offset * bounds.x;
-      float y_offset_f = y_offset * bounds.y;
-      density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
-    }
-  }
-  density_renderer.end();
-  density_renderer.render();
+  // density_renderer.set_transform(vp.get_transform());
+  // density_renderer.begin();
+  // for (int x_offset = -1; x_offset <= 1; ++x_offset) {
+  //   for (int y_offset = -1; y_offset <= 1; ++y_offset) {
+  //     float x_offset_f = x_offset * bounds.x;
+  //     float y_offset_f = y_offset * bounds.y;
+  //     density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
+  //   }
+  // }
+  // density_renderer.end();
+  // density_renderer.render();
 
+  soil.render(vp.get_transform());
+  check_cuda("soil.render");
   fluid.render(vp.get_transform());
   check_cuda("fluid.render");
 
