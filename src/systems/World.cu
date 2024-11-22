@@ -1,13 +1,11 @@
 #include "World.cuh"
 
-World::World(bool use_graphics) :
-trees(use_graphics)
-{}
+World::World(bool use_graphics) : trees(use_graphics) {}
 
 void World::update(float dt) {
-    trees.update(dt);
+  trees.update(dt);
 }
 
 void World::render(const glm::mat4 &transform) {
-    trees.render(transform);
+  trees.render(transform);
 }

@@ -8,18 +8,18 @@
 // TODO: should use DefaultScreen instead of Screen
 class TexCUDATest : public Screen {
 public:
-    explicit TexCUDATest(Game &game);
+  explicit TexCUDATest(Game &game);
 
-    void show() override;
-    void render(float dt) override;
-    void resize(int width, int height) override;
-    void hide() override;
-    bool handleInput(SDL_Event event) override;
+  void show() override;
+  void render(float dt) override;
+  void resize(int width, int height) override;
+  void hide() override;
+  bool handleInput(SDL_Event event) override;
 
 private:
-    Game& game;
-    ExtendViewport vp{720, 720};
-    ExtendViewport hud_vp{720, 720};
+  Game &game;
+  ExtendViewport vp{720, 720};
+  ExtendViewport hud_vp{720, 720};
 
-    RectTexRenderer rect{640, 480, 4};
+  RectTexRenderer rect{640, 480, 4};
 };

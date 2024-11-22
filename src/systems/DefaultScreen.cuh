@@ -6,8 +6,7 @@
 #include "systems/Game.cuh"
 #include "graphics/ExtendViewport.h"
 
-class DefaultScreen : public Screen
-{
+class DefaultScreen : public Screen {
 public:
   explicit DefaultScreen(Game &game);
   ~DefaultScreen() override = default;
@@ -27,5 +26,4 @@ protected:
 
   void render_start();
   void render_end();
-
 };

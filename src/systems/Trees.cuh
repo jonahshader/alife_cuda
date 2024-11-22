@@ -11,82 +11,78 @@
 #include "TreeTypes.cuh"
 
 namespace trees {
-    struct BranchNav {
-        trees2::bid_t id{};
-        std::vector<trees2::bid_t> children{};
-    };
+struct BranchNav {
+  trees2::bid_t id{};
+  std::vector<trees2::bid_t> children{};
+};
 
+struct BranchNodeFull {
+  trees2::BranchCore core{};
+  trees2::BranchStats stats{};
+  BranchNav nav{};
+};
 
-    struct BranchNodeFull {
-        trees2::BranchCore core{};
-        trees2::BranchStats stats{};
-        BranchNav nav{};
-    };
+using Tree = std::vector<trees2::BranchNode>;
 
+struct TreeBatch {
+  std::vector<trees2::BranchShape> tree_shapes{};
+  std::vector<trees2::TreeData> tree_data{};
+  Tree trees{};
+};
 
-    using Tree = std::vector<trees2::BranchNode>;
+std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand,
+                                       glm::vec2 start_pos = glm::vec2{});
 
+Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand,
+                          glm::vec2 start_pos = glm::vec2{});
 
-    struct TreeBatch {
-        std::vector<trees2::BranchShape> tree_shapes{};
-        std::vector<trees2::TreeData> tree_data{};
-        Tree trees{};
-    };
+TreeBatch concatenate_trees(const std::vector<Tree> &trees);
 
+/**
+ * Render a tree using the LineRenderer. Assumes the LineRenderer has already been set up.
+ * @param line_renderer The LineRenderer to use
+ * @param batch The nodes of the trees
+ */
+void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform);
 
-    std::vector<BranchNodeFull> build_tree(uint32_t num_nodes, std::default_random_engine &rand,
-                                           glm::vec2 start_pos = glm::vec2{});
+/**
+ * Propagate orientation and position changes through the tree
+ * @param batch The nodes of the batch
+ */
+void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device,
+                      trees2::TreeBatchDevice &write_batch_device);
 
-    Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand, glm::vec2 start_pos = glm::vec2{});
+/**
+ * Sort the tree so that the parent of each node is before the node in the vector.
+ * Result will be breadth-first traversal order.
+ * @param nodes The nodes of the tree
+ */
+std::vector<BranchNodeFull> sort_tree(const std::vector<BranchNodeFull> &nodes);
 
-    TreeBatch concatenate_trees(const std::vector<Tree> &trees);
+__global__ void render_tree_kernel(unsigned int *line_vbo, const trees2::TreeBatchPtrs batch,
+                                   size_t node_count);
 
-    /**
-     * Render a tree using the LineRenderer. Assumes the LineRenderer has already been set up.
-     * @param line_renderer The LineRenderer to use
-     * @param batch The nodes of the trees
-     */
-    void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform);
+__host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCore &core);
 
-    /**
-     * Propagate orientation and position changes through the tree
-     * @param batch The nodes of the batch
-     */
-    void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device, trees2::TreeBatchDevice &write_batch_device);
+__host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i);
 
-    /**
-     * Sort the tree so that the parent of each node is before the node in the vector.
-     * Result will be breadth-first traversal order.
-     * @param nodes The nodes of the tree
-     */
-    std::vector<BranchNodeFull> sort_tree(const std::vector<BranchNodeFull> &nodes);
+__host__ __device__ glm::vec2 get_length_vec(float abs_rot, float length);
 
-    __global__
-    void render_tree_kernel(unsigned int* line_vbo, const trees2::TreeBatchPtrs batch, size_t node_count);
+class Trees {
+public:
+  explicit Trees(bool use_graphics);
+  ~Trees() = default;
 
-    __host__ __device__
-    glm::vec2 get_length_vec(const trees2::BranchCore &core);
+  void generate_random_trees(uint32_t num_trees, uint32_t num_nodes,
+                             std::default_random_engine &rand);
+  void update(float dt);
+  void render(const glm::mat4 &transform);
 
-    __host__ __device__
-    glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i);
+private:
+  trees2::TreeBatch read_host{}, write_host{};
+  trees2::TreeBatchDevice read_device{}, write_device{};
 
-    __host__ __device__
-    glm::vec2 get_length_vec(float abs_rot, float length);
+  std::unique_ptr<LineRenderer> line_renderer{};
+};
 
-    class Trees {
-    public:
-        explicit Trees(bool use_graphics);
-        ~Trees() = default;
-
-        void generate_random_trees(uint32_t num_trees, uint32_t num_nodes, std::default_random_engine &rand);
-        void update(float dt);
-        void render(const glm::mat4 &transform);
-
-    private:
-        trees2::TreeBatch read_host{}, write_host{};
-        trees2::TreeBatchDevice read_device{}, write_device{};
-
-        std::unique_ptr<LineRenderer> line_renderer{};
-    };
-
-}
+} // namespace trees

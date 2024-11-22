@@ -1,7 +1,3 @@
 #pragma once
 
-
-
-class Seamless {
-
-};
+class Seamless {};

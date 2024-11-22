@@ -1,4 +1,4 @@
-#include "FluidTest2.cuh"
+#include "FluidSoil.cuh"
 
 #include "systems/ParticleFluid2.cuh"
 
@@ -16,12 +16,12 @@
     }                                                                                              \
   } while (0)
 
-FluidTest2::FluidTest2(Game &game)
+FluidSoil::FluidSoil(Game &game)
     : DefaultScreen(game),
       //  density_data(tex_size.x * tex_size.y),
       density_texture_data(tex_size.x * tex_size.y * 4) {}
 
-bool FluidTest2::handleInput(SDL_Event event) {
+bool FluidSoil::handleInput(SDL_Event event) {
   if (DefaultScreen::handleInput(event))
     return true;
 
@@ -49,11 +49,11 @@ bool FluidTest2::handleInput(SDL_Event event) {
 void check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
-    std::cerr << "FluidTest2: " << msg << ": " << cudaGetErrorString(err) << std::endl;
+    std::cerr << "FluidSoil: " << msg << ": " << cudaGetErrorString(err) << std::endl;
   }
 }
 
-void FluidTest2::render(float _dt) {
+void FluidSoil::render(float _dt) {
   render_start();
   fluid.update();
   if (grabbing) {

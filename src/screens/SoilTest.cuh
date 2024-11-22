@@ -9,18 +9,17 @@
 
 #include "systems/ParticleFluid.cuh"
 
-class SoilTest : public DefaultScreen
-{
+class SoilTest : public DefaultScreen {
 public:
-    explicit SoilTest(Game &game);
+  explicit SoilTest(Game &game);
 
-    void render(float dt) override;
-    bool handleInput(SDL_Event event) override;
+  void render(float dt) override;
+  bool handleInput(SDL_Event event) override;
 
 private:
-    SoilSystem soil;
-    particles::ParticleFluid fluid;
-    bool running{false};
+  SoilSystem soil;
+  particles::ParticleFluid fluid;
+  bool running{false};
 
-    std::chrono::high_resolution_clock::time_point last_time;
+  std::chrono::high_resolution_clock::time_point last_time;
 };

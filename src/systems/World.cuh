@@ -5,12 +5,12 @@
 
 class World {
 public:
-    explicit World(bool use_graphics);
-    ~World() = default;
+  explicit World(bool use_graphics);
+  ~World() = default;
 
-    void update(float dt);
-    void render(const glm::mat4 &transform);
+  void update(float dt);
+  void render(const glm::mat4 &transform);
 
 private:
-    trees::Trees trees;
+  trees::Trees trees;
 };

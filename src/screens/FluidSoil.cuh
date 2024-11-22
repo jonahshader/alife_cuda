@@ -11,9 +11,9 @@
 
 #include <cmath>
 
-class FluidTest2 : public DefaultScreen {
+class FluidSoil : public DefaultScreen {
 public:
-  explicit FluidTest2(Game &game);
+  explicit FluidSoil(Game &game);
 
   void render(float dt) override;
   bool handleInput(SDL_Event event) override;

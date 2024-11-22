@@ -3,28 +3,21 @@
 #include <device_launch_parameters.h>
 #include <iostream>
 
-TexCUDATest::TexCUDATest(Game &game) : game(game)
-{
-}
+TexCUDATest::TexCUDATest(Game &game) : game(game) {}
 
-void TexCUDATest::show()
-{
-}
+void TexCUDATest::show() {}
 
-void TexCUDATest::hide()
-{
-}
+void TexCUDATest::hide() {}
 
-__global__ void write_tex_test(int width, int height, int channels, unsigned char *output)
-{
+__global__ void write_tex_test(int width, int height, int channels, unsigned char *output) {
   int x = blockIdx.x * blockDim.x + threadIdx.x;
   int y = blockIdx.y * blockDim.y + threadIdx.y;
   int x_center = width / 2;
   int y_center = height / 2;
-  if (x < width && y < height)
-  {
+  if (x < width && y < height) {
     int index = (y * width + x) * channels;
-    long distance = (x - (long)x_center) * (x - (long)x_center) + (y - (long)y_center) * (y - (long)y_center);
+    long distance =
+        (x - (long)x_center) * (x - (long)x_center) + (y - (long)y_center) * (y - (long)y_center);
     // unsigned char brightness = x % 2 == 0 ? (y % 256) : 0;
     // unsigned char brightness = distance < height * height / 4 ? 255 : 0;
     unsigned char brightness = x % 2 != y % 2 ? 255 : 0;
@@ -33,22 +26,19 @@ __global__ void write_tex_test(int width, int height, int channels, unsigned cha
     output[index + 1] = brightness;
     output[index + 2] = brightness;
 
-    if (channels == 4)
-    {
+    if (channels == 4) {
       output[index + 3] = 255; // Full alpha for RGBA
     }
   }
 }
 
-void TexCUDATest::render(float dt)
-{
+void TexCUDATest::render(float dt) {
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   // Map the texture to CUDA
   cudaArray *cuda_array = rect.cuda_map_texture();
-  if (cuda_array == nullptr)
-  {
+  if (cuda_array == nullptr) {
     std::cerr << "Failed to map texture to CUDA" << std::endl;
     return;
   }
@@ -77,8 +67,7 @@ void TexCUDATest::render(float dt)
 
   // Check for kernel launch errors
   cudaError_t cudaStatus = cudaGetLastError();
-  if (cudaStatus != cudaSuccess)
-  {
+  if (cudaStatus != cudaSuccess) {
     std::cerr << "CUDA kernel launch failed: " << cudaGetErrorString(cudaStatus) << std::endl;
     // rect.destroy_texture_object(texObj);
     rect.cuda_unmap_texture();
@@ -105,33 +94,24 @@ void TexCUDATest::render(float dt)
   rect.render();
 }
 
-void TexCUDATest::resize(int width, int height)
-{
+void TexCUDATest::resize(int width, int height) {
   vp.update(width, height);
   hud_vp.update(width, height);
 }
 
-bool TexCUDATest::handleInput(SDL_Event event)
-{
-  if (event.type == SDL_KEYDOWN)
-  {
-    switch (event.key.keysym.sym)
-    {
-    case SDLK_ESCAPE:
-      game.stopGame();
-      break;
-    default:
-      break;
+bool TexCUDATest::handleInput(SDL_Event event) {
+  if (event.type == SDL_KEYDOWN) {
+    switch (event.key.keysym.sym) {
+      case SDLK_ESCAPE:
+        game.stopGame();
+        break;
+      default:
+        break;
     }
-  }
-  else if (event.type == SDL_MOUSEWHEEL)
-  {
+  } else if (event.type == SDL_MOUSEWHEEL) {
     vp.handle_scroll(event.wheel.y);
-  }
-  else if (event.type == SDL_MOUSEMOTION)
-  {
-    if (event.motion.state & SDL_BUTTON_LMASK)
-    {
+  } else if (event.type == SDL_MOUSEMOTION) {
+    if (event.motion.state & SDL_BUTTON_LMASK) {
       vp.handle_pan(event.motion.xrel, event.motion.yrel);
     }
   }
