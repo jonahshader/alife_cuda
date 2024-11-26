@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) {
   cudaGetDeviceProperties(&cuda_prop, 0);
   // print the compute capability, max number of threads per block, max number of blocks, number of
   // SMs, max number of threads per SM, number of registers per block, number of registers per SM,
-  // shared memory per block, shared memory per SM, warp size, number of floating point units
+  // shared memory per block, shared memory per SM, warp size, number of CUDA cores
   std::cout << "Compute capability: " << cuda_prop.major << "." << cuda_prop.minor << std::endl;
   std::cout << "Max threads per block: " << cuda_prop.maxThreadsPerBlock << std::endl;
   std::cout << "Max blocks: " << cuda_prop.maxGridSize[0] << std::endl;
@@ -119,8 +119,8 @@ int main(int argc, char *argv[]) {
   std::cout << "Shared memory per SM: " << cuda_prop.sharedMemPerMultiprocessor << " bytes"
             << std::endl;
   std::cout << "Warp size: " << cuda_prop.warpSize << std::endl;
-  std::cout << "Number of floating point units: "
-            << cuda_prop.multiProcessorCount * cuda_prop.maxThreadsPerMultiProcessor << std::endl;
+  std::cout << "Number of CUDA cores: " << cuda_prop.multiProcessorCount * cuda_prop.warpSize
+            << std::endl;
 
   init_screen("ALife CUDA");
   init_imgui();

@@ -20,7 +20,7 @@ public:
   bool handleInput(SDL_Event event) override;
 
 private:
-  const float soil_size = 0.4; // TODO: this should be 2x particle radius
+  const float soil_size = 0.2; // TODO: this should be some ratio of the particle radius probably
   const int pixels_per_meter{100};
 
   const float2 bounds{32.0f, 16.0f};

@@ -9,6 +9,7 @@
 #include "SoAHelper.h"
 #include "graphics/renderers/CircleRenderer.cuh"
 #include "ParameterManager.h"
+#include "Soil.cuh"
 
 #define FOR_SPH(N, D)                                                                              \
   D(float2, pos, make_float2(0, 0))                                                                \
@@ -20,8 +21,10 @@
   D(float, near_density, 0)                                                                        \
   D(uint8_t, sym_break, 0)
 
+
 namespace p2 {
 DEFINE_STRUCTS(SPH, FOR_SPH)
+
 
 struct TunableParams {
   // TODO: grab these from screenshot
@@ -92,6 +95,7 @@ public:
   ParticleFluid(float width, float height, bool use_graphics);
 
   void update();
+  void update(SoilSystem &soil_system);
   void render(const glm::mat4 &transform);
 
   void calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width,

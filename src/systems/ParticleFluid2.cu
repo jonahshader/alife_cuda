@@ -154,6 +154,66 @@ __host__ __device__ float2 calculate_density_at_pos(float2 pos, SPHPtrs sph, Par
   return make_float2(density, near_density);
 }
 
+__host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs soil, int w, int h,
+                                                         float soil_size, float particle_radius) {
+  float density = 0.0f;
+  float near_density = 0.0f;
+
+  // fake particles are at the center of each cell
+  int cell_x = pos.x / soil_size;
+  int cell_y = pos.y / soil_size;
+
+  int range = ceil(particle_radius / soil_size);
+
+  // iterate through soil cell neighborhood
+  for (int yi = cell_y - range; yi <= cell_y + range; yi++) {
+    for (int xi = cell_x - range; xi <= cell_x + range; xi++) {
+      // skip if cell is out of vertical bounds
+      if (yi < 0 || yi >= h || xi < 0 || xi >= w)
+        continue;
+      // wrap x if out of horizontal bounds
+      int wrapped_x = (xi + w) % w; // TODO: might have issues when particle grid and soil grid
+                                    // don't align
+
+      int soil_index = yi * w + wrapped_x;
+      // TODO: currently using one fake particle in the center of the cell,
+      // but we could use more to get a better approximation
+      float2 other_pos = make_float2((xi + 0.5f) * soil_size, (yi + 0.5f) * soil_size);
+
+      float distance = length(pos - other_pos);
+      float soil_cell_mass = (soil.sand_density[soil_index] * SAND_ABSOLUTE_DENSITY +
+                              soil.silt_density[soil_index] * SILT_ABSOLUTE_DENSITY +
+                              soil.clay_density[soil_index] * CLAY_ABSOLUTE_DENSITY) *
+                             soil_size * soil_size; // convert to mass
+
+      density += soil_cell_mass * density_kernel(particle_radius, distance);
+      near_density += soil_cell_mass * near_density_kernel(particle_radius, distance);
+    }
+  }
+
+  return make_float2(density, near_density);
+}
+
+// calculate the density of each particle, with contributions from other particles and soil
+// particles
+__global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
+                                           int max_particles_per_cell, int2 particle_grid_dims,
+                                           float cell_size, float smoothing_radius,
+                                           size_t num_particles, float2 bounds, SoilPtrs soil_read,
+                                           int soil_w, int soil_h, float soil_size) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+  float2 density_from_p =
+      calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
+                               cell_size, smoothing_radius, bounds);
+  float2 density_from_soil = calculate_soil_density_at_pos(sph.pos[i], soil_read, soil_w, soil_h,
+                                                           soil_size, smoothing_radius);
+  sph.density[i] = density_from_p.x + density_from_soil.x;
+  sph.near_density[i] = density_from_p.y + density_from_soil.y;
+}
+
+// calculate the density of each particle, with contributions from other particles
 __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
                                            int max_particles_per_cell, int2 particle_grid_dims,
                                            float cell_size, float smoothing_radius,
@@ -161,11 +221,40 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
-  float2 density =
+  float2 density_from_p =
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
-  sph.density[i] = density.x;
-  sph.near_density[i] = density.y;
+  sph.density[i] = density_from_p.x;
+  sph.near_density[i] = density_from_p.y;
+}
+
+// calculate the density of each soil particle, with contributions from other particles and soil
+// particles
+__global__ void calculate_soil_density(SPHPtrs sph, SoilParticlesPtrs soil_ptrs,
+                                       ParticleGridPtrs grid, int max_particles_per_cell,
+                                       int2 particle_grid_dims, float cell_size,
+                                       float smoothing_radius, size_t num_particles, float2 bounds,
+                                       SoilPtrs soil_read, int soil_w, int soil_h,
+                                       float soil_size) {
+  auto i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+
+  // calculate the density of each soil particle
+  // pos of the soil particle is the center of the cell
+  int cell_x = i % soil_w;
+  int cell_y = i / soil_w;
+  // TODO: eventually we might have >1 particles per cell,
+  // then we need to define a function to determine where the particles are
+  // since it would no longer be trivial.
+  float2 pos = make_float2((cell_x + 0.5f) * soil_size, (cell_y + 0.5f) * soil_size);
+  float2 density_from_p =
+      calculate_density_at_pos(pos, sph, grid, max_particles_per_cell, particle_grid_dims,
+                               cell_size, smoothing_radius, bounds);
+  float2 density_from_soil =
+      calculate_soil_density_at_pos(pos, soil_read, soil_w, soil_h, soil_size, smoothing_radius);
+  soil_ptrs.density[i] = density_from_p.x + density_from_soil.x;
+  soil_ptrs.near_density[i] = density_from_p.y + density_from_soil.y;
 }
 
 __host__ __device__ float calculate_pressure(float density, const TunableParams &params) {
@@ -244,6 +333,124 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
           viscosity_force = viscosity_force + influence * diff; // scale with mass?
         }
       }
+    }
+  }
+
+  // apply pressure force
+  // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
+  float2 acc = make_float2(0.0f, params.gravity) +
+               (pressure_force + viscosity_force * params.viscosity_strength) / density;
+  sph.vel[pid] = vel + acc * params.dt;
+}
+
+// calculate the acceleration of each particle, with contributions from other particles and soil
+// particles
+__global__ void calculate_accel(SPHPtrs sph, SoilParticlesPtrs soil_ptrs, ParticleGridPtrs grid,
+                                int max_particles_per_cell, int2 particle_grid_dims,
+                                float cell_size, TunableParams params, size_t particle_count,
+                                float2 bounds, SoilPtrs soil_read, int soil_w, int soil_h,
+                                float soil_size) {
+  size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
+  if (pid >= particle_count)
+    return;
+
+  auto pos = sph.pos[pid];
+  auto vel = sph.vel[pid];
+  auto density = sph.density[pid];
+  auto near_density = sph.near_density[pid];
+  int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
+  int cell_x = grid_index % particle_grid_dims.x;
+  int cell_y = grid_index / particle_grid_dims.x;
+
+  float pressure = calculate_pressure(density, params);
+  float near_pressure = calculate_near_pressure(near_density, params);
+  float2 pressure_force = make_float2(0.0f, 0.0f);
+  float2 viscosity_force = make_float2(0.0f, 0.0f);
+
+  int xi_neg_dist = cell_x == 0 ? 2 : 1;
+  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
+
+  // iterate through cell neighborhood
+  for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
+    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+      // skip if cell is out of vertical bounds
+      if (yi < 0 || yi >= particle_grid_dims.y)
+        continue;
+      // wrap x if out of horizontal bounds
+      int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
+
+      int neighbour_index = yi * particle_grid_dims.x + wrapped_x;
+      int num_particles = min(grid.particles_per_cell[neighbour_index], max_particles_per_cell);
+      // iterate through particles within the cell
+      for (int i = 0; i < num_particles; i++) {
+        int particle_id = grid.grid_indices[neighbour_index * max_particles_per_cell + i];
+        float2 other_pos = sph.pos[particle_id];
+        if (xi < 0) // wrap around
+          other_pos.x -= bounds.x;
+        else if (xi >= particle_grid_dims.x)
+          other_pos.x += bounds.x;
+        float other_density = sph.density[particle_id];
+        float other_near_density = sph.near_density[particle_id];
+        float other_pressure = calculate_pressure(other_density, params);
+        float other_near_pressure = calculate_near_pressure(other_near_density, params);
+        float other_mass = sph.mass[particle_id];
+        pressure_force = pressure_force -
+                         other_mass *
+                             ((pressure + other_pressure + near_pressure + other_near_pressure) /
+                              (4.0f * other_density)) *
+                             density_kernel_gradient(params.smoothing_radius, pos - other_pos);
+
+        // viscosity
+        // TODO: distance is calculated twice. once here and once above.
+        if (particle_id != pid) {
+          float2 diff = sph.vel[particle_id] - vel;
+          float dist = length(pos - other_pos);
+          float influence = viscosity_kernel(params.smoothing_radius, dist);
+          viscosity_force = viscosity_force + influence * diff; // scale with mass?
+        }
+      }
+    }
+  }
+
+  // iterate through soil cell neighborhood
+  int soil_range = ceil(params.smoothing_radius / soil_size);
+  cell_x = pos.x / soil_size;
+  cell_y = pos.y / soil_size;
+  for (int yi = cell_y - soil_range; yi <= cell_y + soil_range; yi++) {
+    for (int xi = cell_x - soil_range; xi <= cell_x + soil_range; xi++) {
+      // skip if cell is out of vertical bounds
+      if (yi < 0 || yi >= soil_h || xi < 0 || xi >= soil_w)
+        continue;
+      // wrap x if out of horizontal bounds
+      int wrapped_x = (xi + soil_w) % soil_w;
+
+      int soil_index = yi * soil_w + wrapped_x;
+      // TODO: currently using one fake particle in the center of the cell,
+      // but we could use more to get a better approximation
+      float2 other_pos = make_float2((xi + 0.5f) * soil_size, (yi + 0.5f) * soil_size);
+
+      float distance = length(pos - other_pos);
+      float soil_cell_mass = (soil_read.sand_density[soil_index] * SAND_ABSOLUTE_DENSITY +
+                              soil_read.silt_density[soil_index] * SILT_ABSOLUTE_DENSITY +
+                              soil_read.clay_density[soil_index] * CLAY_ABSOLUTE_DENSITY) *
+                             soil_size * soil_size; // convert to mass
+      float other_density = soil_ptrs.density[soil_index];
+      float other_near_density = soil_ptrs.near_density[soil_index];
+      float other_pressure = calculate_pressure(other_density, params);
+      float other_near_pressure = calculate_near_pressure(other_near_density, params);
+      if (other_density > 0.01) {
+        pressure_force = pressure_force -
+                         soil_cell_mass *
+                             ((pressure + other_pressure + near_pressure + other_near_pressure) /
+                              (4.0f * other_density)) *
+                             density_kernel_gradient(params.smoothing_radius, pos - other_pos);
+      }
+
+      // viscosity
+      // TODO: distance is calculated twice. once here and once above.
+      float2 diff = make_float2(0.0f, 0.0f) - vel; // soil particles are stationary
+      float influence = viscosity_kernel(params.smoothing_radius, distance);
+      viscosity_force = viscosity_force + influence * diff; // scale with mass?
     }
   }
 
@@ -350,7 +557,7 @@ void ParticleFluid::init() {
   // init some particles
   std::default_random_engine rand;
   std::uniform_real_distribution<float> dist_x(0.0f, bounds.x);
-  std::uniform_real_distribution<float> dist_y(0.0f, bounds.y);
+  std::uniform_real_distribution<float> dist_y(bounds.y / 2, bounds.y);
 
   // velocity init with gaussian
   std::normal_distribution<float> dist_vel(0.0f, 0.001f);
@@ -391,6 +598,8 @@ ParticleFluid::ParticleFluid(float width, float height, const TunableParams &par
   init();
 }
 
+// TODO: i think this constructor doesn't work as expected, because load_params is called after
+// the other constructor is called
 ParticleFluid::ParticleFluid(float width, float height, bool use_graphics)
     : ParticleFluid(width, height, TunableParams{}, use_graphics) {
   load_params();
@@ -500,6 +709,71 @@ void ParticleFluid::update() {
   // calculate acceleration
   calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
                                                grid_dims, cell_size, params, num_particles, bounds);
+  check_cuda("calculate_accel");
+
+  // move particles
+  move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
+                                              bounds, params.collision_damping);
+  check_cuda("move_particles");
+}
+
+void ParticleFluid::update(SoilSystem &soil_system) {
+  SPHPtrs sph;
+  ParticleGridPtrs grid_ptrs;
+  SoilPtrs soil_ptrs;
+  SoilParticlesPtrs soil_particle_ptrs;
+  sph.get_ptrs(particles_device);
+  grid_ptrs.get_ptrs(grid_device);
+  soil_ptrs = soil_system.get_read_ptrs();
+  soil_particle_ptrs = soil_system.get_particles_ptrs();
+  int soil_width = soil_system.get_width();
+  int soil_height = soil_system.get_height();
+  float soil_size = soil_system.get_cell_size();
+
+  size_t num_particles = particles_device.pos.size();
+  size_t grid_size = grid.width * grid.height;
+  int2 grid_dims = make_int2(grid.width, grid.height);
+  float cell_size = params.smoothing_radius;
+
+  dim3 sph_block(256);
+  dim3 sph_grid_dim((num_particles + sph_block.x - 1) / sph_block.x);
+
+  dim3 grid_block(256);
+  dim3 grid_grid_dim((grid_size + grid_block.x - 1) / grid_block.x);
+
+  dim3 soil_block(256);
+  dim3 soil_grid_dim((soil_width * soil_height * PARTICLES_PER_SOIL_CELL + soil_block.x - 1) /
+                     soil_block.x);
+
+  // place in grid
+  reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
+  check_cuda("reset_particles_per_cell");
+
+  populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
+                                                     grid.max_particles_per_cell, grid_dims,
+                                                     params.smoothing_radius);
+  check_cuda("populate_grid_indices");
+
+  // calculate density of particles, including contributions from soil
+  calculate_particle_density<<<sph_grid_dim, sph_block>>>(
+      sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
+      num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
+  check_cuda("calculate_particle_density");
+
+  // calculate density of soil particles
+  calculate_soil_density<<<soil_grid_dim, soil_block>>>(
+      sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size,
+      params.smoothing_radius, num_particles, bounds, soil_ptrs, soil_width, soil_height,
+      soil_size);
+
+  // calculate acceleration
+  // calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
+  //                                              grid_dims, cell_size, params, num_particles,
+  //                                              bounds);
+  // calculate acceleration with soil
+  calculate_accel<<<sph_grid_dim, sph_block>>>(
+      sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params,
+      num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
   check_cuda("calculate_accel");
 
   // move particles

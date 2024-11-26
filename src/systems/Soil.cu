@@ -433,8 +433,8 @@ __global__ void render_kernel(float *rect_vbo, SoilPtrs read, uint width, float 
 
   const auto x = i % width;
   const auto y = i / width;
-  add_rect(x * cell_size, y * cell_size, cell_size,
-           cell_size, glm::vec4(color, opacity), rect_vbo, i);
+  add_rect(x * cell_size, y * cell_size, cell_size, cell_size, glm::vec4(color, opacity), rect_vbo,
+           i);
 }
 
 SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphics)
@@ -447,9 +447,11 @@ SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphi
 
 void SoilSystem::reset() {
   SoilSoA soil{};
+  SoilParticlesSoA particles_cpu{};
   // assert(width % BLOCK_WIDTH == 0);
   // assert(height % BLOCK_WIDTH == 0);
   soil.resize_all(width * height);
+  particles_cpu.resize_all(width * height * PARTICLES_PER_SOIL_CELL);
 
   // use time as seed
   auto seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -531,14 +533,17 @@ void SoilSystem::reset() {
       float clay = soil.clay_density[id];
 
       // TODO: pull this out into a function
-      float effective_density = sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY +
-                                clay * CLAY_RELATIVE_DENSITY;
-      soil.water_density[id] = 1 - effective_density;
+      // float effective_density = sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY +
+      //                           clay * CLAY_RELATIVE_DENSITY;
+      // soil.water_density[id] = 1 - effective_density;
+
+      soil.water_density[id] = get_effective_density(sand, silt, clay);
     }
   }
 
   read.copy_from_host(soil);
   write.copy_from_host(soil);
+  particles.copy_from_host(particles_cpu);
 }
 
 void SoilSystem::mix_give_take_cuda(float dt) {
@@ -638,4 +643,16 @@ void SoilSystem::add_water(int x, int y, float amount) {
   if (x > 0 && x < width && y > 0 && y < height) {
     read.water_density[x + y * width] += amount;
   }
+}
+
+SoilPtrs SoilSystem::get_read_ptrs() {
+  SoilPtrs ptrs;
+  ptrs.get_ptrs(read);
+  return ptrs;
+}
+
+SoilParticlesPtrs SoilSystem::get_particles_ptrs() {
+  SoilParticlesPtrs ptrs;
+  ptrs.get_ptrs(particles);
+  return ptrs;
 }

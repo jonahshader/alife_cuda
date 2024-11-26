@@ -56,10 +56,10 @@ void FluidSoil::check_cuda(const std::string &msg) {
 void FluidSoil::render(float _dt) {
   render_start();
   soil.update_cuda(_dt); // TODO: need proper dt parameter
-  fluid.update();
+  fluid.update(soil);
   if (grabbing) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
-    fluid.attract({world_coords.x, world_coords.y}, 0.5f, 0.5f);
+    fluid.attract({world_coords.x, world_coords.y}, 0.15f, 3.0f);
   }
   // // TODO: calculate expected max_density from particles per cell
   // fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
