@@ -29,10 +29,16 @@ bool FluidSoil::handleInput(SDL_Event event) {
     if (event.button.button == SDL_BUTTON_LEFT) {
       grabbing = true;
       return true;
+    } else if (event.button.button == SDL_BUTTON_RIGHT) {
+      repelling = true;
+      return true;
     }
   } else if (event.type == SDL_MOUSEBUTTONUP) {
     if (event.button.button == SDL_BUTTON_LEFT) {
       grabbing = false;
+      return true;
+    } else if (event.button.button == SDL_BUTTON_RIGHT) {
+      repelling = false;
       return true;
     }
   } else if (event.type == SDL_MOUSEMOTION) {
@@ -81,9 +87,10 @@ void FluidSoil::render(float _dt) {
   circle_renderer.begin();
   soil.update_cuda(_dt); // TODO: need proper dt parameter
   fluid.update(soil);
-  if (grabbing) {
+  if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
-    fluid.attract({world_coords.x, world_coords.y}, grab_strength, grab_radius);
+
+    fluid.attract({world_coords.x, world_coords.y}, repelling ? -grab_strength : grab_strength, grab_radius);
   }
   // TODO: calculate expected max_density from particles per cell
   fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
@@ -119,7 +126,7 @@ void FluidSoil::render(float _dt) {
 
   // add a circle for mouse grab tool
   float grab_color_opacity = 0.1f;
-  if (grabbing) {
+  if (grabbing || repelling) {
     grab_color_opacity = 0.25f;
   }
   const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});

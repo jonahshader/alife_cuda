@@ -38,6 +38,7 @@ private:
   // thrust::device_vector<float> density_data;
   thrust::device_vector<unsigned char> density_texture_data;
   bool grabbing{false};
+  bool repelling{false};
   int2 mouse_pos{0, 0};
   float grab_radius{2.0f};
   float grab_strength{0.15f};
