@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
+#include <curand_kernel.h>
 
 #include "SoAHelper.h"
 #include "graphics/renderers/SimpleRectRenderer.cuh"
@@ -14,7 +15,7 @@ constexpr float SAND_RELATIVE_DENSITY = 0.5f;
 constexpr float SILT_RELATIVE_DENSITY = 0.7f;
 constexpr float CLAY_RELATIVE_DENSITY = 1.0f;
 
-constexpr float SAND_ABSOLUTE_DENSITY = 110.0f;
+constexpr float SAND_ABSOLUTE_DENSITY = 1.0f;
 constexpr float SILT_ABSOLUTE_DENSITY = 190.0f;
 constexpr float CLAY_ABSOLUTE_DENSITY = 500.0f;
 
@@ -38,8 +39,10 @@ constexpr int PARTICLES_PER_SOIL_CELL = 1;
 
 #define FOR_SOIL_PARTICLES(N, D)                                                                   \
   D(float, density, 0)                                                                             \
-  D(float, near_density, 0)
-
+  D(float, near_density, 0)                                                                        \
+  N(curandState, rand_state)                                                                       \
+  D(float, x_offset, 0)                                                                            \
+  D(float, y_offset, 0)
 
 DEFINE_STRUCTS(Soil, FOR_SOIL)
 DEFINE_STRUCTS(SoilParticles, FOR_SOIL_PARTICLES)
@@ -54,9 +57,16 @@ public:
   void update_cuda(float dt);
   void render(const glm::mat4 &transform);
   void reset();
-  uint get_width() const { return width; }
-  uint get_height() const { return height; }
-  float get_cell_size() const { return cell_size; }
+  void jitter_particles();
+  uint get_width() const {
+    return width;
+  }
+  uint get_height() const {
+    return height;
+  }
+  float get_cell_size() const {
+    return cell_size;
+  }
   SoilPtrs get_read_ptrs();
   SoilParticlesPtrs get_particles_ptrs();
 
@@ -72,4 +82,3 @@ private:
   void mix_give_take_cuda(float dt);
   void mix_give_take_3_cuda(float dt);
 };
-

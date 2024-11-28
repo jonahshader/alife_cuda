@@ -35,7 +35,7 @@ bool DefaultScreen::handleInput(SDL_Event event) {
     vp.handle_scroll(event.wheel.y);
     return true;
   } else if (event.type == SDL_MOUSEMOTION) {
-    if (event.motion.state & (SDL_BUTTON_RMASK | SDL_BUTTON_MMASK)) {
+    if (event.motion.state & SDL_BUTTON_MMASK) {
       vp.handle_pan(event.motion.xrel, event.motion.yrel);
       return true;
     }

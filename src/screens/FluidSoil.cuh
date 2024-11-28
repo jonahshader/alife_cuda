@@ -5,10 +5,12 @@
 #include "systems/ParticleFluid2.cuh"
 #include "systems/Soil.cuh"
 #include "graphics/renderers/RectTexRenderer.cuh"
+// #include "graphics/renderers/CircleRenderer.cuh"
 
 #include <thrust/device_vector.h>
 
 #include "systems/float2_ops.cuh"
+
 
 #include <cmath>
 
@@ -20,7 +22,7 @@ public:
   bool handleInput(SDL_Event event) override;
 
 private:
-  const float soil_size = 0.2; // TODO: this should be some ratio of the particle radius probably
+  const float soil_size = 0.1; // TODO: this should be some ratio of the particle radius probably
   const int pixels_per_meter{100};
 
   const float2 bounds{32.0f, 16.0f};
@@ -37,6 +39,8 @@ private:
   thrust::device_vector<unsigned char> density_texture_data;
   bool grabbing{false};
   int2 mouse_pos{0, 0};
+  float grab_radius{2.0f};
+  float grab_strength{0.15f};
 
   void check_cuda(const std::string &msg);
 };
