@@ -83,8 +83,11 @@ void FluidSoil::check_cuda(const std::string &msg) {
 void FluidSoil::render(float _dt) {
   render_start();
   auto &circle_renderer = game.getResources().circle_renderer;
+  auto &main_font_world = game.getResources().main_font_world;
   circle_renderer.set_transform(vp.get_transform());
+  main_font_world.set_transform(vp.get_transform());
   circle_renderer.begin();
+  main_font_world.begin();
   soil.update_cuda(_dt); // TODO: need proper dt parameter
   fluid.update(soil);
   if (grabbing || repelling) {
@@ -132,9 +135,15 @@ void FluidSoil::render(float _dt) {
   const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
   circle_renderer.add_circle(world_coords.x, world_coords.y, grab_radius,
                              glm::vec4(0.5f, 0.5f, 0.8f, grab_color_opacity));
+  // display strength
+  main_font_world.add_text(world_coords.x, world_coords.y, grab_radius, "Strength: " + std::to_string(grab_strength),
+                           glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), FontRenderer::HAlign::CENTER);
 
   circle_renderer.end();
+  main_font_world.end();
   circle_renderer.render();
+  main_font_world.render();
+
   render_end();
   check_cuda("render_end");
 }
