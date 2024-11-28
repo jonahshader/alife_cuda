@@ -88,7 +88,7 @@ void CircleRenderer::end() {
 }
 
 void CircleRenderer::add_circle(float x, float y, float radius, glm::vec4 color) {
-  add_circle(x, y, radius, color.r * 255, color.g * 255, color.b * 255, 255);
+  add_circle(x, y, radius, color.r * 255, color.g * 255, color.b * 255, color.a * 255);
 }
 
 void CircleRenderer::render() {
