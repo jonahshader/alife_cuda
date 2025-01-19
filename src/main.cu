@@ -146,9 +146,26 @@ int main(int argc, char *argv[]) {
     while (SDL_PollEvent(&event)) {
       ImGui_ImplSDL2_ProcessEvent(&event);
       // skip game input handling if ImGui wants to capture the event
-      if (!ImGui::GetIO().WantCaptureKeyboard && !ImGui::GetIO().WantCaptureMouse) {
+      bool handled = false;
+      switch (event.type) {
+        case SDL_KEYDOWN:
+        case SDL_KEYUP:
+          handled = ImGui::GetIO().WantCaptureKeyboard;
+          break;
+        case SDL_MOUSEMOTION:
+        case SDL_MOUSEBUTTONDOWN:
+        case SDL_MOUSEBUTTONUP:
+        case SDL_MOUSEWHEEL:
+          handled = ImGui::GetIO().WantCaptureMouse;
+          break;
+        default:
+          break;
+      }
+
+      if (!handled) {
         game.handleInput(event);
       }
+
       if (event.type == SDL_QUIT) {
         game.stopGame();
       } else if (event.type == SDL_WINDOWEVENT) {
