@@ -1,5 +1,5 @@
+dt=0.005
 gravity=-9.818
-dt=0.007
 dt_predict=0.001
 collision_damping=0.5
 smoothing_radius=0.2

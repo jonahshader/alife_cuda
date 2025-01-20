@@ -26,11 +26,6 @@ constexpr float CLAY_PERMEABILITY = 0.00f;
 constexpr int PARTICLES_PER_SOIL_CELL = 1;
 
 #define FOR_SOIL(N, D)                                                                             \
-  D(float, water_density, 0)                                                                       \
-  D(float, water_give_left, 0)                                                                     \
-  D(float, water_give_right, 0)                                                                    \
-  D(float, water_give_up, 0)                                                                       \
-  D(float, water_give_down, 0)                                                                     \
   D(float, sand_density, 0)                                                                        \
   D(float, silt_density, 0)                                                                        \
   D(float, clay_density, 0)                                                                        \
@@ -70,15 +65,10 @@ public:
   SoilPtrs get_read_ptrs();
   SoilParticlesPtrs get_particles_ptrs();
 
-  void add_water(int x, int y, float amount);
-
 private:
   uint width, height;
   float cell_size;
   SoilSoADevice read{}, write{};
   SoilParticlesSoADevice particles{};
   std::unique_ptr<SimpleRectRenderer> rect_renderer{};
-
-  void mix_give_take_cuda(float dt);
-  void mix_give_take_3_cuda(float dt);
 };

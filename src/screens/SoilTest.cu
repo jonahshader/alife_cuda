@@ -39,14 +39,6 @@ bool SoilTest::handleInput(SDL_Event event) {
   if (DefaultScreen::handleInput(event))
     return true;
   switch (event.type) {
-    case SDL_MOUSEMOTION: {
-      if (event.motion.state & SDL_BUTTON_LMASK) {
-        // get mouse x y, project to world
-        const auto world_coords = vp.unproject({event.motion.x, event.motion.y});
-        soil.add_water(static_cast<int>(floor(world_coords.x)),
-                       static_cast<int>(floor(world_coords.y)), 1.0f);
-      }
-    } break;
     case SDL_KEYDOWN:
       switch (event.key.keysym.sym) {
         case SDLK_r:
