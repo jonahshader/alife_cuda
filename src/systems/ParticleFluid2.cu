@@ -8,6 +8,8 @@
 #include "CustomMath.cuh"
 #include "imgui.h"
 
+#include "systems/TimingProfiler.cuh"
+
 namespace p2 {
 void check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
@@ -155,8 +157,10 @@ __host__ __device__ float2 calculate_density_at_pos(float2 pos, SPHPtrs sph, Par
   return make_float2(density, near_density);
 }
 
-__host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs soil, SoilParticlesPtrs soil_particles, int w, int h,
-                                                         float soil_size, float particle_radius) {
+__host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs soil,
+                                                         SoilParticlesPtrs soil_particles, int w,
+                                                         int h, float soil_size,
+                                                         float particle_radius) {
   float density = 0.0f;
   float near_density = 0.0f;
 
@@ -182,7 +186,8 @@ __host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs so
       // float2 other_pos = make_float2((xi + 0.5f) * soil_size, (yi + 0.5f) * soil_size);
       float other_x_offset = soil_particles.x_offset[soil_index];
       float other_y_offset = soil_particles.y_offset[soil_index];
-      float2 other_pos = make_float2((xi + other_x_offset) * soil_size, (yi + other_y_offset) * soil_size);
+      float2 other_pos =
+          make_float2((xi + other_x_offset) * soil_size, (yi + other_y_offset) * soil_size);
 
       float distance = length(pos - other_pos);
       float soil_cell_mass = (soil.sand_density[soil_index] * SAND_ABSOLUTE_DENSITY +
@@ -203,16 +208,17 @@ __host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs so
 __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
                                            int max_particles_per_cell, int2 particle_grid_dims,
                                            float cell_size, float smoothing_radius,
-                                           size_t num_particles, float2 bounds, SoilPtrs soil_read, SoilParticlesPtrs soil_ptrs,
-                                           int soil_w, int soil_h, float soil_size) {
+                                           size_t num_particles, float2 bounds, SoilPtrs soil_read,
+                                           SoilParticlesPtrs soil_ptrs, int soil_w, int soil_h,
+                                           float soil_size) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
   float2 density_from_p =
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
-  float2 density_from_soil = calculate_soil_density_at_pos(sph.pos[i], soil_read, soil_ptrs, soil_w, soil_h,
-                                                           soil_size, smoothing_radius);
+  float2 density_from_soil = calculate_soil_density_at_pos(sph.pos[i], soil_read, soil_ptrs, soil_w,
+                                                           soil_h, soil_size, smoothing_radius);
   sph.density[i] = density_from_p.x + density_from_soil.x;
   sph.near_density[i] = density_from_p.y + density_from_soil.y;
 }
@@ -258,8 +264,8 @@ __global__ void calculate_soil_density(SPHPtrs sph, SoilParticlesPtrs soil_ptrs,
   float2 density_from_p =
       calculate_density_at_pos(pos, sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
-  float2 density_from_soil =
-      calculate_soil_density_at_pos(pos, soil_read, soil_ptrs, soil_w, soil_h, soil_size, smoothing_radius);
+  float2 density_from_soil = calculate_soil_density_at_pos(pos, soil_read, soil_ptrs, soil_w,
+                                                           soil_h, soil_size, smoothing_radius);
   soil_ptrs.density[i] = density_from_p.x + density_from_soil.x;
   soil_ptrs.near_density[i] = density_from_p.y + density_from_soil.y;
 }
@@ -437,7 +443,8 @@ __global__ void calculate_accel(SPHPtrs sph, SoilParticlesPtrs soil_ptrs, Partic
       // float2 other_pos = make_float2((xi + 0.5f) * soil_size, (yi + 0.5f) * soil_size);
       float other_x_offset = soil_ptrs.x_offset[soil_index];
       float other_y_offset = soil_ptrs.y_offset[soil_index];
-      float2 other_pos = make_float2((xi + other_x_offset) * soil_size, (yi + other_y_offset) * soil_size);
+      float2 other_pos =
+          make_float2((xi + other_x_offset) * soil_size, (yi + other_y_offset) * soil_size);
 
       float distance = length(pos - other_pos);
       float soil_cell_mass = (soil_read.sand_density[soil_index] * SAND_ABSOLUTE_DENSITY +
@@ -689,6 +696,7 @@ __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t n
 }
 
 void ParticleFluid::update() {
+  auto &profiler = TimingProfiler::getInstance();
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
   sph.get_ptrs(particles_device);
@@ -706,32 +714,50 @@ void ParticleFluid::update() {
   dim3 grid_grid_dim((grid_size + grid_block.x - 1) / grid_block.x);
 
   // place in grid
-  reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
-  check_cuda("reset_particles_per_cell");
+  {
+    auto scope = profiler.scopedMeasure("reset_particles_per_cell");
+    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
+    check_cuda("reset_particles_per_cell");
+  }
 
-  populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                     grid.max_particles_per_cell, grid_dims,
-                                                     params.smoothing_radius);
-  check_cuda("populate_grid_indices");
+  {
+    auto scope = profiler.scopedMeasure("populate_grid_indices");
+    populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
+                                                      grid.max_particles_per_cell, grid_dims,
+                                                      params.smoothing_radius);
+    check_cuda("populate_grid_indices");
+  }
+
+
 
   // calculate density
-  calculate_particle_density<<<sph_grid_dim, sph_block>>>(
-      sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
-      num_particles, bounds);
-  check_cuda("calculate_particle_density");
 
+  {
+    auto scope = profiler.scopedMeasure("calculate_particle_density");
+    calculate_particle_density<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
+        num_particles, bounds);
+    check_cuda("calculate_particle_density");
+  }
   // calculate acceleration
-  calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-                                               grid_dims, cell_size, params, num_particles, bounds);
-  check_cuda("calculate_accel");
+  {
+    auto scope = profiler.scopedMeasure("calculate_accel");
+    calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
+                                                grid_dims, cell_size, params, num_particles, bounds);
+    check_cuda("calculate_accel");
+  }
 
   // move particles
-  move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
-                                              bounds, params.collision_damping);
-  check_cuda("move_particles");
+  {
+    auto scope = profiler.scopedMeasure("move_particles");
+    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
+                                                bounds, params.collision_damping);
+    check_cuda("move_particles");
+  }
 }
 
 void ParticleFluid::update(SoilSystem &soil_system) {
+  auto &profiler = TimingProfiler::getInstance();
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
   SoilPtrs soil_ptrs;
@@ -760,43 +786,64 @@ void ParticleFluid::update(SoilSystem &soil_system) {
                      soil_block.x);
 
   // place in grid
-  reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
-  check_cuda("reset_particles_per_cell");
+  {
+    auto scope = profiler.scopedMeasure("reset_particles_per_cell");
+    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
+    check_cuda("reset_particles_per_cell");
+  }
 
-  populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                     grid.max_particles_per_cell, grid_dims,
-                                                     params.smoothing_radius);
-  check_cuda("populate_grid_indices");
+  {
+    auto scope = profiler.scopedMeasure("populate_grid_indices");
+    populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
+                                                      grid.max_particles_per_cell, grid_dims,
+                                                      params.smoothing_radius);
+    check_cuda("populate_grid_indices");
+  }
 
   // jitter soil particles
-  soil_system.jitter_particles();
+  {
+    auto scope = profiler.scopedMeasure("jitter_particles");
+    soil_system.jitter_particles();
+  }
 
   // calculate density of particles, including contributions from soil
-  calculate_particle_density<<<sph_grid_dim, sph_block>>>(
-      sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
-      num_particles, bounds, soil_ptrs, soil_particle_ptrs, soil_width, soil_height, soil_size);
-  check_cuda("calculate_particle_density");
+  {
+    auto scope = profiler.scopedMeasure("calculate_particle_density");
+    calculate_particle_density<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
+        num_particles, bounds, soil_ptrs, soil_particle_ptrs, soil_width, soil_height, soil_size);
+    check_cuda("calculate_particle_density");
+  }
 
   // calculate density of soil particles
-  calculate_soil_density<<<soil_grid_dim, soil_block>>>(
-      sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size,
-      params.smoothing_radius, num_particles, bounds, soil_ptrs, soil_width, soil_height,
-      soil_size);
+  {
+    auto scope = profiler.scopedMeasure("calculate_soil_density");
+    calculate_soil_density<<<soil_grid_dim, soil_block>>>(
+        sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size,
+        params.smoothing_radius, num_particles, bounds, soil_ptrs, soil_width, soil_height,
+        soil_size);
+      }
 
   // calculate acceleration
   // calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
   //                                              grid_dims, cell_size, params, num_particles,
   //                                              bounds);
   // calculate acceleration with soil
-  calculate_accel<<<sph_grid_dim, sph_block>>>(
-      sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params,
-      num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
-  check_cuda("calculate_accel");
+  {
+    auto scope = profiler.scopedMeasure("calculate_accel");
+    calculate_accel<<<sph_grid_dim, sph_block>>>(
+        sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params,
+        num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
+    check_cuda("calculate_accel");
+  }
 
   // move particles
-  move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
-                                              bounds, params.collision_damping);
-  check_cuda("move_particles");
+  {
+    auto scope = profiler.scopedMeasure("move_particles");
+    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
+                                                bounds, params.collision_damping);
+    check_cuda("move_particles");
+  }
 }
 
 __global__ void render_particles(unsigned int *circle_vbo, SPHPtrs sph, TunableParams params,

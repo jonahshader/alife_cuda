@@ -1,6 +1,7 @@
 #include "FluidSoil.cuh"
 
 #include "systems/ParticleFluid2.cuh"
+#include "systems/TimingProfiler.cuh"
 
 #include <imgui.h>
 #include <thrust/extrema.h>
@@ -81,6 +82,7 @@ void FluidSoil::check_cuda(const std::string &msg) {
 }
 
 void FluidSoil::render(float _dt) {
+  auto &profiler = TimingProfiler::getInstance();
   render_start();
   auto &circle_renderer = game.getResources().circle_renderer;
   auto &main_font_world = game.getResources().main_font_world;
@@ -93,39 +95,59 @@ void FluidSoil::render(float _dt) {
   if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
 
-    fluid.attract({world_coords.x, world_coords.y}, repelling ? -grab_strength : grab_strength, grab_radius);
+    fluid.attract({world_coords.x, world_coords.y}, repelling ? -grab_strength : grab_strength,
+                  grab_radius);
   }
   // TODO: calculate expected max_density from particles per cell
-  fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+  {
+    auto scope = profiler.scopedMeasure("calculate_density_grid");
+    fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+  }
 
-  cudaArray *cuda_array = density_renderer.cuda_map_texture();
-  if (cuda_array == nullptr) {
-    std::cerr << "Failed to map texture to CUDA" << std::endl;
-    return;
+  {
+    auto scope = profiler.scopedMeasure("density_renderer.cuda_map_texture()");
+    cudaArray *cuda_array = density_renderer.cuda_map_texture();
+    if (cuda_array == nullptr) {
+      std::cerr << "Failed to map texture to CUDA" << std::endl;
+      return;
+    }
   }
 
   cudaDeviceSynchronize();
-  density_renderer.update_texture_from_cuda(density_texture_data.data().get());
-  check_cuda("update_texture_from_cuda");
-
-  density_renderer.cuda_unmap_texture();
-
-  density_renderer.set_transform(vp.get_transform());
-  density_renderer.begin();
-  for (int x_offset = -1; x_offset <= 1; ++x_offset) {
-    for (int y_offset = -1; y_offset <= 1; ++y_offset) {
-      float x_offset_f = x_offset * bounds.x;
-      float y_offset_f = y_offset * bounds.y;
-      density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
-    }
+  {
+    auto scope = profiler.scopedMeasure("update_texture_from_cuda");
+    density_renderer.update_texture_from_cuda(density_texture_data.data().get());
+    check_cuda("update_texture_from_cuda");
   }
-  density_renderer.end();
-  density_renderer.render();
 
-  soil.render(vp.get_transform());
-  check_cuda("soil.render");
-  fluid.render(vp.get_transform());
-  check_cuda("fluid.render");
+  {
+    auto scope = profiler.scopedMeasure("density_renderer.render...");
+    density_renderer.cuda_unmap_texture();
+
+    density_renderer.set_transform(vp.get_transform());
+    density_renderer.begin();
+    for (int x_offset = -1; x_offset <= 1; ++x_offset) {
+      for (int y_offset = -1; y_offset <= 1; ++y_offset) {
+        float x_offset_f = x_offset * bounds.x;
+        float y_offset_f = y_offset * bounds.y;
+        density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
+      }
+    }
+    density_renderer.end();
+    density_renderer.render();
+  }
+
+  {
+    auto scope = profiler.scopedMeasure("soil.render");
+    soil.render(vp.get_transform());
+    check_cuda("soil.render");
+  }
+
+  {
+    auto scope = profiler.scopedMeasure("fluid.render");
+    fluid.render(vp.get_transform());
+    check_cuda("fluid.render");
+  }
 
   // add a circle for mouse grab tool
   float grab_color_opacity = 0.1f;
@@ -136,14 +158,20 @@ void FluidSoil::render(float _dt) {
   circle_renderer.add_circle(world_coords.x, world_coords.y, grab_radius,
                              glm::vec4(0.5f, 0.5f, 0.8f, grab_color_opacity));
   // display strength
-  main_font_world.add_text(world_coords.x, world_coords.y, grab_radius, "Strength: " + std::to_string(grab_strength),
+  main_font_world.add_text(world_coords.x, world_coords.y, grab_radius,
+                           "Strength: " + std::to_string(grab_strength),
                            glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), FontRenderer::HAlign::CENTER);
 
-  circle_renderer.end();
-  main_font_world.end();
-  circle_renderer.render();
-  main_font_world.render();
+  {
+    auto scope = profiler.scopedMeasure("render_end...");
 
-  render_end();
-  check_cuda("render_end");
+    circle_renderer.end();
+    main_font_world.end();
+    circle_renderer.render();
+    main_font_world.render();
+
+    render_end();
+    check_cuda("render_end");
+  }
+  profiler_gui.render();
 }

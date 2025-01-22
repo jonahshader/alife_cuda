@@ -142,6 +142,8 @@ add_executable(alife_cuda src/main.cu
         src/systems/ParticleFluid.cu
         src/systems/ParticleFluid2.cuh
         src/systems/ParticleFluid2.cu
+        src/systems/ProfilerGUI.cuh
+        src/systems/ProfilerGUI.cu
         src/screens/FluidTest.cu
         src/screens/FluidTest.cuh
         src/screens/FluidTest2.cu
@@ -159,6 +161,8 @@ add_executable(alife_cuda src/main.cu
         src/systems/World.cuh
         src/systems/Soil.cu
         src/systems/Soil.cuh
+        src/systems/TimingProfiler.cu
+        src/systems/TimingProfiler.cuh
         src/systems/SoAHelper.h
         src/systems/float2_ops.cuh
         src/screens/SoilTest.cu
