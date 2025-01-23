@@ -133,46 +133,19 @@ SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphi
   }
 }
 
-__global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= num_particles)
-    return;
-  curand_init(seed, i, 0, &states[i]);
-}
+// __global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
+//   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i >= num_particles)
+//     return;
+//   curand_init(seed, i, 0, &states[i]);
+// }
 
-__global__ void jitter_soil_kernel(SoilParticlesPtrs ptrs, size_t num_particles, float amount) {
-  const auto i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= num_particles) {
-    return;
-  }
-
-  auto &rand_state = ptrs.rand_state[i];
-  float px = ptrs.x_offset[i] - 0.5f;
-  float py = ptrs.y_offset[i] - 0.5f;
-  px *= 1 - amount;
-  py *= 1 - amount;
-  px += (curand_uniform(&rand_state) - 0.5f) * amount;
-  py += (curand_uniform(&rand_state) - 0.5f) * amount;
-  ptrs.x_offset[i] = px + 0.5f;
-  ptrs.y_offset[i] = py + 0.5f;
-}
-
-void SoilSystem::jitter_particles() {
-  const auto num_particles = particles.density.size();
-  dim3 block(256);
-  dim3 grid((num_particles + block.x - 1) / block.x);
-  SoilParticlesPtrs particles_ptrs;
-  particles_ptrs.get_ptrs(particles);
-  jitter_soil_kernel<<<grid, block>>>(particles_ptrs, num_particles, 0.1f);
-}
 
 void SoilSystem::reset() {
   SoilSoA soil{};
-  SoilParticlesSoA particles_cpu{};
   // assert(width % BLOCK_WIDTH == 0);
   // assert(height % BLOCK_WIDTH == 0);
   soil.resize_all(width * height);
-  particles_cpu.resize_all(width * height * PARTICLES_PER_SOIL_CELL);
 
   // use time as seed
   auto seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -254,17 +227,6 @@ void SoilSystem::reset() {
 
   read.copy_from_host(soil);
   write.copy_from_host(soil);
-  particles.copy_from_host(particles_cpu);
-
-  // init rng
-  const auto num_particles = particles_cpu.density.size();
-  dim3 block(256);
-  dim3 grid((num_particles + block.x - 1) / block.x);
-  SoilParticlesPtrs particles_ptrs;
-  particles_ptrs.get_ptrs(particles);
-  init_rng<<<grid, block>>>(particles_ptrs.rand_state, seed, num_particles);
-
-  jitter_particles();
 }
 
 void SoilSystem::update_cpu(float dt) {
@@ -305,8 +267,3 @@ SoilPtrs SoilSystem::get_read_ptrs() {
   return ptrs;
 }
 
-SoilParticlesPtrs SoilSystem::get_particles_ptrs() {
-  SoilParticlesPtrs ptrs;
-  ptrs.get_ptrs(particles);
-  return ptrs;
-}
