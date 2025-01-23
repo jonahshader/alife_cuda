@@ -11,6 +11,7 @@
 #include "systems/TimingProfiler.cuh"
 
 namespace p2 {
+
 void check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -716,19 +717,18 @@ void ParticleFluid::update() {
   // place in grid
   {
     auto scope = profiler.scopedMeasure("reset_particles_per_cell");
-    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
+    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell,
+                                                            grid_size);
     check_cuda("reset_particles_per_cell");
   }
 
   {
     auto scope = profiler.scopedMeasure("populate_grid_indices");
     populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                      grid.max_particles_per_cell, grid_dims,
-                                                      params.smoothing_radius);
+                                                       grid.max_particles_per_cell, grid_dims,
+                                                       params.smoothing_radius);
     check_cuda("populate_grid_indices");
   }
-
-
 
   // calculate density
 
@@ -743,7 +743,8 @@ void ParticleFluid::update() {
   {
     auto scope = profiler.scopedMeasure("calculate_accel");
     calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-                                                grid_dims, cell_size, params, num_particles, bounds);
+                                                 grid_dims, cell_size, params, num_particles,
+                                                 bounds);
     check_cuda("calculate_accel");
   }
 
@@ -788,15 +789,16 @@ void ParticleFluid::update(SoilSystem &soil_system) {
   // place in grid
   {
     auto scope = profiler.scopedMeasure("reset_particles_per_cell");
-    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell, grid_size);
+    reset_particles_per_cell<<<grid_grid_dim, grid_block>>>(grid_ptrs.particles_per_cell,
+                                                            grid_size);
     check_cuda("reset_particles_per_cell");
   }
 
   {
     auto scope = profiler.scopedMeasure("populate_grid_indices");
     populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                      grid.max_particles_per_cell, grid_dims,
-                                                      params.smoothing_radius);
+                                                       grid.max_particles_per_cell, grid_dims,
+                                                       params.smoothing_radius);
     check_cuda("populate_grid_indices");
   }
 
@@ -822,7 +824,7 @@ void ParticleFluid::update(SoilSystem &soil_system) {
         sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size,
         params.smoothing_radius, num_particles, bounds, soil_ptrs, soil_width, soil_height,
         soil_size);
-      }
+  }
 
   // calculate acceleration
   // calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
@@ -832,8 +834,8 @@ void ParticleFluid::update(SoilSystem &soil_system) {
   {
     auto scope = profiler.scopedMeasure("calculate_accel");
     calculate_accel<<<sph_grid_dim, sph_block>>>(
-        sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params,
-        num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
+        sph, soil_particle_ptrs, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size,
+        params, num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
     check_cuda("calculate_accel");
   }
 

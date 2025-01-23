@@ -40,6 +40,7 @@ private:
   float grab_radius{2.0f};
   float grab_strength{0.15f};
   ProfilerGui profiler_gui{};
+  bool show_density_grid{true};
 
   void check_cuda(const std::string &msg);
 };

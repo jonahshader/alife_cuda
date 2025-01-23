@@ -8,6 +8,7 @@
 
 #include <iostream>
 
+
 #define CUDA_CHECK(call)                                                                           \
   do {                                                                                             \
     cudaError_t error = call;                                                                      \
@@ -92,6 +93,10 @@ void FluidSoil::render(float _dt) {
   main_font_world.begin();
   soil.update_cuda(_dt); // TODO: need proper dt parameter
   fluid.update(soil);
+
+  ImGui::Begin("Particle Fluid");
+  ImGui::Checkbox("Show Density Grid", &show_density_grid);
+  ImGui::End();
   if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
 
@@ -101,40 +106,48 @@ void FluidSoil::render(float _dt) {
   // TODO: calculate expected max_density from particles per cell
   {
     auto scope = profiler.scopedMeasure("calculate_density_grid");
-    fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+    if (show_density_grid)
+      fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
   }
 
   {
     auto scope = profiler.scopedMeasure("density_renderer.cuda_map_texture()");
-    cudaArray *cuda_array = density_renderer.cuda_map_texture();
-    if (cuda_array == nullptr) {
-      std::cerr << "Failed to map texture to CUDA" << std::endl;
-      return;
+    if (show_density_grid) {
+      cudaArray *cuda_array = density_renderer.cuda_map_texture();
+      if (cuda_array == nullptr) {
+        std::cerr << "Failed to map texture to CUDA" << std::endl;
+        return;
+      }
     }
   }
 
-  cudaDeviceSynchronize();
+
   {
     auto scope = profiler.scopedMeasure("update_texture_from_cuda");
-    density_renderer.update_texture_from_cuda(density_texture_data.data().get());
-    check_cuda("update_texture_from_cuda");
+    if (show_density_grid) {
+      density_renderer.update_texture_from_cuda(density_texture_data.data().get());
+      check_cuda("update_texture_from_cuda");
+    }
   }
 
   {
     auto scope = profiler.scopedMeasure("density_renderer.render...");
-    density_renderer.cuda_unmap_texture();
+    if (show_density_grid) {
+      density_renderer.cuda_unmap_texture();
 
-    density_renderer.set_transform(vp.get_transform());
-    density_renderer.begin();
-    for (int x_offset = -1; x_offset <= 1; ++x_offset) {
-      for (int y_offset = -1; y_offset <= 1; ++y_offset) {
-        float x_offset_f = x_offset * bounds.x;
-        float y_offset_f = y_offset * bounds.y;
-        density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
+      density_renderer.set_transform(vp.get_transform());
+      density_renderer.begin();
+      for (int x_offset = -1; x_offset <= 1; ++x_offset) {
+        for (int y_offset = -1; y_offset <= 1; ++y_offset) {
+          float x_offset_f = x_offset * bounds.x;
+          float y_offset_f = y_offset * bounds.y;
+          density_renderer.add_rect(x_offset_f, y_offset_f, bounds.x, bounds.y, glm::vec3(1.0f));
+        }
       }
+      density_renderer.end();
+      density_renderer.render();
     }
-    density_renderer.end();
-    density_renderer.render();
+
   }
 
   {
