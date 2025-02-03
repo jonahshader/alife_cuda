@@ -158,22 +158,16 @@ __host__ __device__ float2 calculate_density_at_pos(float2 pos, SPHPtrs sph, Par
   return make_float2(density, near_density);
 }
 
-// __host__ __device__ float2 calculate_soil_density_at_pos(float2 pos, SoilPtrs soil, int w, int h,
-//                                                          float soil_size, float particle_radius)
-//                                                          {
+__host__ __device__ inline float smoothstep01(float x) {
+  x = fmaxf(0.0f, fminf(1.0f, x));
+  return x * x * (3.0f - 2.0f * x);
+}
 
-//   int cell_x = pos.x / soil_size;
-//   cell_x = (cell_x + w) % w; // wrap around
-//   int cell_y = pos.y / soil_size;
-//   int soil_index = cell_y * w + cell_x;
-
-//   float soil_cell_density = (soil.sand_density[soil_index] * SAND_ABSOLUTE_DENSITY +
-//                              soil.silt_density[soil_index] * SILT_ABSOLUTE_DENSITY +
-//                              soil.clay_density[soil_index] * CLAY_ABSOLUTE_DENSITY);
-
-//   // float soil_cell_mass = soil_cell_density * soil_size * soil_size; // convert to mass
-//   return make_float2(soil_cell_density, soil_cell_density);
-// }
+__host__ __device__ inline float smoothstep01_derivative(float x) {
+  // Derivative of smoothstep, in [0,1]
+  x = fmaxf(0.0f, fminf(1.0f, x));
+  return 6.0f * x * (1.0f - x);
+}
 
 // Bilinear interpolation version
 __host__ __device__ float2 calculate_soil_density_at_pos_bilinear(float2 pos, SoilPtrs soil, int w,
@@ -220,6 +214,63 @@ __host__ __device__ float2 calculate_soil_density_at_pos_bilinear(float2 pos, So
   return make_float2(density, density);
 }
 
+__host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, SoilPtrs soil,
+                                                                    int w, int h, float soil_size,
+                                                                    float particle_radius) {
+  // Calculate the floating-point cell coordinates
+  float half_soil_size = soil_size * 0.5f;
+  float fx = (pos.x - half_soil_size) / soil_size;
+  float fy = (pos.y - half_soil_size) / soil_size;
+
+  // Get integer coordinates of the four nearest cells
+  int x0 = floorf(fx);
+  int y0 = floorf(fy);
+
+  // Calculate fractional parts
+  float dx = fx - x0;
+  float dy = fy - y0;
+
+  // Wrap x coordinates
+  int x[2];
+  x[0] = ((x0 % w) + w) % w;     // wrap
+  x[1] = ((x0 + 1) % w + w) % w; // wrap
+
+  // Clamp y coordinates
+  int y[2];
+  y[0] = max(0, min(h - 1, y0));
+  y[1] = max(0, min(h - 1, y0 + 1));
+
+  // Gather the four corner densities
+  float d[2][2];
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      int idx = y[j] * w + x[i];
+      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
+                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
+                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+    }
+  }
+
+  // Perform smoothstep on dx, dy
+  float tx = smoothstep01(dx);
+  float ty = smoothstep01(dy);
+
+  // Smooth "bilinear" interpolation using smoothstep:
+  //
+  //   1) Interpolate horizontally at y0 and y1 using tx
+  //   2) Interpolate vertically between those results using ty
+
+  // At y0
+  float d0 = d[0][0] * (1.0f - tx) + d[0][1] * tx;
+  // At y1
+  float d1 = d[1][0] * (1.0f - tx) + d[1][1] * tx;
+  // Final interpolation
+  float density = d0 * (1.0f - ty) + d1 * ty;
+
+  // Return as float2 (mirroring your existing signature)
+  return make_float2(density, 0.0f);
+}
+
 // Calculate gradient using bilinear interpolation
 __host__ __device__ float2 calculate_soil_density_gradient_bilinear(float2 pos, SoilPtrs soil,
                                                                     int w, int h, float soil_size,
@@ -264,6 +315,85 @@ __host__ __device__ float2 calculate_soil_density_gradient_bilinear(float2 pos, 
 
   // For y direction: interpolate between gradients at x0 and x1
   float grad_y = ((d[1][0] - d[0][0]) * (1 - dx) + (d[1][1] - d[0][1]) * dx) / soil_size;
+
+  return make_float2(grad_x, grad_y);
+}
+
+__host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos, SoilPtrs soil,
+                                                                      int w, int h, float soil_size,
+                                                                      float particle_radius) {
+  // Calculate the floating-point cell coordinates
+  float half_soil_size = soil_size * 0.5f;
+  float fx = (pos.x - half_soil_size) / soil_size;
+  float fy = (pos.y - half_soil_size) / soil_size;
+
+  // Get integer coordinates of the four nearest cells
+  int x0 = floorf(fx);
+  int y0 = floorf(fy);
+
+  // Fractional parts
+  float dx = fx - x0;
+  float dy = fy - y0;
+
+  // Wrap x
+  int x[2];
+  x[0] = ((x0 % w) + w) % w;
+  x[1] = ((x0 + 1) % w + w) % w;
+
+  // Clamp y
+  int y[2];
+  y[0] = max(0, min(h - 1, y0));
+  y[1] = max(0, min(h - 1, y0 + 1));
+
+  // Gather corner densities
+  float d[2][2];
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      int idx = y[j] * w + x[i];
+      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
+                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
+                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+    }
+  }
+
+  // Evaluate smoothstep and derivative
+  float tx_raw = dx;
+  float ty_raw = dy;
+
+  float tx = smoothstep01(tx_raw);
+  float dtx = smoothstep01_derivative(tx_raw);
+
+  float ty = smoothstep01(ty_raw);
+  float dty = smoothstep01_derivative(ty_raw);
+
+  // Interpolate horizontally (depends on tx)
+  float d00 = d[0][0];
+  float d01 = d[0][1];
+  float d10 = d[1][0];
+  float d11 = d[1][1];
+
+  float d0 = d00 * (1.0f - tx) + d01 * tx; // at y0
+  float d1 = d10 * (1.0f - tx) + d11 * tx; // at y1
+
+  // Final mix
+  float final_val = d0 * (1.0f - ty) + d1 * ty; // not actually needed for the gradient itself
+
+  // ∂f/∂tx
+  float partialF_wrt_tx = (d01 - d00) * (1.0f - ty) + (d11 - d10) * ty;
+
+  // ∂f/∂ty
+  float partialF_wrt_ty = (d1 - d0);
+
+  // Now chain rule to get ∂f/∂x, ∂f/∂y in world space
+  // dx = (pos.x - half_soil_size)/soil_size - floor => derivative wrt x is 1/soil_size
+  // So ∂f/∂x = ∂f/∂tx * d(tx)/dx * ∂x(raw)/∂x
+  // d(tx)/dx = d(smoothstep)/dx = dtx
+  // => grad_x = partialF_wrt_tx * dtx * (1.0f/soil_size)
+
+  float grad_x = partialF_wrt_tx * dtx * (1.0f / soil_size);
+
+  // Similarly for y
+  float grad_y = partialF_wrt_ty * dty * (1.0f / soil_size);
 
   return make_float2(grad_x, grad_y);
 }
@@ -343,7 +473,7 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
   float2 density_from_p =
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
-  float2 density_from_soil = calculate_soil_density_at_pos_bilinear(
+  float2 density_from_soil = calculate_soil_density_at_pos_smoothstep(
       sph.pos[i], soil_read, soil_w, soil_h, soil_size, smoothing_radius);
   sph.density[i] = density_from_p.x + density_from_soil.x;
   sph.near_density[i] = density_from_p.y + density_from_soil.y;
@@ -519,8 +649,8 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
     }
   }
 
-  float2 soil_grad = calculate_soil_density_gradient_bilinear(pos, soil_read, soil_w, soil_h,
-                                                              soil_size, params.smoothing_radius);
+  float2 soil_grad = calculate_soil_density_gradient_smoothstep(pos, soil_read, soil_w, soil_h,
+                                                                soil_size, params.smoothing_radius);
   // std::cout << "soil_grad: " << soil_grad.x << ", " << soil_grad.y << std::endl;
   // print using printf to avoid mangling by std::cout
   // printf("soil_grad: %f, %f\n", soil_grad.x, soil_grad.y);

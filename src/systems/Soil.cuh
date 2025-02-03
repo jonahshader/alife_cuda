@@ -17,7 +17,7 @@ constexpr float CLAY_RELATIVE_DENSITY = 1.0f;
 
 constexpr float SAND_ABSOLUTE_DENSITY = 1.0f;
 constexpr float SILT_ABSOLUTE_DENSITY = 190.0f;
-constexpr float CLAY_ABSOLUTE_DENSITY = 500.0f;
+constexpr float CLAY_ABSOLUTE_DENSITY = 300.0f;
 
 constexpr float SAND_PERMEABILITY = 0.5f;
 constexpr float SILT_PERMEABILITY = 0.3f;

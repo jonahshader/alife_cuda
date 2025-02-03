@@ -14,7 +14,6 @@
 
 using uint = std::uint32_t;
 
-
 __host__ __device__ inline float get_cell_w_wrap(float *cells, int x, int y, uint width) {
   // wrap around left and right
   // TODO: try modulus solution
@@ -140,7 +139,6 @@ SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphi
 //   curand_init(seed, i, 0, &states[i]);
 // }
 
-
 void SoilSystem::reset() {
   SoilSoA soil{};
   // assert(width % BLOCK_WIDTH == 0);
@@ -187,24 +185,35 @@ void SoilSystem::reset() {
       float silt =
           soil_noise.GetNoise(static_cast<float>(x * 0.75f), static_cast<float>(y), 300.0f);
       float clay = soil_noise.GetNoise(static_cast<float>(x * 0.5f), static_cast<float>(y), 600.0f);
-      sand = sand * 0.5f + 0.5f;
-      silt = silt * 0.5f + 0.5f;
-      clay = clay * 0.5f + 0.5f;
+      // sand = sand * 0.5f + 0.5f;
+      // silt = silt * 0.5f + 0.5f;
+      // clay = clay * 0.5f + 0.5f;
 
-      int max_index = 0;
-      float max = sand;
-      if (silt > max) {
-        max = silt;
-        max_index = 1;
-      }
-      if (clay > max) {
-        max = clay;
-        max_index = 2;
-      }
+      // sharpen
+      float sharpen = 5.0f;
+      sand = sand * sharpen;
+      silt = silt * sharpen;
+      clay = clay * sharpen;
 
-      sand = max_index == 0 ? 1 : 0;
-      silt = max_index == 1 ? 1 : 0;
-      clay = max_index == 2 ? 1 : 0;
+      // softmax
+      sand = exp(sand);
+      silt = exp(silt);
+      clay = exp(clay);
+
+      // int max_index = 0;
+      // float max = sand;
+      // if (silt > max) {
+      //   max = silt;
+      //   max_index = 1;
+      // }
+      // if (clay > max) {
+      //   max = clay;
+      //   max_index = 2;
+      // }
+
+      // sand = max_index == 0 ? 1 : 0;
+      // silt = max_index == 1 ? 1 : 0;
+      // clay = max_index == 2 ? 1 : 0;
 
       float density = 1 / (sand + silt + clay);
       sand *= density;
@@ -266,4 +275,3 @@ SoilPtrs SoilSystem::get_read_ptrs() {
   ptrs.get_ptrs(read);
   return ptrs;
 }
-
