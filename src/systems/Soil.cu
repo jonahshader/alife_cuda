@@ -14,45 +14,6 @@
 
 using uint = std::uint32_t;
 
-__host__ __device__ inline float get_cell_w_wrap(float *cells, int x, int y, uint width) {
-  // wrap around left and right
-  // TODO: try modulus solution
-  if (x < 0)
-    x += width;
-  if (x >= width)
-    x -= width;
-  return cells[y * width + x];
-}
-
-__host__ __device__ inline void set_cell_w_wrap(float *cells, int x, int y, uint width,
-                                                float value) {
-  // wrap around left and right
-  // TODO: try modulus solution
-  if (x < 0)
-    x += width;
-  if (x >= width)
-    x -= width;
-  cells[y * width + x] = value;
-}
-
-__host__ __device__ inline int16_t get_cell_w_wrap(int16_t *cells, int x, int y, int width) {
-  // wrap around left and right
-  // TODO: try modulus solution
-  if (x < 0)
-    x += width;
-  if (x >= width)
-    x -= width;
-  return cells[y * width + x];
-}
-
-__host__ __device__ inline float calc_delta(float water, float other_water) {
-  return (other_water - water) / 5;
-}
-
-__host__ __device__ inline bool inbounds(int y, uint height) {
-  return y >= 0 && y < height;
-}
-
 __host__ __device__ inline float get_effective_density(float sand, float silt, float clay) {
   return 1 - (sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY +
               clay * CLAY_RELATIVE_DENSITY);
@@ -61,26 +22,6 @@ __host__ __device__ inline float get_effective_density(float sand, float silt, f
 __host__ __device__ inline float get_effective_permeability(float sand, float silt, float clay) {
   return 1 - (sand * (1 - SAND_PERMEABILITY) + silt * (1 - SILT_PERMEABILITY) +
               clay * (1 - CLAY_PERMEABILITY));
-}
-
-__host__ __device__ inline void get_effective(const SoilPtrs &ptrs, size_t id, float &density,
-                                              float &permeability) {
-  // does not check upper or lower bounds
-  density =
-      get_effective_density(ptrs.sand_density[id], ptrs.silt_density[id], ptrs.clay_density[id]);
-  permeability = get_effective_permeability(ptrs.sand_density[id], ptrs.silt_density[id],
-                                            ptrs.clay_density[id]);
-}
-
-__host__ __device__ inline void get_effective(const SoilPtrs &ptrs, int x, int y, uint width,
-                                              float &density, float &permeability) {
-  // does not check upper or lower bounds
-  if (x < 0)
-    x += width;
-  if (x >= width)
-    x -= width;
-  const auto id = x + y * width;
-  get_effective(ptrs, id, density, permeability);
 }
 
 __host__ __device__ inline void add_rect(float x, float y, float width, float height,
