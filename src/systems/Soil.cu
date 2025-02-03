@@ -14,7 +14,6 @@
 
 using uint = std::uint32_t;
 
-
 __host__ __device__ inline float get_cell_w_wrap(float *cells, int x, int y, uint width) {
   // wrap around left and right
   // TODO: try modulus solution
@@ -133,46 +132,18 @@ SoilSystem::SoilSystem(uint width, uint height, float cell_size, bool use_graphi
   }
 }
 
-__global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= num_particles)
-    return;
-  curand_init(seed, i, 0, &states[i]);
-}
-
-__global__ void jitter_soil_kernel(SoilParticlesPtrs ptrs, size_t num_particles, float amount) {
-  const auto i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= num_particles) {
-    return;
-  }
-
-  auto &rand_state = ptrs.rand_state[i];
-  float px = ptrs.x_offset[i] - 0.5f;
-  float py = ptrs.y_offset[i] - 0.5f;
-  px *= 1 - amount;
-  py *= 1 - amount;
-  px += (curand_uniform(&rand_state) - 0.5f) * amount;
-  py += (curand_uniform(&rand_state) - 0.5f) * amount;
-  ptrs.x_offset[i] = px + 0.5f;
-  ptrs.y_offset[i] = py + 0.5f;
-}
-
-void SoilSystem::jitter_particles() {
-  const auto num_particles = particles.density.size();
-  dim3 block(256);
-  dim3 grid((num_particles + block.x - 1) / block.x);
-  SoilParticlesPtrs particles_ptrs;
-  particles_ptrs.get_ptrs(particles);
-  jitter_soil_kernel<<<grid, block>>>(particles_ptrs, num_particles, 0.1f);
-}
+// __global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
+//   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (i >= num_particles)
+//     return;
+//   curand_init(seed, i, 0, &states[i]);
+// }
 
 void SoilSystem::reset() {
   SoilSoA soil{};
-  SoilParticlesSoA particles_cpu{};
   // assert(width % BLOCK_WIDTH == 0);
   // assert(height % BLOCK_WIDTH == 0);
   soil.resize_all(width * height);
-  particles_cpu.resize_all(width * height * PARTICLES_PER_SOIL_CELL);
 
   // use time as seed
   auto seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -214,24 +185,35 @@ void SoilSystem::reset() {
       float silt =
           soil_noise.GetNoise(static_cast<float>(x * 0.75f), static_cast<float>(y), 300.0f);
       float clay = soil_noise.GetNoise(static_cast<float>(x * 0.5f), static_cast<float>(y), 600.0f);
-      sand = sand * 0.5f + 0.5f;
-      silt = silt * 0.5f + 0.5f;
-      clay = clay * 0.5f + 0.5f;
+      // sand = sand * 0.5f + 0.5f;
+      // silt = silt * 0.5f + 0.5f;
+      // clay = clay * 0.5f + 0.5f;
 
-      int max_index = 0;
-      float max = sand;
-      if (silt > max) {
-        max = silt;
-        max_index = 1;
-      }
-      if (clay > max) {
-        max = clay;
-        max_index = 2;
-      }
+      // sharpen
+      float sharpen = 5.0f;
+      sand = sand * sharpen;
+      silt = silt * sharpen;
+      clay = clay * sharpen;
 
-      sand = max_index == 0 ? 1 : 0;
-      silt = max_index == 1 ? 1 : 0;
-      clay = max_index == 2 ? 1 : 0;
+      // softmax
+      sand = exp(sand);
+      silt = exp(silt);
+      clay = exp(clay);
+
+      // int max_index = 0;
+      // float max = sand;
+      // if (silt > max) {
+      //   max = silt;
+      //   max_index = 1;
+      // }
+      // if (clay > max) {
+      //   max = clay;
+      //   max_index = 2;
+      // }
+
+      // sand = max_index == 0 ? 1 : 0;
+      // silt = max_index == 1 ? 1 : 0;
+      // clay = max_index == 2 ? 1 : 0;
 
       float density = 1 / (sand + silt + clay);
       sand *= density;
@@ -254,17 +236,6 @@ void SoilSystem::reset() {
 
   read.copy_from_host(soil);
   write.copy_from_host(soil);
-  particles.copy_from_host(particles_cpu);
-
-  // init rng
-  const auto num_particles = particles_cpu.density.size();
-  dim3 block(256);
-  dim3 grid((num_particles + block.x - 1) / block.x);
-  SoilParticlesPtrs particles_ptrs;
-  particles_ptrs.get_ptrs(particles);
-  init_rng<<<grid, block>>>(particles_ptrs.rand_state, seed, num_particles);
-
-  jitter_particles();
 }
 
 void SoilSystem::update_cpu(float dt) {
@@ -302,11 +273,5 @@ void SoilSystem::render(const glm::mat4 &transform) {
 SoilPtrs SoilSystem::get_read_ptrs() {
   SoilPtrs ptrs;
   ptrs.get_ptrs(read);
-  return ptrs;
-}
-
-SoilParticlesPtrs SoilSystem::get_particles_ptrs() {
-  SoilParticlesPtrs ptrs;
-  ptrs.get_ptrs(particles);
   return ptrs;
 }

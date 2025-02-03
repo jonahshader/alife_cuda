@@ -17,7 +17,7 @@ constexpr float CLAY_RELATIVE_DENSITY = 1.0f;
 
 constexpr float SAND_ABSOLUTE_DENSITY = 1.0f;
 constexpr float SILT_ABSOLUTE_DENSITY = 190.0f;
-constexpr float CLAY_ABSOLUTE_DENSITY = 500.0f;
+constexpr float CLAY_ABSOLUTE_DENSITY = 300.0f;
 
 constexpr float SAND_PERMEABILITY = 0.5f;
 constexpr float SILT_PERMEABILITY = 0.3f;
@@ -32,15 +32,7 @@ constexpr int PARTICLES_PER_SOIL_CELL = 1;
   D(float, ph, 6.5)                                                                                \
   D(float, organic_matter, 0)
 
-#define FOR_SOIL_PARTICLES(N, D)                                                                   \
-  D(float, density, 0)                                                                             \
-  D(float, near_density, 0)                                                                        \
-  N(curandState, rand_state)                                                                       \
-  D(float, x_offset, 0)                                                                            \
-  D(float, y_offset, 0)
-
 DEFINE_STRUCTS(Soil, FOR_SOIL)
-DEFINE_STRUCTS(SoilParticles, FOR_SOIL_PARTICLES)
 
 class SoilSystem {
 public:
@@ -52,7 +44,6 @@ public:
   void update_cuda(float dt);
   void render(const glm::mat4 &transform);
   void reset();
-  void jitter_particles();
   uint get_width() const {
     return width;
   }
@@ -63,12 +54,10 @@ public:
     return cell_size;
   }
   SoilPtrs get_read_ptrs();
-  SoilParticlesPtrs get_particles_ptrs();
 
 private:
   uint width, height;
   float cell_size;
   SoilSoADevice read{}, write{};
-  SoilParticlesSoADevice particles{};
   std::unique_ptr<SimpleRectRenderer> rect_renderer{};
 };
