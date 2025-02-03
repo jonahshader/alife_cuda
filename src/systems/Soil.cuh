@@ -19,9 +19,9 @@ constexpr float SAND_ABSOLUTE_DENSITY = 1.0f;
 constexpr float SILT_ABSOLUTE_DENSITY = 190.0f;
 constexpr float CLAY_ABSOLUTE_DENSITY = 300.0f;
 
-constexpr float SAND_PERMEABILITY = 0.5f;
-constexpr float SILT_PERMEABILITY = 0.3f;
-constexpr float CLAY_PERMEABILITY = 0.00f;
+constexpr float SAND_FRICTION = 8.0f;
+constexpr float SILT_FRICTION = 20.0f;
+constexpr float CLAY_FRICTION = 50.0f;
 
 constexpr int PARTICLES_PER_SOIL_CELL = 1;
 
@@ -61,3 +61,6 @@ private:
   SoilSoADevice read{}, write{};
   std::unique_ptr<SimpleRectRenderer> rect_renderer{};
 };
+
+__host__ __device__ float get_density(SoilPtrs soil, size_t i);
+__host__ __device__ float get_friction(SoilPtrs soil, size_t i);

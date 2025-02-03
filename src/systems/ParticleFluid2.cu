@@ -187,8 +187,8 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
 
   // Wrap x coordinates
   int x[2];
-  x[0] = ((x0 % w) + w) % w;     // wrap
-  x[1] = ((x0 + 1) % w + w) % w; // wrap
+  x[0] = (x0 + w) % w;     // wrap
+  x[1] = (x0 + 1 + w) % w; // wrap
 
   // Clamp y coordinates
   int y[2];
@@ -200,9 +200,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      d[j][i] = get_density(soil, idx);
     }
   }
 
@@ -257,9 +255,7 @@ __host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      d[j][i] = get_density(soil, idx);
     }
   }
 
@@ -347,9 +343,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_bicubic(float2 pos, Soi
       int wrapped_x = wrap_x(x1 + x, w);
       int idx = clamped_y * w + wrapped_x;
 
-      densities[y + 1][x + 1] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      densities[y + 1][x + 1] = get_density(soil, idx);
     }
   }
 
@@ -484,6 +478,7 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
   float2 acc = make_float2(0.0f, params.gravity) +
                (pressure_force + viscosity_force * params.viscosity_strength) / density;
+  // integrate acceleration
   sph.vel[pid] = vel + acc * params.dt;
 }
 
@@ -564,6 +559,14 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
   float2 acc = make_float2(0.0f, params.gravity) +
                (pressure_force + viscosity_force * params.viscosity_strength) / density;
+
+  // float vel_mag = length(vel);
+  // // apply sigmoid
+  // vel_mag = 1.0f / (1.0f + expf(-vel_mag));
+
+  // acc = acc - vel * vel_mag;
+  int soil_idx = floor(pos.x / soil_size) + floor(pos.y / soil_size) * soil_w;
+  acc = acc - vel * get_friction(soil_read, soil_idx);
   sph.vel[pid] = vel + acc * params.dt;
 }
 
@@ -951,7 +954,7 @@ void ParticleFluid::render(const glm::mat4 &transform) {
     ImGui::SliderFloat("target_density", &params.target_density, 0.0f, 400.0f);
     ImGui::SliderFloat("pressure_mult", &params.pressure_mult, 0.0f, 1200.0f);
     ImGui::SliderFloat("near_pressure_mult", &params.near_pressure_mult, 0.0f, 100.0f);
-    ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 1.0f);
+    ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 10.0f);
     if (ImGui::SliderInt("particles_per_cell", &params.particles_per_cell, 1, 32))
       init();
     if (ImGui::SliderInt("max_particles_per_cell", &params.max_particles_per_cell, 1, 1024))

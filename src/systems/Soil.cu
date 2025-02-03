@@ -14,14 +14,15 @@
 
 using uint = std::uint32_t;
 
-__host__ __device__ inline float get_effective_density(float sand, float silt, float clay) {
-  return 1 - (sand * SAND_RELATIVE_DENSITY + silt * SILT_RELATIVE_DENSITY +
-              clay * CLAY_RELATIVE_DENSITY);
+__host__ __device__ float get_density(SoilPtrs soil, size_t i) {
+  return soil.sand_density[i] * SAND_ABSOLUTE_DENSITY +
+         soil.silt_density[i] * SILT_ABSOLUTE_DENSITY +
+         soil.clay_density[i] * CLAY_ABSOLUTE_DENSITY;
 }
 
-__host__ __device__ inline float get_effective_permeability(float sand, float silt, float clay) {
-  return 1 - (sand * (1 - SAND_PERMEABILITY) + silt * (1 - SILT_PERMEABILITY) +
-              clay * (1 - CLAY_PERMEABILITY));
+__host__ __device__ float get_friction(SoilPtrs soil, size_t i) {
+  return soil.sand_density[i] * SAND_FRICTION + soil.silt_density[i] * SILT_FRICTION +
+         soil.clay_density[i] * CLAY_FRICTION;
 }
 
 __host__ __device__ inline void add_rect(float x, float y, float width, float height,
@@ -131,7 +132,7 @@ void SoilSystem::reset() {
       // clay = clay * 0.5f + 0.5f;
 
       // sharpen
-      float sharpen = 5.0f;
+      float sharpen = 50.0f;
       sand = sand * sharpen;
       silt = silt * sharpen;
       clay = clay * sharpen;
