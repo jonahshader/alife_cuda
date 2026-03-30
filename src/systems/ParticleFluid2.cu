@@ -169,51 +169,6 @@ __host__ __device__ inline float smoothstep01_derivative(float x) {
   return 6.0f * x * (1.0f - x);
 }
 
-// Bilinear interpolation version
-__host__ __device__ float2 calculate_soil_density_at_pos_bilinear(float2 pos, SoilPtrs soil, int w,
-                                                                  int h, float soil_size,
-                                                                  float particle_radius) {
-  // Calculate the floating-point cell coordinates
-  float half_soil_size = soil_size / 2.0f;
-  float fx = (pos.x - half_soil_size) / soil_size;
-  float fy = (pos.y - half_soil_size) / soil_size;
-
-  // Get integer coordinates of the four nearest cells
-  int x0 = floor(fx);
-  int y0 = floor(fy);
-
-  // Calculate fractional parts
-  float dx = fx - x0;
-  float dy = fy - y0;
-
-  // Calculate all four x coordinates with wrapping
-  int x[2];
-  x[0] = ((x0 % w) + w) % w;     // Ensure positive before modulo
-  x[1] = ((x0 + 1) % w + w) % w; // Wrap next x coordinate
-
-  // Calculate all four y coordinates with clamping
-  int y[2];
-  y[0] = max(0, min(h - 1, y0));
-  y[1] = max(0, min(h - 1, y0 + 1));
-
-  // Get the four corners and handle wrapping/clamping properly
-  float d[2][2];
-  for (int j = 0; j < 2; j++) {
-    for (int i = 0; i < 2; i++) {
-      int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
-    }
-  }
-
-  // Perform bilinear interpolation
-  float density = d[0][0] * (1 - dx) * (1 - dy) + d[0][1] * dx * (1 - dy) +
-                  d[1][0] * (1 - dx) * dy + d[1][1] * dx * dy;
-
-  return make_float2(density, density);
-}
-
 __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, SoilPtrs soil,
                                                                     int w, int h, float soil_size,
                                                                     float particle_radius) {
@@ -232,8 +187,8 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
 
   // Wrap x coordinates
   int x[2];
-  x[0] = ((x0 % w) + w) % w;     // wrap
-  x[1] = ((x0 + 1) % w + w) % w; // wrap
+  x[0] = (x0 + w) % w;     // wrap
+  x[1] = (x0 + 1 + w) % w; // wrap
 
   // Clamp y coordinates
   int y[2];
@@ -245,9 +200,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      d[j][i] = get_density(soil, idx);
     }
   }
 
@@ -269,54 +222,6 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
 
   // Return as float2 (mirroring your existing signature)
   return make_float2(density, 0.0f);
-}
-
-// Calculate gradient using bilinear interpolation
-__host__ __device__ float2 calculate_soil_density_gradient_bilinear(float2 pos, SoilPtrs soil,
-                                                                    int w, int h, float soil_size,
-                                                                    float particle_radius) {
-  // Calculate the floating-point cell coordinates
-  float half_soil_size = soil_size / 2.0f;
-  float fx = (pos.x - half_soil_size) / soil_size;
-  float fy = (pos.y - half_soil_size) / soil_size;
-
-  // Get integer coordinates of the four nearest cells
-  int x0 = floor(fx);
-  int y0 = floor(fy);
-
-  // Calculate fractional parts
-  float dx = fx - x0;
-  float dy = fy - y0;
-
-  // Calculate all four x coordinates with wrapping
-  int x[2];
-  x[0] = ((x0 % w) + w) % w;     // Ensure positive before modulo
-  x[1] = ((x0 + 1) % w + w) % w; // Wrap next x coordinate
-
-  // Calculate all four y coordinates with clamping
-  int y[2];
-  y[0] = max(0, min(h - 1, y0));
-  y[1] = max(0, min(h - 1, y0 + 1));
-
-  // Get the four corners and handle wrapping/clamping properly
-  float d[2][2];
-  for (int j = 0; j < 2; j++) {
-    for (int i = 0; i < 2; i++) {
-      int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
-    }
-  }
-
-  // Calculate partial derivatives
-  // For x direction: interpolate between gradients at y0 and y1
-  float grad_x = ((d[0][1] - d[0][0]) * (1 - dy) + (d[1][1] - d[1][0]) * dy) / soil_size;
-
-  // For y direction: interpolate between gradients at x0 and x1
-  float grad_y = ((d[1][0] - d[0][0]) * (1 - dx) + (d[1][1] - d[0][1]) * dx) / soil_size;
-
-  return make_float2(grad_x, grad_y);
 }
 
 __host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos, SoilPtrs soil,
@@ -350,9 +255,7 @@ __host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      d[j][i] = get_density(soil, idx);
     }
   }
 
@@ -440,9 +343,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_bicubic(float2 pos, Soi
       int wrapped_x = wrap_x(x1 + x, w);
       int idx = clamped_y * w + wrapped_x;
 
-      densities[y + 1][x + 1] = soil.sand_density[idx] * SAND_ABSOLUTE_DENSITY +
-                                soil.silt_density[idx] * SILT_ABSOLUTE_DENSITY +
-                                soil.clay_density[idx] * CLAY_ABSOLUTE_DENSITY;
+      densities[y + 1][x + 1] = get_density(soil, idx);
     }
   }
 
@@ -577,6 +478,7 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
   float2 acc = make_float2(0.0f, params.gravity) +
                (pressure_force + viscosity_force * params.viscosity_strength) / density;
+  // integrate acceleration
   sph.vel[pid] = vel + acc * params.dt;
 }
 
@@ -651,15 +553,20 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
 
   float2 soil_grad = calculate_soil_density_gradient_smoothstep(pos, soil_read, soil_w, soil_h,
                                                                 soil_size, params.smoothing_radius);
-  // std::cout << "soil_grad: " << soil_grad.x << ", " << soil_grad.y << std::endl;
-  // print using printf to avoid mangling by std::cout
-  // printf("soil_grad: %f, %f\n", soil_grad.x, soil_grad.y);
   pressure_force = pressure_force - (total_pressure * soil_grad * 0.5f / density);
 
   // apply pressure force
   // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
   float2 acc = make_float2(0.0f, params.gravity) +
                (pressure_force + viscosity_force * params.viscosity_strength) / density;
+
+  // float vel_mag = length(vel);
+  // // apply sigmoid
+  // vel_mag = 1.0f / (1.0f + expf(-vel_mag));
+
+  // acc = acc - vel * vel_mag;
+  int soil_idx = floor(pos.x / soil_size) + floor(pos.y / soil_size) * soil_w;
+  acc = acc - vel * get_friction(soil_read, soil_idx);
   sph.vel[pid] = vel + acc * params.dt;
 }
 
@@ -1047,7 +954,7 @@ void ParticleFluid::render(const glm::mat4 &transform) {
     ImGui::SliderFloat("target_density", &params.target_density, 0.0f, 400.0f);
     ImGui::SliderFloat("pressure_mult", &params.pressure_mult, 0.0f, 1200.0f);
     ImGui::SliderFloat("near_pressure_mult", &params.near_pressure_mult, 0.0f, 100.0f);
-    ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 1.0f);
+    ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 10.0f);
     if (ImGui::SliderInt("particles_per_cell", &params.particles_per_cell, 1, 32))
       init();
     if (ImGui::SliderInt("max_particles_per_cell", &params.max_particles_per_cell, 1, 1024))
