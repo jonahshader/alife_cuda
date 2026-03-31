@@ -112,7 +112,7 @@ void FontRenderer::render() {
 FontRenderer::~FontRenderer() {
   glDeleteVertexArrays(1, &vao);
   glDeleteBuffers(1, &vbo);
-  // TODO: delete texture
+  glDeleteTextures(1, &texture);
 }
 
 void FontRenderer::add_char(glm::vec2 pos_begin, glm::vec2 pos_end, glm::vec2 tex_pos_begin,

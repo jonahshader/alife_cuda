@@ -123,6 +123,9 @@ void SimpleRectRenderer::render(size_t rect_count) {
 }
 
 SimpleRectRenderer::~SimpleRectRenderer() {
+  if (cuda_resource) {
+    cudaGraphicsUnregisterResource(cuda_resource);
+  }
   glDeleteVertexArrays(1, &vao);
   glDeleteBuffers(1, &vbo_base_mesh);
   glDeleteBuffers(1, &vbo_data);
@@ -140,6 +143,7 @@ void SimpleRectRenderer::cuda_register_buffer() {
 
 void SimpleRectRenderer::cuda_unregister_buffer() {
   cudaGraphicsUnregisterResource(cuda_resource);
+  cuda_resource = nullptr;
 }
 
 void *SimpleRectRenderer::cuda_map_buffer() {

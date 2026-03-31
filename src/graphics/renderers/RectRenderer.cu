@@ -112,6 +112,9 @@ void RectRenderer::render(size_t rect_count) {
 }
 
 RectRenderer::~RectRenderer() {
+  if (cuda_resource) {
+    cudaGraphicsUnregisterResource(cuda_resource);
+  }
   glDeleteVertexArrays(1, &vao);
   glDeleteBuffers(1, &vbo_base_mesh);
   glDeleteBuffers(1, &vbo_data);
@@ -129,6 +132,7 @@ void RectRenderer::cuda_register_buffer() {
 
 void RectRenderer::cuda_unregister_buffer() {
   cudaGraphicsUnregisterResource(cuda_resource);
+  cuda_resource = nullptr;
 }
 
 void *RectRenderer::cuda_map_buffer() {
@@ -154,7 +158,7 @@ void RectRenderer::ensure_vbo_capacity(size_t num_rects) {
       }
     }
 
-    std::cout << "LineRenderer buffer size changed to " << buffer_size << std::endl;
+    std::cout << "RectRenderer buffer size changed to " << buffer_size << std::endl;
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
     glBufferData(GL_ARRAY_BUFFER, buffer_size, nullptr, GL_DYNAMIC_DRAW);

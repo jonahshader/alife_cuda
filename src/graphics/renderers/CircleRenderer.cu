@@ -38,7 +38,6 @@ CircleRenderer::CircleRenderer() : shader("shaders/circle.vert", "shaders/circle
   glBufferData(GL_ARRAY_BUFFER, sizeof(baseMesh), baseMesh, GL_STATIC_DRAW);
   glBindBuffer(GL_ARRAY_BUFFER, vbo_data);
   glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW); // TODO: eval GL_DYNAMIC_DRAW
-  cuda_register_buffer();
 
   glBindVertexArray(vao);
   glBindBuffer(GL_ARRAY_BUFFER, vbo_base_mesh);
@@ -106,10 +105,11 @@ void CircleRenderer::render(size_t circle_count) {
 }
 
 CircleRenderer::~CircleRenderer() {
+  if (cuda_resource) {
+    cudaGraphicsUnregisterResource(cuda_resource);
+  }
   glDeleteVertexArrays(1, &vao);
   glDeleteBuffers(1, &vbo_base_mesh);
-  // unregister cuda resource
-  cudaGraphicsUnregisterResource(cuda_resource);
   glDeleteBuffers(1, &vbo_data);
 }
 

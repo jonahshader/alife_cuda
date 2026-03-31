@@ -86,6 +86,9 @@ void LineRenderer::add_line(float x1, float y1, float x2, float y2, float radius
 }
 
 LineRenderer::~LineRenderer() {
+  if (cuda_resource) {
+    cudaGraphicsUnregisterResource(cuda_resource);
+  }
   glDeleteVertexArrays(1, &vao);
   glDeleteBuffers(1, &vbo);
 }
@@ -150,6 +153,7 @@ void LineRenderer::cuda_register_buffer() {
 
 void LineRenderer::cuda_unregister_buffer() {
   cudaGraphicsUnregisterResource(cuda_resource);
+  cuda_resource = nullptr;
 }
 
 void *LineRenderer::cuda_map_buffer() {

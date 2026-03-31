@@ -129,68 +129,70 @@ int main(int argc, char *argv[]) {
   //
   //    jl_eval_string("print(sqrt(2.0))");
 
-  Game game;
-  game.getResources().window = window;
-  game.resize(viewport_width, viewport_height);
-  //    game.pushScreen(std::make_shared<MainMenu>(game));
-  // game.pushScreen(std::make_shared<FluidTest>(game));
-  // game.pushScreen(std::make_shared<TreeTest>(game));
-  // game.pushScreen(std::make_shared<SoilTest>(game));
-  // game.pushScreen(std::make_shared<TexCUDATest>(game));
-  // game.pushScreen(std::make_shared<FluidTest2>(game));
-  game.pushScreen(std::make_shared<FluidSoil>(game));
+  {
+    Game game;
+    game.getResources().window = window;
+    game.resize(viewport_width, viewport_height);
+    //    game.pushScreen(std::make_shared<MainMenu>(game));
+    // game.pushScreen(std::make_shared<FluidTest>(game));
+    // game.pushScreen(std::make_shared<TreeTest>(game));
+    // game.pushScreen(std::make_shared<SoilTest>(game));
+    // game.pushScreen(std::make_shared<TexCUDATest>(game));
+    // game.pushScreen(std::make_shared<FluidTest2>(game));
+    game.pushScreen(std::make_shared<FluidSoil>(game));
 
-  float time = 0;
-  SDL_Event event;
-  while (game.isRunning()) {
-    while (SDL_PollEvent(&event)) {
-      ImGui_ImplSDL2_ProcessEvent(&event);
-      // skip game input handling if ImGui wants to capture the event
-      bool handled = false;
-      switch (event.type) {
-        case SDL_KEYDOWN:
-        case SDL_KEYUP:
-          handled = ImGui::GetIO().WantCaptureKeyboard;
-          break;
-        case SDL_MOUSEMOTION:
-        case SDL_MOUSEBUTTONDOWN:
-        case SDL_MOUSEBUTTONUP:
-        case SDL_MOUSEWHEEL:
-          handled = ImGui::GetIO().WantCaptureMouse;
-          break;
-        default:
-          break;
-      }
+    float time = 0;
+    SDL_Event event;
+    while (game.isRunning()) {
+      while (SDL_PollEvent(&event)) {
+        ImGui_ImplSDL2_ProcessEvent(&event);
+        // skip game input handling if ImGui wants to capture the event
+        bool handled = false;
+        switch (event.type) {
+          case SDL_KEYDOWN:
+          case SDL_KEYUP:
+            handled = ImGui::GetIO().WantCaptureKeyboard;
+            break;
+          case SDL_MOUSEMOTION:
+          case SDL_MOUSEBUTTONDOWN:
+          case SDL_MOUSEBUTTONUP:
+          case SDL_MOUSEWHEEL:
+            handled = ImGui::GetIO().WantCaptureMouse;
+            break;
+          default:
+            break;
+        }
 
-      if (!handled) {
-        game.handleInput(event);
-      }
+        if (!handled) {
+          game.handleInput(event);
+        }
 
-      if (event.type == SDL_QUIT) {
-        game.stopGame();
-      } else if (event.type == SDL_WINDOWEVENT) {
-        if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
-          viewport_width = event.window.data1;
-          viewport_height = event.window.data2;
-          game.resize(viewport_width, viewport_height);
-          glViewport(0, 0, viewport_width, viewport_height);
+        if (event.type == SDL_QUIT) {
+          game.stopGame();
+        } else if (event.type == SDL_WINDOWEVENT) {
+          if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
+            viewport_width = event.window.data1;
+            viewport_height = event.window.data2;
+            game.resize(viewport_width, viewport_height);
+            glViewport(0, 0, viewport_width, viewport_height);
+          }
         }
       }
+
+      // Start the Dear ImGui frame
+      ImGui_ImplOpenGL3_NewFrame();
+      ImGui_ImplSDL2_NewFrame();
+      ImGui::NewFrame();
+
+      game.render(1 / 165.0f);
+
+      ImGui::Render();
+      ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+      SDL_GL_SwapWindow(game.getResources().window);
+      time += 1 / 165.0f;
     }
-
-    // Start the Dear ImGui frame
-    ImGui_ImplOpenGL3_NewFrame();
-    ImGui_ImplSDL2_NewFrame();
-    ImGui::NewFrame();
-
-    game.render(1 / 165.0f);
-
-    ImGui::Render();
-    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-    SDL_GL_SwapWindow(game.getResources().window);
-    time += 1 / 165.0f;
-  }
+  } // game destroyed here, while GL context is still valid
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplSDL2_Shutdown();
