@@ -1,6 +1,6 @@
 #pragma once
 
-#include "parameter_manager.h"
+#include "config/sim_params.h"
 #include "soa_helper.h"
 #include "soil.cuh"
 
@@ -24,21 +24,6 @@
 
 namespace p2 {
 DEFINE_STRUCTS(SPH, FOR_SPH)
-
-struct TunableParams {
-  float dt = 1 / 600.0f;
-  float dt_predict = 1 / 120.0f;
-  float gravity = -13.0f;
-  float collision_damping = 0.5f;
-  float smoothing_radius = 0.2f;
-  float target_density = 234.0f;
-  float pressure_mult = 225.0f;
-  float near_pressure_mult = 18.0f;
-  float viscosity_strength = 0.03f;
-
-  int particles_per_cell = 4;
-  int max_particles_per_cell = particles_per_cell * 32;
-};
 
 template <template <typename> class Buffer>
 struct ParticleGrid {
@@ -83,9 +68,7 @@ struct ParticleGridPtrs {
 // Pure data struct — no renderers, no methods beyond trivial accessors
 struct ParticleFluidState {
   float2 bounds{};
-  TunableParams params{};
-  bool use_internal_params{false};
-  std::unique_ptr<ParameterManager> pm{};
+  SimParams params{};
   SPHSoA<HostBuffer> particles{};
   SPHSoA<DeviceBuffer> particles_device{};
   ParticleGrid<HostBuffer> grid{};
@@ -93,7 +76,7 @@ struct ParticleFluidState {
 };
 
 // Free functions for simulation logic
-void init_fluid(ParticleFluidState &state, float width, float height, const TunableParams &params);
+void init_fluid(ParticleFluidState &state, float width, float height, const SimParams &params);
 void init_fluid(ParticleFluidState &state, float width, float height);
 void init_fluid_grid(ParticleFluidState &state);
 void update_fluid(ParticleFluidState &state);
@@ -103,7 +86,5 @@ void attract_fluid(ParticleFluidState &state, float2 pos, float max_thrust, floa
 void calculate_fluid_density_grid(ParticleFluidState &state,
                                   thrust::device_vector<unsigned char> &texture_data, int width,
                                   int height, float max_density);
-void load_fluid_params(ParticleFluidState &state);
-void save_fluid_params(ParticleFluidState &state);
 
 } // namespace p2

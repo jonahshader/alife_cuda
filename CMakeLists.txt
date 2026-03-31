@@ -205,7 +205,9 @@ add_executable(alife_cuda src/main.cu
         src/graphics/soil_render.cuh
         src/graphics/tree_render.cu
         src/graphics/tree_render.cuh
-        src/systems/parameter_manager.h
+        src/config/sim_params.h
+        src/config/config.h
+        src/config/config.cpp
         src/systems/game.cu
         src/systems/game.cuh
         src/systems/screen.h

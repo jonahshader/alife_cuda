@@ -387,12 +387,12 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
   sph.near_density[i] = density_from_p.y;
 }
 
-__host__ __device__ float calculate_pressure(float density, const TunableParams &params) {
+__host__ __device__ float calculate_pressure(float density, const SimParams &params) {
   // TODO: this mostly describes gas, not liquid. better options might exist.
   return params.pressure_mult * (density - params.target_density);
 }
 
-__host__ __device__ float calculate_near_pressure(float near_density, const TunableParams &params) {
+__host__ __device__ float calculate_near_pressure(float near_density, const SimParams &params) {
   return params.near_pressure_mult * near_density;
 }
 
@@ -402,7 +402,7 @@ __host__ __device__ float2 sym_break_to_dir(uint8_t sym_break) {
 }
 
 __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                int2 particle_grid_dims, float cell_size, TunableParams params,
+                                int2 particle_grid_dims, float cell_size, SimParams params,
                                 size_t particle_count, float2 bounds) {
   size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (pid >= particle_count)
@@ -477,7 +477,7 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
 // calculate the acceleration of each particle, with contributions from other particles and soil
 // particles
 __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                int2 particle_grid_dims, float cell_size, TunableParams params,
+                                int2 particle_grid_dims, float cell_size, SimParams params,
                                 size_t particle_count, float2 bounds, SoilPtrs soil_read,
                                 int soil_w, int soil_h, float soil_size) {
   size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
@@ -687,52 +687,16 @@ static void init_fluid_particles(ParticleFluidState &state) {
   copy(state.grid_device, state.grid);
 }
 
-void init_fluid(ParticleFluidState &state, float width, float height, const TunableParams &params) {
+void init_fluid(ParticleFluidState &state, float width, float height, const SimParams &params) {
   state.bounds = make_float2(width, height);
   state.params = params;
-  state.use_internal_params = false;
   init_fluid_particles(state);
 }
 
 void init_fluid(ParticleFluidState &state, float width, float height) {
   state.bounds = make_float2(width, height);
-  state.params = TunableParams{};
-  state.use_internal_params = true;
+  state.params = SimParams{};
   init_fluid_particles(state);
-  load_fluid_params(state);
-}
-
-void load_fluid_params(ParticleFluidState &state) {
-  if (state.pm == nullptr)
-    state.pm = std::make_unique<ParameterManager>("fluid2_params.txt");
-  state.pm->get<float>("dt", state.params.dt);
-  state.pm->get<float>("dt_predict", state.params.dt_predict);
-  state.pm->get<float>("gravity", state.params.gravity);
-  state.pm->get<float>("collision_damping", state.params.collision_damping);
-  state.pm->get<float>("smoothing_radius", state.params.smoothing_radius);
-  state.pm->get<float>("target_density", state.params.target_density);
-  state.pm->get<float>("pressure_mult", state.params.pressure_mult);
-  state.pm->get<float>("near_pressure_mult", state.params.near_pressure_mult);
-  state.pm->get<float>("viscosity_strength", state.params.viscosity_strength);
-  state.pm->get<int>("particles_per_cell", state.params.particles_per_cell);
-  state.pm->get<int>("max_particles_per_cell", state.params.max_particles_per_cell);
-}
-
-void save_fluid_params(ParticleFluidState &state) {
-  if (state.pm == nullptr)
-    return;
-  state.pm->set<float>("dt", state.params.dt);
-  state.pm->set<float>("dt_predict", state.params.dt_predict);
-  state.pm->set<float>("gravity", state.params.gravity);
-  state.pm->set<float>("collision_damping", state.params.collision_damping);
-  state.pm->set<float>("smoothing_radius", state.params.smoothing_radius);
-  state.pm->set<float>("target_density", state.params.target_density);
-  state.pm->set<float>("pressure_mult", state.params.pressure_mult);
-  state.pm->set<float>("near_pressure_mult", state.params.near_pressure_mult);
-  state.pm->set<float>("viscosity_strength", state.params.viscosity_strength);
-  state.pm->set<int>("particles_per_cell", state.params.particles_per_cell);
-  state.pm->set<int>("max_particles_per_cell", state.params.max_particles_per_cell);
-  state.pm->save();
 }
 
 __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t num_particles,

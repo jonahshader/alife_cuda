@@ -49,11 +49,8 @@ void render_fluid(const ParticleFluidState &state, CircleRenderer &renderer,
 }
 
 void render_fluid_imgui(ParticleFluidState &state) {
-  if (!state.pm)
-    return;
-
   // TODO: need to reconfigure when some of this changes
-  ImGui::Begin("Particle Fluid");
+  ImGui::Begin("Particle Fluid Params");
   ImGui::SliderFloat("dt", &state.params.dt, 0.0f, 0.1f);
   ImGui::SliderFloat("dt_predict", &state.params.dt_predict, 0.0f, 0.1f);
   ImGui::SliderFloat("gravity", &state.params.gravity, -30.0f, 0.0f);
@@ -68,10 +65,6 @@ void render_fluid_imgui(ParticleFluidState &state) {
     init_fluid(state, state.bounds.x, state.bounds.y, state.params);
   if (ImGui::SliderInt("max_particles_per_cell", &state.params.max_particles_per_cell, 1, 1024))
     init_fluid(state, state.bounds.x, state.bounds.y, state.params);
-  if (ImGui::Button("Save"))
-    save_fluid_params(state);
-  if (ImGui::Button("Load"))
-    load_fluid_params(state);
   if (ImGui::Button("Reset Simulation"))
     init_fluid(state, state.bounds.x, state.bounds.y, state.params);
   ImGui::End();
