@@ -11,7 +11,8 @@ public:
   explicit TreeTest(Game &game);
 
   void show() override;
-  void render(float dt) override;
+  void update(float dt) override;
+  void render() override;
   void resize(int width, int height) override;
   void hide() override;
   bool handle_input(SDL_Event event) override;

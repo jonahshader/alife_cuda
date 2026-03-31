@@ -219,6 +219,7 @@ add_executable(alife_cuda src/main.cu
         src/systems/timing_profiler.cu
         src/systems/timing_profiler.cuh
         src/systems/soa_helper.h
+        src/systems/cuda_utils.cuh
         src/systems/float2_ops.cuh
         src/systems/terrain/fractal_noise.cu
         src/systems/terrain/fractal_noise.cuh

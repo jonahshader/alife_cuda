@@ -12,7 +12,13 @@ TreeTest::TreeTest(Game &game) : game(game) {
 
 void TreeTest::show() {}
 
-void TreeTest::render(float dt) {
+void TreeTest::update(float dt) {
+  if (updating_parallel) {
+    trees::update_trees(trees, 1 / 60.0f);
+  }
+}
+
+void TreeTest::render() {
   glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
   auto &bold = game.get_resources().extra_bold_font;
@@ -89,14 +95,6 @@ void TreeTest::render(float dt) {
   //         read_tree_device.copy_from_host(read_tree);
   //         write_tree_device = read_tree_device;
   //     }
-
-  if (updating_parallel) {
-    auto start = std::chrono::steady_clock::now();
-    trees::update_trees(trees, 1 / 60.0f);
-    auto end = std::chrono::steady_clock::now();
-    auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    update_time = "Update Time (CUDA): " + std::to_string(elapsed.count()) + "us";
-  }
 
   trees::render_trees_cuda(trees, tree_renderer, vp.get_transform());
 

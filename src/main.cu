@@ -179,7 +179,8 @@ int main(int argc, char *argv[]) {
       ImGui_ImplSDL2_NewFrame();
       ImGui::NewFrame();
 
-      game.render(1 / 165.0f);
+      game.update(1 / 165.0f);
+      game.render();
 
       ImGui::Render();
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

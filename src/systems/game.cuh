@@ -9,7 +9,8 @@
 
 class Game {
 public:
-  void render(float dt);
+  void update(float dt);
+  void render();
   void resize(int width, int height);
   void push_screen(std::shared_ptr<Screen> screen);
   void pop_screen();

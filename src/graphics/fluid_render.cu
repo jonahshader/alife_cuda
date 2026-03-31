@@ -1,4 +1,5 @@
 #include "fluid_render.cuh"
+#include "systems/cuda_utils.cuh"
 
 #include <iostream>
 
@@ -6,14 +7,7 @@
 
 namespace p2 {
 
-static void check_cuda(const std::string &msg) {
-  cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    std::cerr << "fluid_render: " << msg << ": " << cudaGetErrorString(err) << std::endl;
-  }
-}
-
-__global__ void render_particles_kernel(unsigned int *circle_vbo, SPHPtrs sph, TunableParams params,
+__global__ void render_particles_kernel(unsigned int *circle_vbo, SPHPtrs sph, SimParams params,
                                         size_t num_particles) {
   // unsigned int color = 0xFFFFA077;
   unsigned int color = 0xFFFFFFFF; // 0xFF000000

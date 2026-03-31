@@ -1,18 +1,10 @@
 #include "fluid_test2.cuh"
+#include "systems/cuda_utils.cuh"
 
 #include <iostream>
 
 #include <imgui.h>
 #include <thrust/extrema.h>
-
-#define CUDA_CHECK(call)                                                                           \
-  do {                                                                                             \
-    cudaError_t error = call;                                                                      \
-    if (error != cudaSuccess) {                                                                    \
-      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); \
-      exit(EXIT_FAILURE);                                                                          \
-    }                                                                                              \
-  } while (0)
 
 FluidTest2::FluidTest2(Game &game)
     : DefaultScreen(game), density_texture_data(tex_size.x * tex_size.y * 4) {
@@ -41,21 +33,17 @@ bool FluidTest2::handle_input(SDL_Event event) {
   return false;
 }
 
-static void check_cuda(const std::string &msg) {
-  cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    std::cerr << "FluidTest2: " << msg << ": " << cudaGetErrorString(err) << std::endl;
-  }
-}
-
-void FluidTest2::render(float _dt) {
-  render_start();
+void FluidTest2::update(float dt) {
   p2::update_fluid(fluid);
   if (grabbing) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
     p2::attract_fluid(fluid, {world_coords.x, world_coords.y}, 0.5f, 0.5f);
   }
   p2::calculate_fluid_density_grid(fluid, density_texture_data, tex_size.x, tex_size.y, 300.0f);
+}
+
+void FluidTest2::render() {
+  render_start();
 
   cudaArray *cuda_array = density_renderer.cuda_map_texture();
   if (cuda_array == nullptr) {

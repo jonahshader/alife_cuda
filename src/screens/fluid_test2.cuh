@@ -14,7 +14,8 @@ class FluidTest2 : public DefaultScreen {
 public:
   explicit FluidTest2(Game &game);
 
-  void render(float dt) override;
+  void update(float dt) override;
+  void render() override;
   bool handle_input(SDL_Event event) override;
 
 private:

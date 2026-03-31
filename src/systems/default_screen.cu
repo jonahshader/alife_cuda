@@ -9,7 +9,9 @@ void DefaultScreen::show() {
   last_time = std::chrono::high_resolution_clock::now();
 }
 
-void DefaultScreen::render(float dt) {
+void DefaultScreen::update(float dt) {}
+
+void DefaultScreen::render() {
   render_start();
   render_end();
 }

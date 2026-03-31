@@ -1,6 +1,7 @@
 #include "custom_math.cuh"
 #include "float2_ops.cuh"
 #include "particle_fluid2.cuh"
+#include "systems/cuda_utils.cuh"
 #include "systems/timing_profiler.cuh"
 
 #include <cmath>
@@ -9,13 +10,6 @@
 #include <curand_kernel.h>
 
 namespace p2 {
-
-void check_cuda(const std::string &msg) {
-  cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    std::cerr << "ParticleFluid2: " << msg << ": " << cudaGetErrorString(err) << std::endl;
-  }
-}
 
 // given a particle's position, return the cell index it belongs to
 __host__ __device__ int particle_to_cid(float2 pos, int grid_width, float cell_size) {

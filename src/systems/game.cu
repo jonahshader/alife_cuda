@@ -1,8 +1,13 @@
 #include "game.cuh"
 
-void Game::render(float dt) {
+void Game::update(float dt) {
   if (!screen_stack.empty())
-    screen_stack.top()->render(dt);
+    screen_stack.top()->update(dt);
+}
+
+void Game::render() {
+  if (!screen_stack.empty())
+    screen_stack.top()->render();
 }
 
 void Game::resize(int width, int height) {

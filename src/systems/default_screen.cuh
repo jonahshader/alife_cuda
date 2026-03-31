@@ -12,7 +12,8 @@ public:
   ~DefaultScreen() override = default;
 
   virtual void show() override;
-  virtual void render(float dt) override;
+  virtual void update(float dt) override;
+  virtual void render() override;
   virtual void resize(int width, int height) override;
   virtual void hide() override;
   virtual bool handle_input(SDL_Event event) override;

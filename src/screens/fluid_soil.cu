@@ -1,19 +1,11 @@
 #include "fluid_soil.cuh"
+#include "systems/cuda_utils.cuh"
 #include "systems/timing_profiler.cuh"
 
 #include <iostream>
 
 #include <imgui.h>
 #include <thrust/extrema.h>
-
-#define CUDA_CHECK(call)                                                                           \
-  do {                                                                                             \
-    cudaError_t error = call;                                                                      \
-    if (error != cudaSuccess) {                                                                    \
-      fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__, cudaGetErrorString(error)); \
-      exit(EXIT_FAILURE);                                                                          \
-    }                                                                                              \
-  } while (0)
 
 FluidSoil::FluidSoil(Game &game)
     : DefaultScreen(game), density_texture_data(tex_size.x * tex_size.y * 4) {
@@ -71,29 +63,11 @@ bool FluidSoil::handle_input(SDL_Event event) {
   return false;
 }
 
-void FluidSoil::check_cuda(const std::string &msg) {
-  cudaError_t err = cudaGetLastError();
-  if (err != cudaSuccess) {
-    std::cerr << "FluidSoil: " << msg << ": " << cudaGetErrorString(err) << std::endl;
-  }
-}
-
-void FluidSoil::render(float _dt) {
+void FluidSoil::update(float dt) {
   auto &profiler = TimingProfiler::get_instance();
-  render_start();
-  auto &circle_renderer = game.get_resources().circle_renderer;
-  auto &main_font_world = game.get_resources().main_font_world;
-  circle_renderer.set_transform(vp.get_transform());
-  main_font_world.set_transform(vp.get_transform());
-  circle_renderer.begin();
-  main_font_world.begin();
-  update_soil_cuda(soil, _dt);
-  p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
 
-  ImGui::Begin("Particle Fluid");
-  ImGui::Checkbox("Show Density Grid", &show_density_grid);
-  ImGui::End();
-  p2::render_fluid_imgui(fluid);
+  update_soil_cuda(soil, dt);
+  p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
 
   if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
@@ -106,6 +80,22 @@ void FluidSoil::render(float _dt) {
     if (show_density_grid)
       p2::calculate_fluid_density_grid(fluid, density_texture_data, tex_size.x, tex_size.y, 300.0f);
   }
+}
+
+void FluidSoil::render() {
+  auto &profiler = TimingProfiler::get_instance();
+  render_start();
+  auto &circle_renderer = game.get_resources().circle_renderer;
+  auto &main_font_world = game.get_resources().main_font_world;
+  circle_renderer.set_transform(vp.get_transform());
+  main_font_world.set_transform(vp.get_transform());
+  circle_renderer.begin();
+  main_font_world.begin();
+
+  ImGui::Begin("Particle Fluid");
+  ImGui::Checkbox("Show Density Grid", &show_density_grid);
+  ImGui::End();
+  p2::render_fluid_imgui(fluid);
 
   {
     auto scope = profiler.scoped_measure("density_renderer.cuda_map_texture()");
@@ -157,6 +147,7 @@ void FluidSoil::render(float _dt) {
     check_cuda("fluid.render");
   }
 
+  // add a circle for mouse grab tool
   float grab_color_opacity = 0.1f;
   if (grabbing || repelling) {
     grab_color_opacity = 0.25f;
@@ -164,6 +155,7 @@ void FluidSoil::render(float _dt) {
   const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
   circle_renderer.add_circle(world_coords.x, world_coords.y, grab_radius,
                              glm::vec4(0.5f, 0.5f, 0.8f, grab_color_opacity));
+  // display strength
   main_font_world.add_text(world_coords.x, world_coords.y, grab_radius,
                            "Strength: " + std::to_string(grab_strength),
                            glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), FontRenderer::HAlign::CENTER);

@@ -18,7 +18,8 @@ class FluidSoil : public DefaultScreen {
 public:
   explicit FluidSoil(Game &game);
 
-  void render(float dt) override;
+  void update(float dt) override;
+  void render() override;
   bool handle_input(SDL_Event event) override;
 
 private:
@@ -41,6 +42,4 @@ private:
   float grab_strength{0.15f};
   ProfilerGui profiler_gui{};
   bool show_density_grid{true};
-
-  void check_cuda(const std::string &msg);
 };
