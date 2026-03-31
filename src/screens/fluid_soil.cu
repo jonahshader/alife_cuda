@@ -7,11 +7,16 @@
 #include <imgui.h>
 #include <thrust/extrema.h>
 
-FluidSoil::FluidSoil(Game &game)
-    : DefaultScreen(game), density_texture_data(tex_size.x * tex_size.y * 4) {
-  init_soil(soil, (unsigned int)std::round(bounds.x / soil_size),
-            (unsigned int)std::round(bounds.y / soil_size), soil_size);
-  p2::init_fluid(fluid, bounds.x, bounds.y);
+FluidSoil::FluidSoil(Game &game, const SimParams &params)
+    : DefaultScreen(game), sim_params(params), bounds{params.world_width, params.world_height},
+      tex_size{(int)std::round(params.world_width * pixels_per_meter),
+               (int)std::round(params.world_height * pixels_per_meter)},
+      density_renderer(tex_size.x, tex_size.y, 4),
+      density_texture_data(tex_size.x * tex_size.y * 4) {
+  init_soil(soil, (unsigned int)std::round(bounds.x / sim_params.soil_cell_size),
+            (unsigned int)std::round(bounds.y / sim_params.soil_cell_size),
+            sim_params.soil_cell_size);
+  p2::init_fluid(fluid, bounds.x, bounds.y, sim_params);
 }
 
 bool FluidSoil::handle_input(SDL_Event event) {

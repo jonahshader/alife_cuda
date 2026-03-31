@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/sim_params.h"
 #include "graphics/fluid_render.cuh"
 #include "graphics/renderers/rect_tex_renderer.cuh"
 #include "graphics/renderers/simple_rect_renderer.cuh"
@@ -16,24 +17,23 @@
 
 class FluidSoil : public DefaultScreen {
 public:
-  explicit FluidSoil(Game &game);
+  FluidSoil(Game &game, const SimParams &params);
 
   void update(float dt) override;
   void render() override;
   bool handle_input(SDL_Event event) override;
 
 private:
-  const float soil_size = 0.1;
+  SimParams sim_params;
   const int pixels_per_meter{10};
 
-  const float2 bounds{32.0f, 16.0f};
-  const int2 tex_size{(int)std::round(bounds.x * pixels_per_meter),
-                      (int)std::round(bounds.y *pixels_per_meter)};
+  const float2 bounds;
+  const int2 tex_size;
 
   p2::ParticleFluidState fluid{};
   SoilState soil{};
   SimpleRectRenderer soil_renderer{};
-  RectTexRenderer density_renderer{tex_size.x, tex_size.y, 4};
+  RectTexRenderer density_renderer;
   thrust::device_vector<unsigned char> density_texture_data;
   bool grabbing{false};
   bool repelling{false};

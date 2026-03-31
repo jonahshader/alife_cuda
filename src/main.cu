@@ -3,6 +3,7 @@
 #define SDL_MAIN_HANDLED
 // #define GLM_FORCE_CUDA
 // #define GLM_COMPILER_CUDA
+#include "config/config.h"
 #include "glad/glad.h"
 #include "imgui.h"
 #include "imgui_impl_opengl3.h"
@@ -11,24 +12,28 @@
 #include "screens/fluid_test2.cuh"
 #include "screens/tree_test.cuh"
 #include "systems/game.cuh"
+#include "systems/timing_profiler.cuh"
 
 #include <SDL.h>
 
 #include <glm/glm.hpp>
 
+#include <atomic>
+#include <csignal>
 #include <iostream>
 
-#include <thrust/copy.h>
-#include <thrust/device_vector.h>
-#include <thrust/generate.h>
-#include <thrust/host_vector.h>
-#include <thrust/random.h>
-#include <thrust/sort.h>
+#include <CLI/CLI.hpp>
 
 static int viewport_width = 1920;
 static int viewport_height = 1080;
 static SDL_Window *window = nullptr;
 static SDL_GLContext main_context;
+
+static std::atomic<bool> g_stop_requested{false};
+
+static void signal_handler(int signum) {
+  g_stop_requested.store(true, std::memory_order_relaxed);
+}
 
 static void sdl_die(const char *message) {
   fprintf(stderr, "%s: %s\n", message, SDL_GetError());
@@ -101,7 +106,7 @@ void init_imgui() {
   ImGui_ImplOpenGL3_Init("#version 430");
 }
 
-int main(int argc, char *argv[]) {
+static void print_cuda_info() {
   cudaDeviceProp cuda_prop;
   cudaGetDeviceProperties(&cuda_prop, 0);
   // print the compute capability, max number of threads per block, max number of blocks, number of
@@ -120,13 +125,101 @@ int main(int argc, char *argv[]) {
   std::cout << "Warp size: " << cuda_prop.warpSize << std::endl;
   std::cout << "Number of CUDA cores: " << cuda_prop.multiProcessorCount * cuda_prop.warpSize
             << std::endl;
+}
 
+static void print_profiler_stats() {
+  auto &profiler = TimingProfiler::get_instance();
+  auto names = profiler.get_profile_point_names();
+  if (names.empty())
+    return;
+
+  std::cout << "\n=== Profiler Stats ===" << std::endl;
+  for (const auto &name : names) {
+    auto point = profiler.get_point(name);
+    if (point && point->get_sample_count() > 0) {
+      std::cout << "  " << name << ": avg=" << point->get_average_duration() * 1000.0 << "ms"
+                << " min=" << point->get_min_duration() * 1000.0 << "ms"
+                << " max=" << point->get_max_duration() * 1000.0 << "ms"
+                << " samples=" << point->get_sample_count() << std::endl;
+    }
+  }
+}
+
+int main(int argc, char *argv[]) {
+  // --- Pass 1: pre-parse for config file and write-config ---
+  std::string config_file = "config.toml";
+  bool write_config = false;
+  bool headless = false;
+  int iterations = 0; // 0 = run until Ctrl+C (headless) or window close (GUI)
+  SimParams sim_params;
+
+  {
+    CLI::App pre_app{"ALife CUDA"};
+    pre_app.allow_extras();
+    pre_app.add_option("--config", config_file, "Path to TOML config file");
+    pre_app.add_flag("--write-config", write_config, "Write default config file and exit");
+    pre_app.parse(argc, argv);
+  }
+
+  if (write_config) {
+    write_default_config(config_file);
+    return 0;
+  }
+
+  // Load config from TOML if it exists
+  if (auto loaded = load_sim_params(config_file)) {
+    sim_params = *loaded;
+    std::cout << "Loaded config from: " << config_file << std::endl;
+  }
+
+  // --- Pass 2: main parse (CLI overrides TOML overrides defaults) ---
+  {
+    CLI::App app{"ALife CUDA"};
+    app.add_flag("--headless", headless, "Run without graphics");
+    app.add_option("--iterations", iterations, "Number of simulation steps to run (0 = unlimited)");
+    register_sim_params_cli(app, sim_params);
+    CLI11_PARSE(app, argc, argv);
+  }
+
+  // Set up signal handler for clean shutdown
+  std::signal(SIGINT, signal_handler);
+  std::signal(SIGTERM, signal_handler);
+
+  print_cuda_info();
+
+  if (headless) {
+    // --- Headless mode: simulation only, no graphics ---
+    std::cout << "Running headless";
+    if (iterations > 0)
+      std::cout << " for " << iterations << " iterations";
+    std::cout << " (Ctrl+C to stop)" << std::endl;
+
+    // Initialize fluid state directly without Game/Screen
+    p2::ParticleFluidState fluid{};
+    p2::init_fluid(fluid, sim_params.world_width, sim_params.world_height, sim_params);
+
+    SoilState soil{};
+    init_soil(soil, (unsigned int)std::round(sim_params.world_width / sim_params.soil_cell_size),
+              (unsigned int)std::round(sim_params.world_height / sim_params.soil_cell_size),
+              sim_params.soil_cell_size);
+
+    int step = 0;
+    while (!g_stop_requested.load(std::memory_order_relaxed)) {
+      update_soil_cuda(soil, sim_params.dt);
+      p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
+      step++;
+      if (iterations > 0 && step >= iterations)
+        break;
+    }
+
+    std::cout << "Completed " << step << " steps" << std::endl;
+    print_profiler_stats();
+    return 0;
+  }
+
+  // --- GUI mode ---
   init_screen("ALife CUDA");
   init_imgui();
-
-  //    jl_init();
-  //
-  //    jl_eval_string("print(sqrt(2.0))");
 
   {
     Game game;
@@ -134,11 +227,11 @@ int main(int argc, char *argv[]) {
     game.resize(viewport_width, viewport_height);
     // game.push_screen(std::make_shared<TreeTest>(game));
     // game.push_screen(std::make_shared<FluidTest2>(game));
-    game.push_screen(std::make_shared<FluidSoil>(game));
+    game.push_screen(std::make_shared<FluidSoil>(game, sim_params));
 
     float time = 0;
     SDL_Event event;
-    while (game.is_running()) {
+    while (game.is_running() && !g_stop_requested.load(std::memory_order_relaxed)) {
       while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
         // skip game input handling if ImGui wants to capture the event
@@ -196,6 +289,5 @@ int main(int argc, char *argv[]) {
 
   SDL_GL_DeleteContext(main_context);
   SDL_DestroyWindow(window);
-  //    jl_atexit_hook(0);
   return 0;
 }
