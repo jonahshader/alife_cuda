@@ -58,102 +58,76 @@ struct BranchNode {
   BranchShape ch{};
 };
 
+// Composite SoA — templated on buffer backend
+template <template <typename> class Buffer>
 struct BranchNodeSoA {
-  BranchCoreSoA core{};
-  BranchStatsSoA stats{};
-  BranchShapeSoA ch{};
-
-  void push_back(const BranchNode &single) {
-    core.push_back(single.core);
-    stats.push_back(single.stats);
-    ch.push_back(single.ch);
-  }
-
-  void push_back(const std::vector<BranchNode> &vec) {
-    for (const auto &s : vec) {
-      push_back(s);
-    }
-  }
-
-  void swap_all(BranchNodeSoA &s) {
-    core.swap_all(s.core);
-    stats.swap_all(s.stats);
-    ch.swap_all(s.ch);
-  }
+  BranchCoreSoA<Buffer> core{};
+  BranchStatsSoA<Buffer> stats{};
+  BranchShapeSoA<Buffer> ch{};
 };
 
-struct BranchNodeSoADevice {
-  BranchCoreSoADevice core{};
-  BranchStatsSoADevice stats{};
-  BranchShapeSoADevice ch{};
+template <template <typename> class Dst, template <typename> class Src>
+void copy(BranchNodeSoA<Dst> &dst, const BranchNodeSoA<Src> &src) {
+  copy(dst.core, src.core);
+  copy(dst.stats, src.stats);
+  copy(dst.ch, src.ch);
+}
 
-  void copy_from_host(const BranchNodeSoA &host) {
-    core.copy_from_host(host.core);
-    stats.copy_from_host(host.stats);
-    ch.copy_from_host(host.ch);
-  }
+template <template <typename> class Buffer>
+void push_back(BranchNodeSoA<Buffer> &soa, const BranchNode &single) {
+  push_back(soa.core, single.core);
+  push_back(soa.stats, single.stats);
+  push_back(soa.ch, single.ch);
+}
 
-  void copy_to_host(BranchNodeSoA &host) {
-    core.copy_to_host(host.core);
-    stats.copy_to_host(host.stats);
-    ch.copy_to_host(host.ch);
+template <template <typename> class Buffer>
+void push_back(BranchNodeSoA<Buffer> &soa, const std::vector<BranchNode> &vec) {
+  for (const auto &single : vec) {
+    push_back(soa, single);
   }
-};
+}
+
+template <template <typename> class Buffer>
+void swap_all(BranchNodeSoA<Buffer> &a, BranchNodeSoA<Buffer> &b) {
+  swap_all(a.core, b.core);
+  swap_all(a.stats, b.stats);
+  swap_all(a.ch, b.ch);
+}
 
 struct BranchNodePtrs {
   BranchCorePtrs core{};
   BranchStatsPtrs stats{};
   BranchShapePtrs ch{};
 
-  void get_ptrs(BranchNodeSoADevice &s) {
-    core.get_ptrs(s.core);
-    stats.get_ptrs(s.stats);
-    ch.get_ptrs(s.ch);
-  }
-
-  void get_ptrs(BranchNodeSoA &s) {
+  template <template <typename> class Buffer>
+  void get_ptrs(BranchNodeSoA<Buffer> &s) {
     core.get_ptrs(s.core);
     stats.get_ptrs(s.stats);
     ch.get_ptrs(s.ch);
   }
 };
 
+template <template <typename> class Buffer>
 struct TreeBatch {
-  BranchShapeSoA tree_shapes{};
-  TreeDataSoA tree_data{};
-  BranchNodeSoA trees{};
+  BranchShapeSoA<Buffer> tree_shapes{};
+  TreeDataSoA<Buffer> tree_data{};
+  BranchNodeSoA<Buffer> trees{};
 };
 
-struct TreeBatchDevice {
-  BranchShapeSoADevice tree_shapes{};
-  TreeDataSoADevice tree_data{};
-  BranchNodeSoADevice trees{};
-
-  void copy_from_host(const TreeBatch &host) {
-    tree_shapes.copy_from_host(host.tree_shapes);
-    tree_data.copy_from_host(host.tree_data);
-    trees.copy_from_host(host.trees);
-  }
-
-  void copy_to_host(TreeBatch &host) {
-    tree_shapes.copy_to_host(host.tree_shapes);
-    tree_data.copy_to_host(host.tree_data);
-    trees.copy_to_host(host.trees);
-  }
-};
+template <template <typename> class Dst, template <typename> class Src>
+void copy(TreeBatch<Dst> &dst, const TreeBatch<Src> &src) {
+  copy(dst.tree_shapes, src.tree_shapes);
+  copy(dst.tree_data, src.tree_data);
+  copy(dst.trees, src.trees);
+}
 
 struct TreeBatchPtrs {
   BranchShapePtrs tree_shapes{};
   TreeDataPtrs tree_data{};
   BranchNodePtrs trees{};
 
-  void get_ptrs(TreeBatchDevice &s) {
-    tree_shapes.get_ptrs(s.tree_shapes);
-    tree_data.get_ptrs(s.tree_data);
-    trees.get_ptrs(s.trees);
-  }
-
-  void get_ptrs(TreeBatch &s) {
+  template <template <typename> class Buffer>
+  void get_ptrs(TreeBatch<Buffer> &s) {
     tree_shapes.get_ptrs(s.tree_shapes);
     tree_data.get_ptrs(s.tree_data);
     trees.get_ptrs(s.trees);

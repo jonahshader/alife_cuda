@@ -50,7 +50,7 @@ void render_soil(const SoilState &state, SimpleRectRenderer &renderer, const glm
   renderer.cuda_register_buffer();
   auto vbo_ptr = renderer.cuda_map_buffer();
   SoilPtrs ptrs;
-  ptrs.get_ptrs(const_cast<SoilSoADevice &>(state.read));
+  ptrs.get_ptrs(const_cast<SoilSoA<DeviceBuffer> &>(state.read));
 
   dim3 block(256);
   dim3 grid((rect_count + block.x - 1) / block.x);

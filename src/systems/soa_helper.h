@@ -1,75 +1,100 @@
 #pragma once
 
-#define DEFINE_STRUCT(StructName, MacroName)                                                       \
-  struct StructName {                                                                              \
-    MacroName(DEF_SCALAR, DEF_SCALAR_WITH_INIT)                                                    \
-  };
+#include <vector>
 
-#define DEFINE_STRUCT_PTR(StructName, MacroName)                                                   \
-  struct StructName##Ptrs {                                                                        \
-    MacroName(DEF_SCALAR_PTR, DEF_SCALAR_PTR)                                                      \
-                                                                                                   \
-        void get_ptrs(StructName##SoADevice &s) {                                                  \
-      MacroName(SET_PTR, SET_PTR)                                                                  \
-    }                                                                                              \
-    void get_ptrs(StructName##SoA &s) {                                                            \
-      MacroName(SET_PTR_HOST, SET_PTR_HOST)                                                        \
-    }                                                                                              \
-  };
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
 
-#define DEFINE_SOA_STRUCT(StructName, MacroName)                                                   \
-  struct StructName##SoA {                                                                         \
-    MacroName(DEF_VECTOR, DEF_VECTOR)                                                              \
-                                                                                                   \
-        void push_back(const StructName &single) {                                                 \
-      MacroName(PUSH_BACK_SINGLE, PUSH_BACK_SINGLE)                                                \
-    }                                                                                              \
-                                                                                                   \
-    void push_back(const std::vector<StructName> &vec) {                                           \
-      for (const auto &s : vec) {                                                                  \
-        push_back(s);                                                                              \
-      }                                                                                            \
-    }                                                                                              \
-                                                                                                   \
-    void swap_all(StructName##SoA &s) {                                                            \
-      MacroName(SWAP, SWAP)                                                                        \
-    }                                                                                              \
-                                                                                                   \
-    void resize_all(size_t new_size) {                                                             \
-      MacroName(RESIZE_WITHOUT_INIT, RESIZE_WITH_INIT)                                             \
-    }                                                                                              \
-  };
+// Buffer type aliases
+template <typename T>
+using HostBuffer = thrust::host_vector<T>;
 
-#define DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName)                                            \
-  struct StructName##SoADevice {                                                                   \
-    MacroName(DEF_DEVICE_VECTOR, DEF_DEVICE_VECTOR)                                                \
-                                                                                                   \
-        void copy_from_host(const StructName##SoA &host) {                                         \
-      MacroName(COPY_FROM_HOST, COPY_FROM_HOST)                                                    \
-    }                                                                                              \
-                                                                                                   \
-    void copy_to_host(StructName##SoA &host) const {                                               \
-      MacroName(COPY_TO_HOST, COPY_TO_HOST)                                                        \
-    }                                                                                              \
-  };
+template <typename T>
+using DeviceBuffer = thrust::device_vector<T>;
 
-#define DEFINE_STRUCTS(StructName, MacroName)                                                      \
-  DEFINE_STRUCT(StructName, MacroName)                                                             \
-  DEFINE_SOA_STRUCT(StructName, MacroName)                                                         \
-  DEFINE_DEVICE_SOA_STRUCT(StructName, MacroName)                                                  \
-  DEFINE_STRUCT_PTR(StructName, MacroName)
+// Raw pointer extraction — works for both host and device vectors
+template <typename T>
+T *raw_ptr(thrust::host_vector<T> &v) {
+  return v.data();
+}
 
+template <typename T>
+T *raw_ptr(thrust::device_vector<T> &v) {
+  return v.data().get();
+}
+
+// --- Field-level macro helpers ---
+
+// Scalar struct fields
 #define DEF_SCALAR(type, name) type name{};
 #define DEF_SCALAR_WITH_INIT(type, name, init) type name{init};
-#define DEF_SCALAR_PTR(type, name, ...) type *name{nullptr};
-#define DEF_VECTOR(type, name, ...) thrust::host_vector<type> name{};
-#define DEF_DEVICE_VECTOR(type, name, ...) thrust::device_vector<type> name{};
-#define PUSH_BACK_SINGLE(type, name, ...) name.push_back(single.name);
-#define SWAP(type, name, ...) name.swap(s.name);
-// TODO: avoid reallocating vectors?
-#define COPY_FROM_HOST(type, name, ...) name = host.name;
-#define COPY_TO_HOST(type, name, ...) host.name = name;
-#define SET_PTR(type, name, ...) name = s.name.data().get();
-#define SET_PTR_HOST(type, name, ...) name = s.name.data();
-#define RESIZE_WITHOUT_INIT(type, name, ...) name.resize(new_size);
-#define RESIZE_WITH_INIT(type, name, init) name.resize(new_size, init);
+
+// Templated SoA struct fields
+#define DEF_BUFFER_FIELD(type, name, ...) Buffer<type> name{};
+
+// Ptrs struct fields
+#define DEF_PTR_FIELD(type, name, ...) type *name{nullptr};
+#define SET_PTR_FIELD(type, name, ...) name = raw_ptr(soa.name);
+
+// Free function helpers
+#define COPY_FIELD_OP(type, name, ...) dst.name = src.name;
+#define SWAP_FIELD_OP(type, name, ...) a.name.swap(b.name);
+#define RESIZE_FIELD_NO_INIT(type, name, ...) soa.name.resize(n);
+#define RESIZE_FIELD_WITH_INIT(type, name, init) soa.name.resize(n, init);
+#define PUSH_BACK_FIELD_OP(type, name, ...) soa.name.push_back(single.name);
+
+// --- Main macro: generates scalar, templated SoA, Ptrs, and free functions ---
+
+#define DEFINE_STRUCTS(Name, FIELDS)                                                               \
+  /* Scalar struct (single element) */                                                             \
+  struct Name {                                                                                    \
+    FIELDS(DEF_SCALAR, DEF_SCALAR_WITH_INIT)                                                       \
+  };                                                                                               \
+                                                                                                   \
+  /* Templated SoA struct — Buffer can be HostBuffer or DeviceBuffer */                            \
+  template <template <typename> class Buffer>                                                      \
+  struct Name##SoA {                                                                               \
+    FIELDS(DEF_BUFFER_FIELD, DEF_BUFFER_FIELD)                                                     \
+  };                                                                                               \
+                                                                                                   \
+  /* Ptrs struct with templated get_ptrs for kernel access */                                      \
+  struct Name##Ptrs {                                                                              \
+    FIELDS(DEF_PTR_FIELD, DEF_PTR_FIELD)                                                           \
+                                                                                                   \
+    template <template <typename> class Buffer>                                                    \
+    void get_ptrs(Name##SoA<Buffer> &soa) {                                                        \
+      FIELDS(SET_PTR_FIELD, SET_PTR_FIELD)                                                         \
+    }                                                                                              \
+  };                                                                                               \
+                                                                                                   \
+  /* Copy between any two buffer backends */                                                       \
+  template <template <typename> class Dst, template <typename> class Src>                          \
+  void copy(Name##SoA<Dst> &dst, const Name##SoA<Src> &src) {                                      \
+    FIELDS(COPY_FIELD_OP, COPY_FIELD_OP)                                                           \
+  }                                                                                                \
+                                                                                                   \
+  /* Swap within same backend */                                                                   \
+  template <template <typename> class Buffer>                                                      \
+  void swap_all(Name##SoA<Buffer> &a, Name##SoA<Buffer> &b) {                                      \
+    FIELDS(SWAP_FIELD_OP, SWAP_FIELD_OP)                                                           \
+  }                                                                                                \
+                                                                                                   \
+  /* Resize all fields */                                                                          \
+  template <template <typename> class Buffer>                                                      \
+  void resize_all(Name##SoA<Buffer> &soa, size_t n) {                                              \
+    FIELDS(RESIZE_FIELD_NO_INIT, RESIZE_FIELD_WITH_INIT)                                           \
+  }                                                                                                \
+                                                                                                   \
+  /* Push back a single scalar element */                                                          \
+  template <template <typename> class Buffer>                                                      \
+  void push_back(Name##SoA<Buffer> &soa, const Name &single) {                                     \
+    FIELDS(PUSH_BACK_FIELD_OP, PUSH_BACK_FIELD_OP)                                                 \
+  }                                                                                                \
+                                                                                                   \
+  /* Push back a vector of scalar elements */                                                      \
+  template <template <typename> class Buffer>                                                      \
+  void push_back(Name##SoA<Buffer> &soa, const std::vector<Name> &vec) {                           \
+    for (const auto &single : vec) {                                                               \
+      push_back(soa, single);                                                                      \
+    }                                                                                              \
+  }

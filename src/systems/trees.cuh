@@ -43,8 +43,8 @@ TreeBatch concatenate_trees(const std::vector<Tree> &trees);
  * Propagate orientation and position changes through the tree
  * @param batch The nodes of the batch
  */
-void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device,
-                      trees2::TreeBatchDevice &write_batch_device);
+void update_tree_cuda(trees2::TreeBatch<DeviceBuffer> &read_batch_device,
+                      trees2::TreeBatch<DeviceBuffer> &write_batch_device);
 
 /**
  * Sort the tree so that the parent of each node is before the node in the vector.
@@ -55,14 +55,18 @@ std::vector<BranchNodeFull> sort_tree(const std::vector<BranchNodeFull> &nodes);
 
 __host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCore &core);
 
-__host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i);
+template <template <typename> class Buffer>
+__host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCoreSoA<Buffer> &core,
+                                             trees2::bid_t i) {
+  return glm::vec2(std::cos(core.abs_rot[i]), std::sin(core.abs_rot[i])) * core.length[i];
+}
 
 __host__ __device__ glm::vec2 get_length_vec(float abs_rot, float length);
 
 // Pure data struct — no renderers, no methods
 struct TreesState {
-  trees2::TreeBatch read_host{}, write_host{};
-  trees2::TreeBatchDevice read_device{}, write_device{};
+  trees2::TreeBatch<HostBuffer> read_host{}, write_host{};
+  trees2::TreeBatch<DeviceBuffer> read_device{}, write_device{};
 };
 
 // Free functions for simulation logic

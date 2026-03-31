@@ -45,7 +45,7 @@ void render_fluid(const ParticleFluidState &state, CircleRenderer &renderer,
   dim3 grid_dim((circle_count + block.x - 1) / block.x);
 
   SPHPtrs sph;
-  sph.get_ptrs(const_cast<SPHSoADevice &>(state.particles_device));
+  sph.get_ptrs(const_cast<SPHSoA<DeviceBuffer> &>(state.particles_device));
   render_particles_kernel<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), sph,
                                                state.params, circle_count);
   check_cuda("render_particles_kernel");

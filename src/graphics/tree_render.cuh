@@ -12,7 +12,8 @@ namespace trees {
  * @param line_renderer The LineRenderer to use
  * @param batch The nodes of the trees
  */
-void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform);
+void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch<HostBuffer> &batch,
+                 glm::mat4 transform);
 
 __global__ void render_tree_kernel(unsigned int *line_vbo, const trees2::TreeBatchPtrs batch,
                                    size_t node_count);

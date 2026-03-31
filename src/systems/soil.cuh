@@ -42,7 +42,7 @@ struct SoilState {
   uint width{0};
   uint height{0};
   float cell_size{0.0f};
-  SoilSoADevice read{}, write{};
+  SoilSoA<DeviceBuffer> read{}, write{};
 };
 
 // Free functions for simulation logic

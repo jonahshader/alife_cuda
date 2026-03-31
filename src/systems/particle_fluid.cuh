@@ -33,6 +33,7 @@ struct TunableParams {
   float drag = 0.000f;                 // 0.000f
 };
 
+// v1 ParticleGrid — not yet refactored to template-template
 struct ParticleGrid {
   thrust::host_vector<int> grid_indices{};
   thrust::host_vector<int> particles_per_cell{};
@@ -74,8 +75,8 @@ public:
 
 private:
   TunableParams params{};
-  ParticlesSoA particles{};
-  ParticlesSoADevice particles_device{};
+  ParticlesSoA<HostBuffer> particles{};
+  ParticlesSoA<DeviceBuffer> particles_device{};
 
   ParticleGrid grid{};
   ParticleGridDevice grid_device{};

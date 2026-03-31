@@ -652,7 +652,7 @@ void init_fluid_grid(ParticleFluidState &state) {
   int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
   int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
 
-  state.grid.reconfigure(grid_width, grid_height, state.params.max_particles_per_cell);
+  reconfigure_grid(state.grid, grid_width, grid_height, state.params.max_particles_per_cell);
 }
 
 static void init_fluid_particles(ParticleFluidState &state) {
@@ -672,7 +672,7 @@ static void init_fluid_particles(ParticleFluidState &state) {
   int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
   int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
   const int NUM_PARTICLES = state.params.particles_per_cell * grid_width * grid_height;
-  state.particles.resize_all(NUM_PARTICLES);
+  resize_all(state.particles, NUM_PARTICLES);
 
   for (int i = 0; i < NUM_PARTICLES; ++i)
     state.particles.vel[i] = make_float2(dist_vel(rand), dist_vel(rand));
@@ -689,8 +689,8 @@ static void init_fluid_particles(ParticleFluidState &state) {
     state.particles.sym_break[i] = dist_sym(rand);
 
   // send to device
-  state.particles_device.copy_from_host(state.particles);
-  state.grid_device.copy_from_host(state.grid);
+  copy(state.particles_device, state.particles);
+  copy(state.grid_device, state.grid);
 }
 
 void init_fluid(ParticleFluidState &state, float width, float height, const TunableParams &params) {

@@ -38,10 +38,10 @@ void init_soil(SoilState &state, uint width, uint height, float cell_size) {
 // }
 
 void reset_soil(SoilState &state) {
-  SoilSoA soil{};
+  SoilSoA<HostBuffer> soil{};
   // assert(width % BLOCK_WIDTH == 0);
   // assert(height % BLOCK_WIDTH == 0);
-  soil.resize_all(state.width * state.height);
+  resize_all(soil, state.width * state.height);
 
   // use time as seed
   auto seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -132,8 +132,8 @@ void reset_soil(SoilState &state) {
     }
   }
 
-  state.read.copy_from_host(soil);
-  state.write.copy_from_host(soil);
+  copy(state.read, soil);
+  copy(state.write, soil);
 }
 
 void update_soil_cpu(SoilState &state, float dt) {

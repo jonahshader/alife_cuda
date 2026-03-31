@@ -40,50 +40,43 @@ struct TunableParams {
   int max_particles_per_cell = particles_per_cell * 32;
 };
 
+template <template <typename> class Buffer>
 struct ParticleGrid {
-  thrust::host_vector<int> grid_indices{};
-  thrust::host_vector<int> particles_per_cell{};
+  Buffer<int> grid_indices{};
+  Buffer<int> particles_per_cell{};
   int width{0};
   int height{0};
   int max_particles_per_cell{4};
-
-  void reconfigure(int new_width, int new_height, int new_max_particles_per_cell) {
-    width = new_width;
-    height = new_height;
-    max_particles_per_cell = new_max_particles_per_cell;
-
-    grid_indices = std::vector<int>(width * height * max_particles_per_cell);
-    particles_per_cell = std::vector<int>(width * height);
-  }
 };
 
-struct ParticleGridDevice {
-  thrust::device_vector<int> grid_indices{};
-  thrust::device_vector<int> particles_per_cell{};
+template <template <typename> class Buffer>
+void reconfigure_grid(ParticleGrid<Buffer> &grid, int new_width, int new_height,
+                      int new_max_particles_per_cell) {
+  grid.width = new_width;
+  grid.height = new_height;
+  grid.max_particles_per_cell = new_max_particles_per_cell;
 
-  void copy_from_host(ParticleGrid &host) {
-    grid_indices = host.grid_indices;
-    particles_per_cell = host.particles_per_cell;
-  }
+  grid.grid_indices.resize(new_width * new_height * new_max_particles_per_cell);
+  grid.particles_per_cell.resize(new_width * new_height);
+}
 
-  void copy_to_host(ParticleGrid &host) {
-    host.grid_indices = grid_indices;
-    host.particles_per_cell = particles_per_cell;
-  }
-};
+template <template <typename> class Dst, template <typename> class Src>
+void copy(ParticleGrid<Dst> &dst, const ParticleGrid<Src> &src) {
+  dst.grid_indices = src.grid_indices;
+  dst.particles_per_cell = src.particles_per_cell;
+  dst.width = src.width;
+  dst.height = src.height;
+  dst.max_particles_per_cell = src.max_particles_per_cell;
+}
 
 struct ParticleGridPtrs {
   int *grid_indices;
   int *particles_per_cell;
 
-  void get_ptrs(ParticleGridDevice &grid_device) {
-    grid_indices = grid_device.grid_indices.data().get();
-    particles_per_cell = grid_device.particles_per_cell.data().get();
-  }
-
-  void get_ptrs(ParticleGrid &grid) {
-    grid_indices = grid.grid_indices.data();
-    particles_per_cell = grid.particles_per_cell.data();
+  template <template <typename> class Buffer>
+  void get_ptrs(ParticleGrid<Buffer> &grid) {
+    grid_indices = raw_ptr(grid.grid_indices);
+    particles_per_cell = raw_ptr(grid.particles_per_cell);
   }
 };
 
@@ -93,10 +86,10 @@ struct ParticleFluidState {
   TunableParams params{};
   bool use_internal_params{false};
   std::unique_ptr<ParameterManager> pm{};
-  SPHSoA particles{};
-  SPHSoADevice particles_device{};
-  ParticleGrid grid{};
-  ParticleGridDevice grid_device{};
+  SPHSoA<HostBuffer> particles{};
+  SPHSoA<DeviceBuffer> particles_device{};
+  ParticleGrid<HostBuffer> grid{};
+  ParticleGrid<DeviceBuffer> grid_device{};
 };
 
 // Free functions for simulation logic

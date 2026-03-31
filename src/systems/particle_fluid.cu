@@ -253,7 +253,7 @@ ParticleFluid::ParticleFluid(int width, int height, bool use_graphics) {
 
   // temp: 1000 particles
   constexpr int NUM_PARTICLES = 10000;
-  particles.resize_all(NUM_PARTICLES);
+  resize_all(particles, NUM_PARTICLES);
   for (int i = 0; i < NUM_PARTICLES; ++i) {
     particles.x_particle[i] = dist_x(rand);
   }
@@ -273,7 +273,7 @@ ParticleFluid::ParticleFluid(int width, int height, bool use_graphics) {
   // TODO: verify correctness of algo
 
   // send to device
-  particles_device.copy_from_host(particles);
+  copy(particles_device, particles);
   grid_device.copy_from_host(grid);
 }
 

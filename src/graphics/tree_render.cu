@@ -4,7 +4,8 @@
 
 namespace trees {
 
-void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform) {
+void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch<HostBuffer> &batch,
+                 glm::mat4 transform) {
   std::uniform_real_distribution<float> rand_color(0, 1);
   std::default_random_engine rand_const(1);
   const auto &core = batch.trees.core;
@@ -121,7 +122,7 @@ void render_trees_cuda(const TreesState &state, LineRenderer &renderer,
   renderer.cuda_register_buffer();
   auto vbo_ptr = renderer.cuda_map_buffer();
   trees2::TreeBatchPtrs ptrs;
-  ptrs.get_ptrs(const_cast<trees2::TreeBatchDevice &>(state.read_device));
+  ptrs.get_ptrs(const_cast<trees2::TreeBatch<DeviceBuffer> &>(state.read_device));
 
   dim3 block(256);
   dim3 grid((node_count + block.x - 1) / block.x);

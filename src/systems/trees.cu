@@ -137,8 +137,8 @@ TreeBatch concatenate_trees(const std::vector<Tree> &trees,
   return batch;
 }
 
-trees2::TreeBatch make_batch(uint32_t node_count, uint32_t tree_count,
-                             std::default_random_engine &rand) {
+trees2::TreeBatch<HostBuffer> make_batch(uint32_t node_count, uint32_t tree_count,
+                                         std::default_random_engine &rand) {
   std::vector<Tree> trees;
   std::vector<trees2::TreeData> tree_data;
   constexpr auto row_size = 256;
@@ -155,10 +155,10 @@ trees2::TreeBatch make_batch(uint32_t node_count, uint32_t tree_count,
   }
 
   auto concat = concatenate_trees(trees, tree_data);
-  trees2::TreeBatch batch;
-  batch.tree_shapes.push_back(concat.tree_shapes);
-  batch.tree_data.push_back(concat.tree_data);
-  batch.trees.push_back(concat.trees);
+  trees2::TreeBatch<HostBuffer> batch;
+  push_back(batch.tree_shapes, concat.tree_shapes);
+  push_back(batch.tree_data, concat.tree_data);
+  push_back(batch.trees, concat.trees);
 
   const auto total_nodes = batch.trees.core.abs_rot.size();
 
@@ -262,7 +262,8 @@ void fix_pos_parallel(const TreeBatch &read_batch, TreeBatch &write_batch) {
 }
 
 // TODO: this aos version is untested code written by claude
-void fix_pos_parallel(const trees2::TreeBatch &read_batch, trees2::TreeBatch &write_batch) {
+void fix_pos_parallel(const trees2::TreeBatch<HostBuffer> &read_batch,
+                      trees2::TreeBatch<HostBuffer> &write_batch) {
 #pragma omp parallel for
   for (int i = 0; i < read_batch.trees.core.abs_rot.size(); ++i) {
     const auto &read_core = read_batch.trees.core;
@@ -668,8 +669,8 @@ void mix_node_give_take_cpu(trees2::TreeBatchPtrs &read, trees2::TreeBatchPtrs &
   }
 }
 
-void mix_node_contents_device_full(trees2::TreeBatchDevice &read_device,
-                                   trees2::TreeBatchDevice &write_device) {
+void mix_node_contents_device_full(trees2::TreeBatch<DeviceBuffer> &read_device,
+                                   trees2::TreeBatch<DeviceBuffer> &write_device) {
   cudaDeviceSynchronize();
   const size_t tree_count = read_device.tree_shapes.count.size();
   const size_t node_count = read_device.trees.core.abs_rot.size();
@@ -721,7 +722,8 @@ void mix_node_contents_device_full(trees2::TreeBatchDevice &read_device,
   std::cout << std::endl;
 }
 
-void mix_node_contents_host_full(trees2::TreeBatch &read, trees2::TreeBatch &write) {
+void mix_node_contents_host_full(trees2::TreeBatch<HostBuffer> &read,
+                                 trees2::TreeBatch<HostBuffer> &write) {
   const size_t tree_count = read.tree_shapes.count.size();
   const size_t node_count = read.trees.core.abs_rot.size();
 
@@ -826,9 +828,7 @@ __host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCore &core) {
   return glm::vec2(std::cos(core.abs_rot), std::sin(core.abs_rot)) * core.length;
 }
 
-__host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i) {
-  return glm::vec2(std::cos(core.abs_rot[i]), std::sin(core.abs_rot[i])) * core.length[i];
-}
+// get_length_vec(BranchCoreSoA<Buffer>&, bid_t) is now a template in trees.cuh
 
 __host__ __device__ glm::vec2 get_length_vec(float abs_rot, float length) {
   return glm::vec2(std::cos(abs_rot), std::sin(abs_rot)) * length;
@@ -842,9 +842,9 @@ void init_trees(TreesState &state, uint32_t num_trees, uint32_t num_nodes,
   state.write_host = state.read_host;
 
   std::cout << "copy to device 1" << std::endl;
-  state.read_device.copy_from_host(state.read_host);
+  copy(state.read_device, state.read_host);
   std::cout << "copy to device 2" << std::endl;
-  state.write_device.copy_from_host(state.write_host);
+  copy(state.write_device, state.write_host);
   std::cout << "sync" << std::endl;
   cudaDeviceSynchronize();
 }
@@ -858,18 +858,18 @@ void update_trees(TreesState &state, float dt) {
 // write to write_batch_device, but swaps written vectors with read_batch_device vectors,
 // so the final updated version is stored in read_batch_device.
 // updates abs_rot, pos, current_rel_rot
-void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device,
-                      trees2::TreeBatchDevice &write_batch_device) {
-  // trees2::TreeBatch read_batch_host, write_batch_host;
-  // read_batch_device.copy_to_host(read_batch_host);
-  // write_batch_device.copy_to_host(write_batch_host);
+void update_tree_cuda(trees2::TreeBatch<DeviceBuffer> &read_batch_device,
+                      trees2::TreeBatch<DeviceBuffer> &write_batch_device) {
+  // trees2::TreeBatch<HostBuffer> read_batch_host, write_batch_host;
+  // copy(read_batch_host, read_batch_device);
+  // copy(write_batch_host, write_batch_device);
   //
   //
   // mix_node_contents_host_full(read_batch_host, write_batch_host);
   //
   // // copy back
-  // read_batch_device.copy_from_host(read_batch_host);
-  // write_batch_device.copy_from_host(write_batch_host);
+  // copy(read_batch_device, read_batch_host);
+  // copy(write_batch_device, write_batch_host);
 
   mix_node_contents_device_full(read_batch_device, write_batch_device);
 
