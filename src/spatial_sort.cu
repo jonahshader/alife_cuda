@@ -1,7 +1,7 @@
 #include "spatial_sort.cuh"
 
-#include <iostream>
 #include <chrono>
+#include <iostream>
 
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>

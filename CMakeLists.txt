@@ -6,6 +6,71 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 
+# Export compile commands for IDE integration
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Disable CUDA response files so clangd can parse include paths
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES 0)
+
+# Copy compile_commands.json to project root for LSP/clangd
+if(CMAKE_EXPORT_COMPILE_COMMANDS)
+  add_custom_target(
+    copy-compile-commands ALL
+    ${CMAKE_COMMAND} -E copy_if_different
+      ${CMAKE_BINARY_DIR}/compile_commands.json
+      ${CMAKE_SOURCE_DIR}/compile_commands.json
+    DEPENDS ${CMAKE_BINARY_DIR}/compile_commands.json
+  )
+endif()
+
+# Generate .clangd configuration for CUDA support
+find_package(CUDAToolkit REQUIRED)
+get_filename_component(CUDA_ROOT_DIR "${CUDAToolkit_BIN_DIR}" DIRECTORY)
+file(TO_CMAKE_PATH "${CUDA_ROOT_DIR}" CUDA_ROOT_DIR)
+if(CMAKE_CUDA_ARCHITECTURES)
+  list(GET CMAKE_CUDA_ARCHITECTURES 0 CUDA_ARCH)
+  set(CLANGD_CUDA_ARCH "sm_${CUDA_ARCH}")
+else()
+  set(CLANGD_CUDA_ARCH "sm_75")
+endif()
+file(WRITE "${CMAKE_SOURCE_DIR}/.clangd"
+"CompileFlags:
+  Remove:
+    # Remove CUDA-specific flags that clangd doesn't understand
+    - --extended-lambda
+    - --expt-relaxed-constexpr
+    - --generate-code=*
+    - -forward-unknown-to-host-compiler
+    - -rdc=true
+    - -x
+    - cu
+  Add:
+    # Treat .cu files as C++ with CUDA support
+    - -xc++
+    - --cuda-path=${CUDA_ROOT_DIR}
+    - --cuda-gpu-arch=${CLANGD_CUDA_ARCH}
+    - -I${CUDA_ROOT_DIR}/include
+"
+)
+
+# Add CUDA extended lambda support and relaxed constexpr
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --extended-lambda --expt-relaxed-constexpr")
+
+# Add clang-format target for code formatting
+find_program(CLANG_FORMAT clang-format)
+if(CLANG_FORMAT)
+  file(GLOB_RECURSE ALL_SOURCE_FILES
+    ${CMAKE_SOURCE_DIR}/src/*.cpp
+    ${CMAKE_SOURCE_DIR}/src/*.h
+    ${CMAKE_SOURCE_DIR}/src/*.cu
+    ${CMAKE_SOURCE_DIR}/src/*.cuh
+  )
+  add_custom_target(format
+    COMMAND ${CLANG_FORMAT} -i ${ALL_SOURCE_FILES}
+    COMMENT "Running clang-format on all source files"
+  )
+endif()
+
 # Include FetchContent for downloading dependencies
 include(FetchContent)
 
@@ -102,75 +167,75 @@ find_package(OpenMP REQUIRED)
 
 add_executable(alife_cuda src/main.cu
         ${lodepng_SOURCE_DIR}/lodepng.cpp
-        src/graphics/ExtendViewport.cpp
-        src/graphics/ExtendViewport.h
-        src/graphics/Shader.cpp
-        src/graphics/Shader.h
-        src/graphics/renderers/LineRenderer.cu
-        src/graphics/renderers/LineRenderer.cuh
-        src/graphics/renderers/CircleRenderer.cu
-        src/graphics/renderers/CircleRenderer.cuh
-        src/graphics/renderers/FontRenderer.cpp
-        src/graphics/renderers/FontRenderer.h
-        src/graphics/renderers/RectRenderer.cu
-        src/graphics/renderers/RectRenderer.cuh
-        src/graphics/renderers/SimpleRectRenderer.cu
-        src/graphics/renderers/SimpleRectRenderer.cuh
-        src/graphics/renderers/RectTexRenderer.cu
-        src/graphics/renderers/RectTexRenderer.cuh
-        src/systems/ParameterManager.h
-        src/systems/Game.cu
-        src/systems/Game.cuh
-        src/systems/Screen.h
-        src/systems/DefaultScreen.cuh
-        src/systems/DefaultScreen.cu
-        src/systems/Resources.cu
-        src/systems/Resources.cuh
-        src/systems/CustomMath.cu
-        src/systems/CustomMath.cuh
-        src/systems/Kernels.cu
-        src/systems/Kernels.cuh
+        src/graphics/extend_viewport.cpp
+        src/graphics/extend_viewport.h
+        src/graphics/shader.cpp
+        src/graphics/shader.h
+        src/graphics/renderers/line_renderer.cu
+        src/graphics/renderers/line_renderer.cuh
+        src/graphics/renderers/circle_renderer.cu
+        src/graphics/renderers/circle_renderer.cuh
+        src/graphics/renderers/font_renderer.cpp
+        src/graphics/renderers/font_renderer.h
+        src/graphics/renderers/rect_renderer.cu
+        src/graphics/renderers/rect_renderer.cuh
+        src/graphics/renderers/simple_rect_renderer.cu
+        src/graphics/renderers/simple_rect_renderer.cuh
+        src/graphics/renderers/rect_tex_renderer.cu
+        src/graphics/renderers/rect_tex_renderer.cuh
+        src/systems/parameter_manager.h
+        src/systems/game.cu
+        src/systems/game.cuh
+        src/systems/screen.h
+        src/systems/default_screen.cuh
+        src/systems/default_screen.cu
+        src/systems/resources.cu
+        src/systems/resources.cuh
+        src/systems/custom_math.cu
+        src/systems/custom_math.cuh
+        src/systems/kernels.cu
+        src/systems/kernels.cuh
         src/spatial_sort.cu
         src/spatial_sort.cuh
-        src/screens/TreeTest.cu
-        src/screens/TreeTest.cuh
-        src/systems/Trees.cu
-        src/systems/Trees.cuh
-        src/systems/Fluid.cu
-        src/systems/Fluid.cuh
-        src/systems/ParticleFluid.cuh
-        src/systems/ParticleFluid.cu
-        src/systems/ParticleFluid2.cuh
-        src/systems/ParticleFluid2.cu
-        src/systems/ProfilerGUI.cuh
-        src/systems/ProfilerGUI.cu
-        src/screens/FluidTest.cu
-        src/screens/FluidTest.cuh
-        src/screens/FluidTest2.cu
-        src/screens/FluidTest2.cuh
-        src/screens/FluidSoil.cu
-        src/screens/FluidSoil.cuh
-        src/screens/TexCUDATest.cu
-        src/screens/TexCUDATest.cuh
-        src/systems/TreeTypes.cuh
-        src/systems/ui/Container.cu
-        src/systems/ui/Container.cuh
-        src/systems/ui/WorldUI.cu
-        src/systems/ui/WorldUI.cuh
-        src/systems/World.cu
-        src/systems/World.cuh
-        src/systems/Soil.cu
-        src/systems/Soil.cuh
-        src/systems/TimingProfiler.cu
-        src/systems/TimingProfiler.cuh
-        src/systems/SoAHelper.h
+        src/screens/tree_test.cu
+        src/screens/tree_test.cuh
+        src/systems/trees.cu
+        src/systems/trees.cuh
+        src/systems/fluid.cu
+        src/systems/fluid.cuh
+        src/systems/particle_fluid.cuh
+        src/systems/particle_fluid.cu
+        src/systems/particle_fluid2.cuh
+        src/systems/particle_fluid2.cu
+        src/systems/profiler_gui.cuh
+        src/systems/profiler_gui.cu
+        src/screens/fluid_test.cu
+        src/screens/fluid_test.cuh
+        src/screens/fluid_test2.cu
+        src/screens/fluid_test2.cuh
+        src/screens/fluid_soil.cu
+        src/screens/fluid_soil.cuh
+        src/screens/tex_cuda_test.cu
+        src/screens/tex_cuda_test.cuh
+        src/systems/tree_types.cuh
+        src/systems/ui/container.cu
+        src/systems/ui/container.cuh
+        src/systems/ui/world_ui.cu
+        src/systems/ui/world_ui.cuh
+        src/systems/world.cu
+        src/systems/world.cuh
+        src/systems/soil.cu
+        src/systems/soil.cuh
+        src/systems/timing_profiler.cu
+        src/systems/timing_profiler.cuh
+        src/systems/soa_helper.h
         src/systems/float2_ops.cuh
-        src/screens/SoilTest.cu
-        src/screens/SoilTest.cuh
-        src/systems/terrain/FractalNoise.cu
-        src/systems/terrain/FractalNoise.cuh
-        src/systems/terrain/Seamless.cu
-        src/systems/terrain/Seamless.cuh
+        src/screens/soil_test.cu
+        src/screens/soil_test.cuh
+        src/systems/terrain/fractal_noise.cu
+        src/systems/terrain/fractal_noise.cuh
+        src/systems/terrain/seamless.cu
+        src/systems/terrain/seamless.cuh
 )
 
 # Set CUDA properties

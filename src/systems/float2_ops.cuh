@@ -54,6 +54,6 @@ __host__ __device__ inline float length2(const float2 &a) {
 
 // Normalize vector
 __host__ __device__ inline float2 normalize(const float2 &a) {
-  float invLen = 1.0f / length(a);
-  return a * invLen;
+  float inv_len = 1.0f / length(a);
+  return a * inv_len;
 }

@@ -1,0 +1,46 @@
+---
+Checks: '-*,readability-identifier-naming'
+CheckOptions:
+  # Classes and structs: PascalCase
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+
+  # Functions and methods: snake_case
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.MethodCase
+    value: lower_case
+
+  # Variables and members: snake_case
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+
+  # Constants and enums: snake_case
+  - key: readability-identifier-naming.LocalConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticConstantCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: lower_case
+
+  # Enum values: snake_case
+  - key: readability-identifier-naming.EnumConstantCase
+    value: lower_case
+
+  # Namespaces: snake_case
+  - key: readability-identifier-naming.NamespaceCase
+    value: lower_case
+
+  # Type aliases and template parameters: PascalCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key: readability-identifier-naming.TemplateParameterCase
+    value: CamelCase

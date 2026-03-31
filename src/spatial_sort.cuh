@@ -1,8 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <vector>
 #include <random>
+#include <vector>
+
 #include <thrust/host_vector.h>
 
 struct Rect {

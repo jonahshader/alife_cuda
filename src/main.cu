@@ -3,28 +3,31 @@
 #define SDL_MAIN_HANDLED
 // #define GLM_FORCE_CUDA
 // #define GLM_COMPILER_CUDA
-#include <glm/glm.hpp>
-#include <thrust/host_vector.h>
-#include <thrust/device_vector.h>
-#include <thrust/generate.h>
-#include <thrust/sort.h>
-#include <thrust/copy.h>
-#include <thrust/random.h>
-#include <iostream>
-#include "systems/Game.cuh"
-#include "screens/TreeTest.cuh"
-#include "screens/FluidTest.cuh"
-#include "screens/FluidTest2.cuh"
-#include "screens/FluidSoil.cuh"
-#include "screens/SoilTest.cuh"
-#include "screens/TexCUDATest.cuh"
-#include "spatial_sort.cuh"
-
-#include <SDL.h>
 #include "glad/glad.h"
 #include "imgui.h"
-#include "imgui_impl_sdl2.h"
 #include "imgui_impl_opengl3.h"
+#include "imgui_impl_sdl2.h"
+#include "screens/fluid_soil.cuh"
+#include "screens/fluid_test.cuh"
+#include "screens/fluid_test2.cuh"
+#include "screens/soil_test.cuh"
+#include "screens/tex_cuda_test.cuh"
+#include "screens/tree_test.cuh"
+#include "spatial_sort.cuh"
+#include "systems/game.cuh"
+
+#include <SDL.h>
+
+#include <glm/glm.hpp>
+
+#include <iostream>
+
+#include <thrust/copy.h>
+#include <thrust/device_vector.h>
+#include <thrust/generate.h>
+#include <thrust/host_vector.h>
+#include <thrust/random.h>
+#include <thrust/sort.h>
 
 static int viewport_width = 1920;
 static int viewport_height = 1080;
@@ -131,19 +134,19 @@ int main(int argc, char *argv[]) {
 
   {
     Game game;
-    game.getResources().window = window;
+    game.get_resources().window = window;
     game.resize(viewport_width, viewport_height);
-    //    game.pushScreen(std::make_shared<MainMenu>(game));
-    // game.pushScreen(std::make_shared<FluidTest>(game));
-    // game.pushScreen(std::make_shared<TreeTest>(game));
-    // game.pushScreen(std::make_shared<SoilTest>(game));
-    // game.pushScreen(std::make_shared<TexCUDATest>(game));
-    // game.pushScreen(std::make_shared<FluidTest2>(game));
-    game.pushScreen(std::make_shared<FluidSoil>(game));
+    //    game.push_screen(std::make_shared<MainMenu>(game));
+    // game.push_screen(std::make_shared<FluidTest>(game));
+    // game.push_screen(std::make_shared<TreeTest>(game));
+    // game.push_screen(std::make_shared<SoilTest>(game));
+    // game.push_screen(std::make_shared<TexCUDATest>(game));
+    // game.push_screen(std::make_shared<FluidTest2>(game));
+    game.push_screen(std::make_shared<FluidSoil>(game));
 
     float time = 0;
     SDL_Event event;
-    while (game.isRunning()) {
+    while (game.is_running()) {
       while (SDL_PollEvent(&event)) {
         ImGui_ImplSDL2_ProcessEvent(&event);
         // skip game input handling if ImGui wants to capture the event
@@ -164,11 +167,11 @@ int main(int argc, char *argv[]) {
         }
 
         if (!handled) {
-          game.handleInput(event);
+          game.handle_input(event);
         }
 
         if (event.type == SDL_QUIT) {
-          game.stopGame();
+          game.stop_game();
         } else if (event.type == SDL_WINDOWEVENT) {
           if (event.window.event == SDL_WINDOWEVENT_RESIZED) {
             viewport_width = event.window.data1;
@@ -189,7 +192,7 @@ int main(int argc, char *argv[]) {
       ImGui::Render();
       ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
-      SDL_GL_SwapWindow(game.getResources().window);
+      SDL_GL_SwapWindow(game.get_resources().window);
       time += 1 / 165.0f;
     }
   } // game destroyed here, while GL context is still valid

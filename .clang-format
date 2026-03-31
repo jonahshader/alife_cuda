@@ -4,6 +4,8 @@ Language: Cpp
 BreakBeforeBraces: Attach
 # Indent width
 IndentWidth: 2
+# Always break after template declarations
+AlwaysBreakTemplateDeclarations: Yes
 # Don't indent public/private/protected
 AccessModifierOffset: -2
 # Align parameters
@@ -23,5 +25,25 @@ IndentCaseLabels: true
 SpaceBeforeParens: ControlStatements
 # Spaces in parentheses
 SpacesInParentheses: false
-# Don't sort includes
-SortIncludes: false
+# Sort includes with custom priority to ensure OpenGL headers come before CUDA
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Priority 1: Main project header (for .cpp files)
+  - Regex: '^"'
+    Priority: 1
+  # Priority 2: OpenGL-related headers (GLAD, GL, etc.) - must come before CUDA
+  - Regex: "<(glad|GL)/"
+    Priority: 2
+  # Priority 3: CUDA headers - must come after OpenGL
+  - Regex: "<cuda"
+    Priority: 3
+  # Priority 4: SDL headers
+  - Regex: "<SDL"
+    Priority: 4
+  # Priority 5: Third-party libraries
+  - Regex: "<(glm|artery_font|lodepng|FastNoiseLite|imgui|Random123)/"
+    Priority: 5
+  # Priority 6: Standard library
+  - Regex: "<[a-z_]+>"
+    Priority: 6
