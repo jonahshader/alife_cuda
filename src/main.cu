@@ -8,12 +8,8 @@
 #include "imgui_impl_opengl3.h"
 #include "imgui_impl_sdl2.h"
 #include "screens/fluid_soil.cuh"
-#include "screens/fluid_test.cuh"
 #include "screens/fluid_test2.cuh"
-#include "screens/soil_test.cuh"
-#include "screens/tex_cuda_test.cuh"
 #include "screens/tree_test.cuh"
-#include "spatial_sort.cuh"
 #include "systems/game.cuh"
 
 #include <SDL.h>
@@ -136,11 +132,7 @@ int main(int argc, char *argv[]) {
     Game game;
     game.get_resources().window = window;
     game.resize(viewport_width, viewport_height);
-    //    game.push_screen(std::make_shared<MainMenu>(game));
-    // game.push_screen(std::make_shared<FluidTest>(game));
     // game.push_screen(std::make_shared<TreeTest>(game));
-    // game.push_screen(std::make_shared<SoilTest>(game));
-    // game.push_screen(std::make_shared<TexCUDATest>(game));
     // game.push_screen(std::make_shared<FluidTest2>(game));
     game.push_screen(std::make_shared<FluidSoil>(game));
 

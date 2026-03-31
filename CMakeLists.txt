@@ -199,35 +199,19 @@ add_executable(alife_cuda src/main.cu
         src/systems/resources.cuh
         src/systems/custom_math.cu
         src/systems/custom_math.cuh
-        src/systems/kernels.cu
-        src/systems/kernels.cuh
-        src/spatial_sort.cu
-        src/spatial_sort.cuh
         src/screens/tree_test.cu
         src/screens/tree_test.cuh
         src/systems/trees.cu
         src/systems/trees.cuh
-        src/systems/fluid.cu
-        src/systems/fluid.cuh
-        src/systems/particle_fluid.cuh
-        src/systems/particle_fluid.cu
         src/systems/particle_fluid2.cuh
         src/systems/particle_fluid2.cu
         src/systems/profiler_gui.cuh
         src/systems/profiler_gui.cu
-        src/screens/fluid_test.cu
-        src/screens/fluid_test.cuh
         src/screens/fluid_test2.cu
         src/screens/fluid_test2.cuh
         src/screens/fluid_soil.cu
         src/screens/fluid_soil.cuh
-        src/screens/tex_cuda_test.cu
-        src/screens/tex_cuda_test.cuh
         src/systems/tree_types.cuh
-        src/systems/ui/container.cu
-        src/systems/ui/container.cuh
-        src/systems/ui/world_ui.cu
-        src/systems/ui/world_ui.cuh
         src/systems/world.cu
         src/systems/world.cuh
         src/systems/soil.cu
@@ -236,12 +220,8 @@ add_executable(alife_cuda src/main.cu
         src/systems/timing_profiler.cuh
         src/systems/soa_helper.h
         src/systems/float2_ops.cuh
-        src/screens/soil_test.cu
-        src/screens/soil_test.cuh
         src/systems/terrain/fractal_noise.cu
         src/systems/terrain/fractal_noise.cuh
-        src/systems/terrain/seamless.cu
-        src/systems/terrain/seamless.cuh
 )
 
 # Set CUDA properties
