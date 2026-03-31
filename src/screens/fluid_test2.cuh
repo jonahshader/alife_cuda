@@ -1,10 +1,10 @@
 #pragma once
 
+#include "graphics/fluid_render.cuh"
 #include "graphics/renderers/rect_tex_renderer.cuh"
 #include "systems/default_screen.cuh"
-#include "systems/parameter_manager.h"
-#include "systems/particle_fluid2.cuh"
 #include "systems/float2_ops.cuh"
+#include "systems/particle_fluid2.cuh"
 
 #include <cmath>
 
@@ -24,9 +24,8 @@ private:
   const int2 tex_size{(int)std::round(bounds.x * pixels_per_meter),
                       (int)std::round(bounds.y *pixels_per_meter)};
 
-  p2::ParticleFluid fluid{bounds.x, bounds.y, true};
+  p2::ParticleFluidState fluid{};
   RectTexRenderer density_renderer{tex_size.x, tex_size.y, 4};
-  // thrust::device_vector<float> density_data;
   thrust::device_vector<unsigned char> density_texture_data;
   bool grabbing{false};
   int2 mouse_pos{0, 0};

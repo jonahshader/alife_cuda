@@ -3,7 +3,6 @@
 #include "parameter_manager.h"
 #include "soa_helper.h"
 #include "soil.cuh"
-#include "graphics/renderers/circle_renderer.cuh"
 
 #include <glm/glm.hpp>
 
@@ -27,14 +26,13 @@ namespace p2 {
 DEFINE_STRUCTS(SPH, FOR_SPH)
 
 struct TunableParams {
-  // TODO: grab these from screenshot
-  float dt = 1 / 600.0f; // 1/60.0f;
+  float dt = 1 / 600.0f;
   float dt_predict = 1 / 120.0f;
-  float gravity = -13.0f; // -13.0f
+  float gravity = -13.0f;
   float collision_damping = 0.5f;
   float smoothing_radius = 0.2f;
-  float target_density = 234.0f; // 234.0f
-  float pressure_mult = 225.0f;  // 225.0f;
+  float target_density = 234.0f;
+  float pressure_mult = 225.0f;
   float near_pressure_mult = 18.0f;
   float viscosity_strength = 0.03f;
 
@@ -89,37 +87,30 @@ struct ParticleGridPtrs {
   }
 };
 
-class ParticleFluid {
-public:
-  ParticleFluid(float width, float height, const TunableParams &params, bool use_graphics);
-  ParticleFluid(float width, float height, bool use_graphics);
-
-  void update();
-  void update(SoilSystem &soil_system);
-  void render(const glm::mat4 &transform);
-
-  void calculate_density_grid(thrust::device_vector<unsigned char> &texture_data, int width,
-                              int height, float max_density);
-
-  void attract(float2 pos, float max_thrust, float radius);
-
-private:
-  float2 bounds;
-  TunableParams params;
-  bool use_internal_params;
+// Pure data struct — no renderers, no methods beyond trivial accessors
+struct ParticleFluidState {
+  float2 bounds{};
+  TunableParams params{};
+  bool use_internal_params{false};
   std::unique_ptr<ParameterManager> pm{};
   SPHSoA particles{};
   SPHSoADevice particles_device{};
-
   ParticleGrid grid{};
   ParticleGridDevice grid_device{};
-
-  std::unique_ptr<CircleRenderer> circle_renderer{};
-
-  void load_params();
-  void save_params();
-  void init();
-  void init_grid();
 };
+
+// Free functions for simulation logic
+void init_fluid(ParticleFluidState &state, float width, float height, const TunableParams &params);
+void init_fluid(ParticleFluidState &state, float width, float height);
+void init_fluid_grid(ParticleFluidState &state);
+void update_fluid(ParticleFluidState &state);
+void update_fluid(ParticleFluidState &state, const SoilPtrs &soil_ptrs, int soil_width,
+                  int soil_height, float soil_cell_size);
+void attract_fluid(ParticleFluidState &state, float2 pos, float max_thrust, float radius);
+void calculate_fluid_density_grid(ParticleFluidState &state,
+                                  thrust::device_vector<unsigned char> &texture_data, int width,
+                                  int height, float max_density);
+void load_fluid_params(ParticleFluidState &state);
+void save_fluid_params(ParticleFluidState &state);
 
 } // namespace p2

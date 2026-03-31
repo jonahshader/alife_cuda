@@ -1,7 +1,6 @@
 #pragma once
 
 #include "tree_types.cuh"
-#include "systems/game.cuh"
 
 #include <glm/glm.hpp>
 
@@ -41,13 +40,6 @@ Tree build_tree_optimized(uint32_t num_nodes, std::default_random_engine &rand,
 TreeBatch concatenate_trees(const std::vector<Tree> &trees);
 
 /**
- * Render a tree using the LineRenderer. Assumes the LineRenderer has already been set up.
- * @param line_renderer The LineRenderer to use
- * @param batch The nodes of the trees
- */
-void render_tree(LineRenderer &line_renderer, const trees2::TreeBatch &batch, glm::mat4 transform);
-
-/**
  * Propagate orientation and position changes through the tree
  * @param batch The nodes of the batch
  */
@@ -61,30 +53,21 @@ void update_tree_cuda(trees2::TreeBatchDevice &read_batch_device,
  */
 std::vector<BranchNodeFull> sort_tree(const std::vector<BranchNodeFull> &nodes);
 
-__global__ void render_tree_kernel(unsigned int *line_vbo, const trees2::TreeBatchPtrs batch,
-                                   size_t node_count);
-
 __host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCore &core);
 
 __host__ __device__ glm::vec2 get_length_vec(const trees2::BranchCoreSoA &core, trees2::bid_t i);
 
 __host__ __device__ glm::vec2 get_length_vec(float abs_rot, float length);
 
-class Trees {
-public:
-  explicit Trees(bool use_graphics);
-  ~Trees() = default;
-
-  void generate_random_trees(uint32_t num_trees, uint32_t num_nodes,
-                             std::default_random_engine &rand);
-  void update(float dt);
-  void render(const glm::mat4 &transform);
-
-private:
+// Pure data struct — no renderers, no methods
+struct TreesState {
   trees2::TreeBatch read_host{}, write_host{};
   trees2::TreeBatchDevice read_device{}, write_device{};
-
-  std::unique_ptr<LineRenderer> line_renderer{};
 };
+
+// Free functions for simulation logic
+void init_trees(TreesState &state, uint32_t num_trees, uint32_t num_nodes,
+                std::default_random_engine &rand);
+void update_trees(TreesState &state, float dt);
 
 } // namespace trees

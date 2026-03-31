@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graphics/extend_viewport.h"
+#include "graphics/soil_render.cuh"
 #include "systems/default_screen.cuh"
 #include "systems/game.cuh"
 #include "systems/particle_fluid.cuh"
@@ -16,7 +17,8 @@ public:
   bool handle_input(SDL_Event event) override;
 
 private:
-  SoilSystem soil;
+  SoilState soil{};
+  SimpleRectRenderer soil_renderer{};
   particles::ParticleFluid fluid;
   bool running{false};
 

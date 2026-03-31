@@ -1,6 +1,6 @@
+#include "imgui.h"
 #include "kernels.cuh"
 #include "particle_fluid.cuh"
-#include "imgui.h"
 
 #include <iostream>
 #include <random>

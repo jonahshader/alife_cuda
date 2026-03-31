@@ -1,5 +1,4 @@
 #include "fluid_test2.cuh"
-#include "systems/particle_fluid2.cuh"
 
 #include <iostream>
 
@@ -16,9 +15,9 @@
   } while (0)
 
 FluidTest2::FluidTest2(Game &game)
-    : DefaultScreen(game),
-      //  density_data(tex_size.x * tex_size.y),
-      density_texture_data(tex_size.x * tex_size.y * 4) {}
+    : DefaultScreen(game), density_texture_data(tex_size.x * tex_size.y * 4) {
+  p2::init_fluid(fluid, bounds.x, bounds.y);
+}
 
 bool FluidTest2::handle_input(SDL_Event event) {
   if (DefaultScreen::handle_input(event))
@@ -42,10 +41,7 @@ bool FluidTest2::handle_input(SDL_Event event) {
   return false;
 }
 
-// __global__ void density_to_texture(float *density_data, unsigned char *density_texture_data, int
-// size, float max_density)
-
-void check_cuda(const std::string &msg) {
+static void check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
     std::cerr << "FluidTest2: " << msg << ": " << cudaGetErrorString(err) << std::endl;
@@ -54,13 +50,12 @@ void check_cuda(const std::string &msg) {
 
 void FluidTest2::render(float _dt) {
   render_start();
-  fluid.update();
+  p2::update_fluid(fluid);
   if (grabbing) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
-    fluid.attract({world_coords.x, world_coords.y}, 0.5f, 0.5f);
+    p2::attract_fluid(fluid, {world_coords.x, world_coords.y}, 0.5f, 0.5f);
   }
-  // TODO: calculate expected max_density from particles per cell
-  fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+  p2::calculate_fluid_density_grid(fluid, density_texture_data, tex_size.x, tex_size.y, 300.0f);
 
   cudaArray *cuda_array = density_renderer.cuda_map_texture();
   if (cuda_array == nullptr) {
@@ -86,7 +81,8 @@ void FluidTest2::render(float _dt) {
   density_renderer.end();
   density_renderer.render();
 
-  fluid.render(vp.get_transform());
+  auto &circle_renderer = game.get_resources().circle_renderer;
+  p2::render_fluid(fluid, circle_renderer, vp.get_transform());
   check_cuda("fluid.render");
 
   render_end();

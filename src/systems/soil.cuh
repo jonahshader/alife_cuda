@@ -1,7 +1,6 @@
 #pragma once
 
 #include "soa_helper.h"
-#include "graphics/renderers/simple_rect_renderer.cuh"
 
 #include <glm/glm.hpp>
 
@@ -36,33 +35,22 @@ constexpr int PARTICLES_PER_SOIL_CELL = 1;
 
 DEFINE_STRUCTS(Soil, FOR_SOIL)
 
-class SoilSystem {
-public:
-  using uint = std::uint32_t;
-  SoilSystem(uint width, uint height, float cell_size, bool use_graphics);
-  ~SoilSystem() = default;
+using uint = std::uint32_t;
 
-  void update_cpu(float dt);
-  void update_cuda(float dt);
-  void render(const glm::mat4 &transform);
-  void reset();
-  uint get_width() const {
-    return width;
-  }
-  uint get_height() const {
-    return height;
-  }
-  float get_cell_size() const {
-    return cell_size;
-  }
-  SoilPtrs get_read_ptrs();
-
-private:
-  uint width, height;
-  float cell_size;
+// Pure data struct — no renderers, no methods
+struct SoilState {
+  uint width{0};
+  uint height{0};
+  float cell_size{0.0f};
   SoilSoADevice read{}, write{};
-  std::unique_ptr<SimpleRectRenderer> rect_renderer{};
 };
+
+// Free functions for simulation logic
+void init_soil(SoilState &state, uint width, uint height, float cell_size);
+void reset_soil(SoilState &state);
+void update_soil_cpu(SoilState &state, float dt);
+void update_soil_cuda(SoilState &state, float dt);
+SoilPtrs get_soil_read_ptrs(SoilState &state);
 
 __host__ __device__ float get_density(SoilPtrs soil, size_t i);
 __host__ __device__ float get_friction(SoilPtrs soil, size_t i);

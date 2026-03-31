@@ -1,7 +1,7 @@
 #pragma once
 
-#include "soa_helper.h"
 #include "graphics/renderers/circle_renderer.cuh"
+#include "soa_helper.h"
 
 #include <glm/glm.hpp>
 

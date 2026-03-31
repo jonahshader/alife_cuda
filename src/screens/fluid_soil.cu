@@ -1,5 +1,4 @@
 #include "fluid_soil.cuh"
-#include "systems/particle_fluid2.cuh"
 #include "systems/timing_profiler.cuh"
 
 #include <iostream>
@@ -17,9 +16,11 @@
   } while (0)
 
 FluidSoil::FluidSoil(Game &game)
-    : DefaultScreen(game),
-      //  density_data(tex_size.x * tex_size.y),
-      density_texture_data(tex_size.x * tex_size.y * 4) {}
+    : DefaultScreen(game), density_texture_data(tex_size.x * tex_size.y * 4) {
+  init_soil(soil, (unsigned int)std::round(bounds.x / soil_size),
+            (unsigned int)std::round(bounds.y / soil_size), soil_size);
+  p2::init_fluid(fluid, bounds.x, bounds.y);
+}
 
 bool FluidSoil::handle_input(SDL_Event event) {
   if (DefaultScreen::handle_input(event))
@@ -70,9 +71,6 @@ bool FluidSoil::handle_input(SDL_Event event) {
   return false;
 }
 
-// __global__ void density_to_texture(float *density_data, unsigned char *density_texture_data, int
-// size, float max_density)
-
 void FluidSoil::check_cuda(const std::string &msg) {
   cudaError_t err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -89,23 +87,24 @@ void FluidSoil::render(float _dt) {
   main_font_world.set_transform(vp.get_transform());
   circle_renderer.begin();
   main_font_world.begin();
-  soil.update_cuda(_dt); // TODO: need proper dt parameter
-  fluid.update(soil);
+  update_soil_cuda(soil, _dt);
+  p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
 
   ImGui::Begin("Particle Fluid");
   ImGui::Checkbox("Show Density Grid", &show_density_grid);
   ImGui::End();
+  p2::render_fluid_imgui(fluid);
+
   if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
-
-    fluid.attract({world_coords.x, world_coords.y}, repelling ? -grab_strength : grab_strength,
-                  grab_radius);
+    p2::attract_fluid(fluid, {world_coords.x, world_coords.y},
+                      repelling ? -grab_strength : grab_strength, grab_radius);
   }
-  // TODO: calculate expected max_density from particles per cell
+
   {
     auto scope = profiler.scoped_measure("calculate_density_grid");
     if (show_density_grid)
-      fluid.calculate_density_grid(density_texture_data, tex_size.x, tex_size.y, 300.0f);
+      p2::calculate_fluid_density_grid(fluid, density_texture_data, tex_size.x, tex_size.y, 300.0f);
   }
 
   {
@@ -148,17 +147,16 @@ void FluidSoil::render(float _dt) {
 
   {
     auto scope = profiler.scoped_measure("soil.render");
-    soil.render(vp.get_transform());
+    render_soil(soil, soil_renderer, vp.get_transform());
     check_cuda("soil.render");
   }
 
   {
     auto scope = profiler.scoped_measure("fluid.render");
-    fluid.render(vp.get_transform());
+    p2::render_fluid(fluid, circle_renderer, vp.get_transform());
     check_cuda("fluid.render");
   }
 
-  // add a circle for mouse grab tool
   float grab_color_opacity = 0.1f;
   if (grabbing || repelling) {
     grab_color_opacity = 0.25f;
@@ -166,7 +164,6 @@ void FluidSoil::render(float _dt) {
   const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});
   circle_renderer.add_circle(world_coords.x, world_coords.y, grab_radius,
                              glm::vec4(0.5f, 0.5f, 0.8f, grab_color_opacity));
-  // display strength
   main_font_world.add_text(world_coords.x, world_coords.y, grab_radius,
                            "Strength: " + std::to_string(grab_strength),
                            glm::vec4(0.0f, 0.0f, 0.0f, 0.5f), FontRenderer::HAlign::CENTER);

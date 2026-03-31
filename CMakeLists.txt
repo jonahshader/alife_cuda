@@ -183,6 +183,12 @@ add_executable(alife_cuda src/main.cu
         src/graphics/renderers/simple_rect_renderer.cuh
         src/graphics/renderers/rect_tex_renderer.cu
         src/graphics/renderers/rect_tex_renderer.cuh
+        src/graphics/fluid_render.cu
+        src/graphics/fluid_render.cuh
+        src/graphics/soil_render.cu
+        src/graphics/soil_render.cuh
+        src/graphics/tree_render.cu
+        src/graphics/tree_render.cuh
         src/systems/parameter_manager.h
         src/systems/game.cu
         src/systems/game.cuh

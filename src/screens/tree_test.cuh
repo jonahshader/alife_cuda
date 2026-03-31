@@ -1,6 +1,7 @@
 #pragma once
 
 #include "graphics/extend_viewport.h"
+#include "graphics/tree_render.cuh"
 #include "systems/game.cuh"
 #include "systems/screen.h"
 #include "systems/trees.cuh"
@@ -20,7 +21,8 @@ private:
   ExtendViewport vp{720, 720};
   ExtendViewport hud_vp{720, 720};
 
-  trees::Trees trees{true};
+  trees::TreesState trees{};
+  LineRenderer tree_renderer{};
 
   bool mixing{true};
   bool mutating_len_rot{false};

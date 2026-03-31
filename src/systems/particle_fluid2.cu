@@ -1,7 +1,6 @@
 #include "custom_math.cuh"
-#include "particle_fluid2.cuh"
 #include "float2_ops.cuh"
-#include "imgui.h"
+#include "particle_fluid2.cuh"
 #include "systems/timing_profiler.cuh"
 
 #include <cmath>
@@ -624,23 +623,20 @@ __global__ void attract_single_kernel(float2 pos, float max_thrust, float radius
                            bounds);
 }
 
-void ParticleFluid::attract(float2 pos, float max_thrust, float radius) {
+void attract_fluid(ParticleFluidState &state, float2 pos, float max_thrust, float radius) {
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
-  sph.get_ptrs(particles_device);
-  grid_ptrs.get_ptrs(grid_device);
+  sph.get_ptrs(state.particles_device);
+  grid_ptrs.get_ptrs(state.grid_device);
 
-  int num_particles = particles_device.pos.size();
-  int grid_size = grid.width * grid.height;
-  int2 grid_dims = make_int2(grid.width, grid.height);
-  float cell_size = params.smoothing_radius;
+  int2 grid_dims = make_int2(state.grid.width, state.grid.height);
 
   dim3 block(1);
   dim3 grid_dim(1);
 
   attract_single_kernel<<<grid_dim, block>>>(pos, max_thrust, radius, sph, grid_ptrs,
-                                             grid.max_particles_per_cell, grid_dims, cell_size,
-                                             bounds);
+                                             state.grid.max_particles_per_cell, grid_dims,
+                                             state.params.smoothing_radius, state.bounds);
 
   check_cuda("attract_single_kernel");
 }
@@ -652,20 +648,20 @@ __host__ __device__ float sd_box(float2 p, float2 b) {
   return fminf(fmaxf(d.x, d.y), 0.0f) + length(max(d, make_float2(0.0f, 0.0f)));
 }
 
-void ParticleFluid::init_grid() {
-  // configure grid
-  int grid_width = std::ceil(bounds.x / params.smoothing_radius);
-  int grid_height = std::ceil(bounds.y / params.smoothing_radius);
+void init_fluid_grid(ParticleFluidState &state) {
+  int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
+  int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
 
-  grid.reconfigure(grid_width, grid_height, params.max_particles_per_cell);
+  state.grid.reconfigure(grid_width, grid_height, state.params.max_particles_per_cell);
 }
 
-void ParticleFluid::init() {
-  init_grid();
+static void init_fluid_particles(ParticleFluidState &state) {
+  // configure grid
+  init_fluid_grid(state);
   // init some particles
   std::default_random_engine rand;
-  std::uniform_real_distribution<float> dist_x(0.0f, bounds.x);
-  std::uniform_real_distribution<float> dist_y(bounds.y / 2, bounds.y);
+  std::uniform_real_distribution<float> dist_x(0.0f, state.bounds.x);
+  std::uniform_real_distribution<float> dist_y(state.bounds.y / 2, state.bounds.y);
 
   // velocity init with gaussian
   std::normal_distribution<float> dist_vel(0.0f, 0.001f);
@@ -673,77 +669,76 @@ void ParticleFluid::init() {
   // sym_break, random uint8_t
   std::uniform_int_distribution<int> dist_sym(0, 255);
 
-  int grid_width = std::ceil(bounds.x / params.smoothing_radius);
-  int grid_height = std::ceil(bounds.y / params.smoothing_radius);
-  const int NUM_PARTICLES = params.particles_per_cell * grid_width * grid_height;
-  particles.resize_all(NUM_PARTICLES);
+  int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
+  int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
+  const int NUM_PARTICLES = state.params.particles_per_cell * grid_width * grid_height;
+  state.particles.resize_all(NUM_PARTICLES);
 
   for (int i = 0; i < NUM_PARTICLES; ++i)
-    particles.vel[i] = make_float2(dist_vel(rand), dist_vel(rand));
+    state.particles.vel[i] = make_float2(dist_vel(rand), dist_vel(rand));
 
   for (int i = 0; i < NUM_PARTICLES; ++i) {
     auto pos = make_float2(dist_x(rand), dist_y(rand));
-    auto vel = particles.vel[i];
-    particles.pos[i] = pos + vel * params.dt_predict;
-    particles.ppos[i] = pos;
+    auto vel = state.particles.vel[i];
+    state.particles.pos[i] = pos + vel * state.params.dt_predict;
+    state.particles.ppos[i] = pos;
   }
 
   // density is already defaulted to 0, mass to 1
   for (int i = 0; i < NUM_PARTICLES; ++i)
-    particles.sym_break[i] = dist_sym(rand);
+    state.particles.sym_break[i] = dist_sym(rand);
 
   // send to device
-  particles_device.copy_from_host(particles);
-  grid_device.copy_from_host(grid);
+  state.particles_device.copy_from_host(state.particles);
+  state.grid_device.copy_from_host(state.grid);
 }
 
-ParticleFluid::ParticleFluid(float width, float height, const TunableParams &params,
-                             bool use_graphics)
-    : bounds(make_float2(width, height)), params(params) {
-  if (use_graphics)
-    circle_renderer = std::make_unique<CircleRenderer>();
-
-  init();
+void init_fluid(ParticleFluidState &state, float width, float height, const TunableParams &params) {
+  state.bounds = make_float2(width, height);
+  state.params = params;
+  state.use_internal_params = false;
+  init_fluid_particles(state);
 }
 
-// TODO: i think this constructor doesn't work as expected, because load_params is called after
-// the other constructor is called
-ParticleFluid::ParticleFluid(float width, float height, bool use_graphics)
-    : ParticleFluid(width, height, TunableParams{}, use_graphics) {
-  load_params();
+void init_fluid(ParticleFluidState &state, float width, float height) {
+  state.bounds = make_float2(width, height);
+  state.params = TunableParams{};
+  state.use_internal_params = true;
+  init_fluid_particles(state);
+  load_fluid_params(state);
 }
 
-void ParticleFluid::load_params() {
-  if (pm == nullptr)
-    pm = std::make_unique<ParameterManager>("fluid2_params.txt");
-  pm->get<float>("dt", params.dt);
-  pm->get<float>("dt_predict", params.dt_predict);
-  pm->get<float>("gravity", params.gravity);
-  pm->get<float>("collision_damping", params.collision_damping);
-  pm->get<float>("smoothing_radius", params.smoothing_radius);
-  pm->get<float>("target_density", params.target_density);
-  pm->get<float>("pressure_mult", params.pressure_mult);
-  pm->get<float>("near_pressure_mult", params.near_pressure_mult);
-  pm->get<float>("viscosity_strength", params.viscosity_strength);
-  pm->get<int>("particles_per_cell", params.particles_per_cell);
-  pm->get<int>("max_particles_per_cell", params.max_particles_per_cell);
+void load_fluid_params(ParticleFluidState &state) {
+  if (state.pm == nullptr)
+    state.pm = std::make_unique<ParameterManager>("fluid2_params.txt");
+  state.pm->get<float>("dt", state.params.dt);
+  state.pm->get<float>("dt_predict", state.params.dt_predict);
+  state.pm->get<float>("gravity", state.params.gravity);
+  state.pm->get<float>("collision_damping", state.params.collision_damping);
+  state.pm->get<float>("smoothing_radius", state.params.smoothing_radius);
+  state.pm->get<float>("target_density", state.params.target_density);
+  state.pm->get<float>("pressure_mult", state.params.pressure_mult);
+  state.pm->get<float>("near_pressure_mult", state.params.near_pressure_mult);
+  state.pm->get<float>("viscosity_strength", state.params.viscosity_strength);
+  state.pm->get<int>("particles_per_cell", state.params.particles_per_cell);
+  state.pm->get<int>("max_particles_per_cell", state.params.max_particles_per_cell);
 }
 
-void ParticleFluid::save_params() {
-  if (pm == nullptr)
+void save_fluid_params(ParticleFluidState &state) {
+  if (state.pm == nullptr)
     return;
-  pm->set<float>("dt", params.dt);
-  pm->set<float>("dt_predict", params.dt_predict);
-  pm->set<float>("gravity", params.gravity);
-  pm->set<float>("collision_damping", params.collision_damping);
-  pm->set<float>("smoothing_radius", params.smoothing_radius);
-  pm->set<float>("target_density", params.target_density);
-  pm->set<float>("pressure_mult", params.pressure_mult);
-  pm->set<float>("near_pressure_mult", params.near_pressure_mult);
-  pm->set<float>("viscosity_strength", params.viscosity_strength);
-  pm->set<int>("particles_per_cell", params.particles_per_cell);
-  pm->set<int>("max_particles_per_cell", params.max_particles_per_cell);
-  pm->save();
+  state.pm->set<float>("dt", state.params.dt);
+  state.pm->set<float>("dt_predict", state.params.dt_predict);
+  state.pm->set<float>("gravity", state.params.gravity);
+  state.pm->set<float>("collision_damping", state.params.collision_damping);
+  state.pm->set<float>("smoothing_radius", state.params.smoothing_radius);
+  state.pm->set<float>("target_density", state.params.target_density);
+  state.pm->set<float>("pressure_mult", state.params.pressure_mult);
+  state.pm->set<float>("near_pressure_mult", state.params.near_pressure_mult);
+  state.pm->set<float>("viscosity_strength", state.params.viscosity_strength);
+  state.pm->set<int>("particles_per_cell", state.params.particles_per_cell);
+  state.pm->set<int>("max_particles_per_cell", state.params.max_particles_per_cell);
+  state.pm->save();
 }
 
 __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t num_particles,
@@ -782,17 +777,17 @@ __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t n
   sph.pos[i] = new_pos2;
 }
 
-void ParticleFluid::update() {
+void update_fluid(ParticleFluidState &state) {
   auto &profiler = TimingProfiler::get_instance();
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
-  sph.get_ptrs(particles_device);
-  grid_ptrs.get_ptrs(grid_device);
+  sph.get_ptrs(state.particles_device);
+  grid_ptrs.get_ptrs(state.grid_device);
 
-  size_t num_particles = particles_device.pos.size();
-  size_t grid_size = grid.width * grid.height;
-  int2 grid_dims = make_int2(grid.width, grid.height);
-  float cell_size = params.smoothing_radius;
+  size_t num_particles = state.particles_device.pos.size();
+  size_t grid_size = state.grid.width * state.grid.height;
+  int2 grid_dims = make_int2(state.grid.width, state.grid.height);
+  float cell_size = state.params.smoothing_radius;
 
   dim3 sph_block(256);
   dim3 sph_grid_dim((num_particles + sph_block.x - 1) / sph_block.x);
@@ -811,64 +806,54 @@ void ParticleFluid::update() {
   {
     auto scope = profiler.scoped_measure("populate_grid_indices");
     populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                       grid.max_particles_per_cell, grid_dims,
-                                                       params.smoothing_radius);
+                                                       state.grid.max_particles_per_cell, grid_dims,
+                                                       state.params.smoothing_radius);
     check_cuda("populate_grid_indices");
   }
-
-  // calculate density
 
   {
     auto scope = profiler.scoped_measure("calculate_particle_density");
     calculate_particle_density<<<sph_grid_dim, sph_block>>>(
-        sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
-        num_particles, bounds);
+        sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size,
+        state.params.smoothing_radius, num_particles, state.bounds);
     check_cuda("calculate_particle_density");
   }
-  // calculate acceleration
+
   {
     auto scope = profiler.scoped_measure("calculate_accel");
-    calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-                                                 grid_dims, cell_size, params, num_particles,
-                                                 bounds);
+    calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, state.grid.max_particles_per_cell,
+                                                 grid_dims, cell_size, state.params, num_particles,
+                                                 state.bounds);
     check_cuda("calculate_accel");
   }
 
-  // move particles
   {
     auto scope = profiler.scoped_measure("move_particles");
-    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
-                                                bounds, params.collision_damping);
+    move_particles<<<sph_grid_dim, sph_block>>>(sph, state.params.dt, state.params.dt_predict,
+                                                num_particles, state.bounds,
+                                                state.params.collision_damping);
     check_cuda("move_particles");
   }
 }
 
-void ParticleFluid::update(SoilSystem &soil_system) {
+void update_fluid(ParticleFluidState &state, const SoilPtrs &soil_ptrs, int soil_width,
+                  int soil_height, float soil_cell_size) {
   auto &profiler = TimingProfiler::get_instance();
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
-  SoilPtrs soil_ptrs;
-  sph.get_ptrs(particles_device);
-  grid_ptrs.get_ptrs(grid_device);
-  soil_ptrs = soil_system.get_read_ptrs();
-  int soil_width = soil_system.get_width();
-  int soil_height = soil_system.get_height();
-  float soil_size = soil_system.get_cell_size();
+  sph.get_ptrs(state.particles_device);
+  grid_ptrs.get_ptrs(state.grid_device);
 
-  size_t num_particles = particles_device.pos.size();
-  size_t grid_size = grid.width * grid.height;
-  int2 grid_dims = make_int2(grid.width, grid.height);
-  float cell_size = params.smoothing_radius;
+  size_t num_particles = state.particles_device.pos.size();
+  size_t grid_size = state.grid.width * state.grid.height;
+  int2 grid_dims = make_int2(state.grid.width, state.grid.height);
+  float cell_size = state.params.smoothing_radius;
 
   dim3 sph_block(256);
   dim3 sph_grid_dim((num_particles + sph_block.x - 1) / sph_block.x);
 
   dim3 grid_block(256);
   dim3 grid_grid_dim((grid_size + grid_block.x - 1) / grid_block.x);
-
-  dim3 soil_block(256);
-  dim3 soil_grid_dim((soil_width * soil_height * PARTICLES_PER_SOIL_CELL + soil_block.x - 1) /
-                     soil_block.x);
 
   // place in grid
   {
@@ -881,8 +866,8 @@ void ParticleFluid::update(SoilSystem &soil_system) {
   {
     auto scope = profiler.scoped_measure("populate_grid_indices");
     populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                       grid.max_particles_per_cell, grid_dims,
-                                                       params.smoothing_radius);
+                                                       state.grid.max_particles_per_cell, grid_dims,
+                                                       state.params.smoothing_radius);
     check_cuda("populate_grid_indices");
   }
 
@@ -890,106 +875,32 @@ void ParticleFluid::update(SoilSystem &soil_system) {
   {
     auto scope = profiler.scoped_measure("calculate_particle_density");
     calculate_particle_density<<<sph_grid_dim, sph_block>>>(
-        sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params.smoothing_radius,
-        num_particles, bounds, soil_ptrs, soil_width, soil_height, soil_size);
+        sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size,
+        state.params.smoothing_radius, num_particles, state.bounds, soil_ptrs, soil_width,
+        soil_height, soil_cell_size);
     check_cuda("calculate_particle_density");
   }
 
-  // calculate acceleration
-  // calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, grid.max_particles_per_cell,
-  //                                              grid_dims, cell_size, params, num_particles,
-  //                                              bounds);
   // calculate acceleration with soil
   {
     auto scope = profiler.scoped_measure("calculate_accel");
     calculate_accel<<<sph_grid_dim, sph_block>>>(
-        sph, grid_ptrs, grid.max_particles_per_cell, grid_dims, cell_size, params, num_particles,
-        bounds, soil_ptrs, soil_width, soil_height, soil_size);
+        sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size, state.params,
+        num_particles, state.bounds, soil_ptrs, soil_width, soil_height, soil_cell_size);
     check_cuda("calculate_accel");
   }
 
   // move particles
   {
     auto scope = profiler.scoped_measure("move_particles");
-    move_particles<<<sph_grid_dim, sph_block>>>(sph, params.dt, params.dt_predict, num_particles,
-                                                bounds, params.collision_damping);
+    move_particles<<<sph_grid_dim, sph_block>>>(sph, state.params.dt, state.params.dt_predict,
+                                                num_particles, state.bounds,
+                                                state.params.collision_damping);
     check_cuda("move_particles");
   }
 }
 
-__global__ void render_particles(unsigned int *circle_vbo, SPHPtrs sph, TunableParams params,
-                                 size_t num_particles) {
-  // unsigned int color = 0xFFFFA077;
-  unsigned int color = 0xFFFFFFFF; // 0xFF000000
-  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= num_particles)
-    return;
-
-  auto pos = sph.pos[i];
-  auto radius = params.smoothing_radius * 0.1f;
-  // radius *= sph.density[i] / 400.0f;
-
-  circle_vbo[i * 4 + 0] = reinterpret_cast<unsigned int &>(pos.x);
-  circle_vbo[i * 4 + 1] = reinterpret_cast<unsigned int &>(pos.y);
-  circle_vbo[i * 4 + 2] = reinterpret_cast<unsigned int &>(radius);
-  circle_vbo[i * 4 + 3] = color;
-}
-
-void ParticleFluid::render(const glm::mat4 &transform) {
-  // early return if we don't have a renderer
-  if (!circle_renderer)
-    return;
-
-  // imgui
-  if (pm) {
-    // TODO: need to reconfigure when some of this changes
-    ImGui::Begin("Particle Fluid");
-    ImGui::SliderFloat("dt", &params.dt, 0.0f, 0.1f);
-    ImGui::SliderFloat("dt_predict", &params.dt_predict, 0.0f, 0.1f);
-    ImGui::SliderFloat("gravity", &params.gravity, -30.0f, 0.0f);
-    ImGui::SliderFloat("collision_damping", &params.collision_damping, 0.0f, 1.0f);
-    if (ImGui::SliderFloat("smoothing_radius", &params.smoothing_radius, 0.001f, 0.5f))
-      init_grid();
-    ImGui::SliderFloat("target_density", &params.target_density, 0.0f, 400.0f);
-    ImGui::SliderFloat("pressure_mult", &params.pressure_mult, 0.0f, 1200.0f);
-    ImGui::SliderFloat("near_pressure_mult", &params.near_pressure_mult, 0.0f, 100.0f);
-    ImGui::SliderFloat("viscosity_strength", &params.viscosity_strength, 0.0f, 10.0f);
-    if (ImGui::SliderInt("particles_per_cell", &params.particles_per_cell, 1, 32))
-      init();
-    if (ImGui::SliderInt("max_particles_per_cell", &params.max_particles_per_cell, 1, 1024))
-      init();
-    if (ImGui::Button("Save"))
-      save_params();
-    if (ImGui::Button("Load"))
-      load_params();
-    if (ImGui::Button("Reset Simulation"))
-      init();
-    ImGui::End();
-  }
-
-  circle_renderer->set_transform(transform);
-
-  const auto circle_count = particles_device.pos.size();
-  circle_renderer->ensure_vbo_capacity(circle_count);
-  check_cuda("ensure_vbo_capacity");
-  // get a cuda compatible pointer to the vbo
-  auto vbo_ptr = circle_renderer->cuda_map_buffer();
-
-  // render the particles
-  dim3 block(256);
-  dim3 grid_dim((circle_count + block.x - 1) / block.x);
-
-  SPHPtrs sph;
-  sph.get_ptrs(particles_device);
-  render_particles<<<grid_dim, block>>>(static_cast<unsigned int *>(vbo_ptr), sph, params,
-                                        circle_count);
-  check_cuda("render_particles");
-
-  // unmap the buffer
-  circle_renderer->cuda_unmap_buffer();
-  // render the particles
-  circle_renderer->render(circle_count);
-}
+// render_particles kernel and render function are in graphics/fluid_render.cu
 
 __global__ void calculate_density_grid_kernel(int density_grid_size, SPHPtrs sph,
                                               ParticleGridPtrs grid, int max_particles_per_cell,
@@ -1034,26 +945,25 @@ __global__ void calculate_density_grid_kernel(int density_grid_size, SPHPtrs sph
   texture_data[i * 4 + 3] = 255;
 }
 
-void ParticleFluid::calculate_density_grid(thrust::device_vector<unsigned char> &texture_data,
-                                           int width, int height, float max_density) {
-  float cell_size = params.smoothing_radius;
-  float sample_interval = bounds.x / width;
+void calculate_fluid_density_grid(ParticleFluidState &state,
+                                  thrust::device_vector<unsigned char> &texture_data, int width,
+                                  int height, float max_density) {
+  float cell_size = state.params.smoothing_radius;
+  float sample_interval = state.bounds.x / width;
   // sample_interval *= 0.5f;
 
   int density_grid_size = width * height;
-  int particle_grid_size = grid.width * grid.height;
   int2 density_grid_dims = make_int2(width, height);
-  int2 particle_grid_dims = make_int2(grid.width, grid.height);
+  int2 particle_grid_dims = make_int2(state.grid.width, state.grid.height);
 
   SPHPtrs sph;
-  sph.get_ptrs(particles_device);
+  sph.get_ptrs(state.particles_device);
   ParticleGridPtrs grid_ptrs;
-  grid_ptrs.get_ptrs(grid_device);
+  grid_ptrs.get_ptrs(state.grid_device);
 
-  // calculate density grid
   calculate_density_grid_kernel<<<(density_grid_size + 255) / 256, 256>>>(
-      density_grid_size, sph, grid_ptrs, grid.max_particles_per_cell, density_grid_dims,
-      sample_interval, particle_grid_dims, cell_size, params.smoothing_radius, bounds,
+      density_grid_size, sph, grid_ptrs, state.grid.max_particles_per_cell, density_grid_dims,
+      sample_interval, particle_grid_dims, cell_size, state.params.smoothing_radius, state.bounds,
       texture_data.data().get(), max_density);
   check_cuda("calculate_density_grid_kernel");
 }

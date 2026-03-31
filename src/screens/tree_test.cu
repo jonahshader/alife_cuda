@@ -1,5 +1,5 @@
-#include "tree_test.cuh"
 #include "glad/glad.h"
+#include "tree_test.cuh"
 
 #include <chrono>
 
@@ -7,7 +7,7 @@ constexpr uint32_t NUM_NODES = 1 << 10;
 constexpr uint32_t NUM_TREES = 1 << 10;
 
 TreeTest::TreeTest(Game &game) : game(game) {
-  trees.generate_random_trees(NUM_TREES, NUM_NODES, game.get_resources().generator);
+  trees::init_trees(trees, NUM_TREES, NUM_NODES, game.get_resources().generator);
 }
 
 void TreeTest::show() {}
@@ -92,13 +92,13 @@ void TreeTest::render(float dt) {
 
   if (updating_parallel) {
     auto start = std::chrono::steady_clock::now();
-    trees.update(1 / 60.0f);
+    trees::update_trees(trees, 1 / 60.0f);
     auto end = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     update_time = "Update Time (CUDA): " + std::to_string(elapsed.count()) + "us";
   }
 
-  trees.render(vp.get_transform());
+  trees::render_trees_cuda(trees, tree_renderer, vp.get_transform());
 
   // if (update_render) {
   //     if (tree_vbo_buffered) {
@@ -161,7 +161,7 @@ bool TreeTest::handle_input(SDL_Event event) {
     if (event.key.keysym.sym == SDLK_ESCAPE) {
       game.stop_game();
     } else if (event.key.keysym.sym == SDLK_r) {
-      trees.generate_random_trees(NUM_TREES, NUM_NODES, game.get_resources().generator);
+      trees::init_trees(trees, NUM_TREES, NUM_NODES, game.get_resources().generator);
     } else if (event.key.keysym.sym == SDLK_SPACE) {
       mixing = !mixing;
     } else if (event.key.keysym.sym == SDLK_m) {

@@ -2,8 +2,8 @@
 
 #pragma once
 
-#include "timing_profiler.cuh"
 #include "imgui.h"
+#include "timing_profiler.cuh"
 
 #include <string>
 
