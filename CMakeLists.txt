@@ -162,6 +162,22 @@ if(NOT imgui_POPULATED)
   target_link_libraries(imgui PRIVATE SDL2::SDL2)
 endif()
 
+# CLI11 (header-only command-line parser)
+FetchContent_Declare(
+  CLI11
+  GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
+  GIT_TAG v2.4.2
+)
+FetchContent_MakeAvailable(CLI11)
+
+# toml++ (header-only TOML library)
+FetchContent_Declare(
+  tomlplusplus
+  GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
+  GIT_TAG v3.4.0
+)
+FetchContent_MakeAvailable(tomlplusplus)
+
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -238,6 +254,8 @@ target_link_libraries(alife_cuda PRIVATE
         artery_font
         OpenMP::OpenMP_CXX
         imgui
+        CLI11::CLI11
+        tomlplusplus::tomlplusplus
 )
 
 # Include headers
