@@ -13,9 +13,10 @@ FluidSoil::FluidSoil(Game &game, const SimParams &params)
                (int)std::round(params.world_height * pixels_per_meter)},
       density_renderer(tex_size.x, tex_size.y, 4),
       density_texture_data(tex_size.x * tex_size.y * 4) {
+  auto resolved_seed = sim_params.resolve_seed();
   init_soil(soil, (unsigned int)std::round(bounds.x / sim_params.soil_cell_size),
             (unsigned int)std::round(bounds.y / sim_params.soil_cell_size),
-            sim_params.soil_cell_size);
+            sim_params.soil_cell_size, resolved_seed);
   p2::init_fluid(fluid, bounds.x, bounds.y, sim_params);
 }
 

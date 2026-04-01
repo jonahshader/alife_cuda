@@ -23,11 +23,11 @@ __host__ __device__ float get_friction(SoilPtrs soil, size_t i) {
          soil.clay_density[i] * CLAY_FRICTION;
 }
 
-void init_soil(SoilState &state, uint width, uint height, float cell_size) {
+void init_soil(SoilState &state, uint width, uint height, float cell_size, uint64_t seed) {
   state.width = width;
   state.height = height;
   state.cell_size = cell_size;
-  reset_soil(state);
+  reset_soil(state, seed);
 }
 
 // __global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
@@ -37,14 +37,12 @@ void init_soil(SoilState &state, uint width, uint height, float cell_size) {
 //   curand_init(seed, i, 0, &states[i]);
 // }
 
-void reset_soil(SoilState &state) {
+void reset_soil(SoilState &state, uint64_t seed) {
   SoilSoA<HostBuffer> soil{};
   // assert(width % BLOCK_WIDTH == 0);
   // assert(height % BLOCK_WIDTH == 0);
   resize_all(soil, state.width * state.height);
 
-  // use time as seed
-  auto seed = std::chrono::system_clock::now().time_since_epoch().count();
   std::mt19937_64 rng(seed);
 
   FastNoiseLite heightmap_noise(rng());

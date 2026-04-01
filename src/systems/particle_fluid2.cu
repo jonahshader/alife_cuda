@@ -653,7 +653,7 @@ static void init_fluid_particles(ParticleFluidState &state) {
   // configure grid
   init_fluid_grid(state);
   // init some particles
-  std::default_random_engine rand;
+  std::default_random_engine rand(state.params.resolve_seed());
   std::uniform_real_distribution<float> dist_x(0.0f, state.bounds.x);
   std::uniform_real_distribution<float> dist_y(state.bounds.y / 2, state.bounds.y);
 

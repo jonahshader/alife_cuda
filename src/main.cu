@@ -195,13 +195,16 @@ int main(int argc, char *argv[]) {
     std::cout << " (Ctrl+C to stop)" << std::endl;
 
     // Initialize fluid state directly without Game/Screen
+    auto resolved_seed = sim_params.resolve_seed();
+    std::cout << "Using seed: " << resolved_seed << std::endl;
+
     p2::ParticleFluidState fluid{};
     p2::init_fluid(fluid, sim_params.world_width, sim_params.world_height, sim_params);
 
     SoilState soil{};
     init_soil(soil, (unsigned int)std::round(sim_params.world_width / sim_params.soil_cell_size),
               (unsigned int)std::round(sim_params.world_height / sim_params.soil_cell_size),
-              sim_params.soil_cell_size);
+              sim_params.soil_cell_size, resolved_seed);
 
     int step = 0;
     while (!g_stop_requested.load(std::memory_order_relaxed)) {
