@@ -12,10 +12,22 @@
 #include <curand_kernel.h>
 #include <thrust/extrema.h>
 
-__host__ __device__ float get_density(SoilPtrs soil, size_t i) {
-  return soil.sand_density[i] * SAND_ABSOLUTE_DENSITY +
-         soil.silt_density[i] * SILT_ABSOLUTE_DENSITY +
-         soil.clay_density[i] * CLAY_ABSOLUTE_DENSITY;
+__host__ __device__ float get_porosity(SoilPtrs soil, size_t i) {
+  return soil.sand_density[i] * SAND_POROSITY + soil.silt_density[i] * SILT_POROSITY +
+         soil.clay_density[i] * CLAY_POROSITY;
+}
+
+__host__ __device__ float get_solid_density(SoilPtrs soil, size_t i, float target_density) {
+  return (1.0f - get_porosity(soil, i)) * target_density;
+}
+
+__host__ __device__ float get_pore_capacity(SoilPtrs soil, size_t i, float target_density) {
+  return get_porosity(soil, i) * target_density;
+}
+
+__host__ __device__ float get_capillary_strength(SoilPtrs soil, size_t i) {
+  return soil.sand_density[i] * SAND_CAPILLARY + soil.silt_density[i] * SILT_CAPILLARY +
+         soil.clay_density[i] * CLAY_CAPILLARY;
 }
 
 __host__ __device__ float get_friction(SoilPtrs soil, size_t i) {

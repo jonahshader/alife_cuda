@@ -12,13 +12,15 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 
-constexpr float SAND_RELATIVE_DENSITY = 0.5f;
-constexpr float SILT_RELATIVE_DENSITY = 0.7f;
-constexpr float CLAY_RELATIVE_DENSITY = 1.0f;
+// Porosity: fraction of volume that is pore space
+constexpr float SAND_POROSITY = 0.38f;
+constexpr float SILT_POROSITY = 0.45f;
+constexpr float CLAY_POROSITY = 0.50f;
 
-constexpr float SAND_ABSOLUTE_DENSITY = 1.0f;
-constexpr float SILT_ABSOLUTE_DENSITY = 190.0f;
-constexpr float CLAY_ABSOLUTE_DENSITY = 300.0f;
+// Capillary strength: suction pressure in SPH units (clay >> silt >> sand)
+constexpr float SAND_CAPILLARY = 20.0f;
+constexpr float SILT_CAPILLARY = 120.0f;
+constexpr float CLAY_CAPILLARY = 400.0f;
 
 constexpr float SAND_FRICTION = 8.0f;
 constexpr float SILT_FRICTION = 20.0f;
@@ -31,7 +33,8 @@ constexpr int PARTICLES_PER_SOIL_CELL = 1;
   D(float, silt_density, 0)                                                                        \
   D(float, clay_density, 0)                                                                        \
   D(float, ph, 6.5)                                                                                \
-  D(float, organic_matter, 0)
+  D(float, organic_matter, 0)                                                                      \
+  D(float, saturation, 0)
 
 DEFINE_STRUCTS(Soil, FOR_SOIL)
 
@@ -52,5 +55,8 @@ void update_soil_cpu(SoilState &state, float dt);
 void update_soil_cuda(SoilState &state, float dt);
 SoilPtrs get_soil_read_ptrs(SoilState &state);
 
-__host__ __device__ float get_density(SoilPtrs soil, size_t i);
+__host__ __device__ float get_solid_density(SoilPtrs soil, size_t i, float target_density);
+__host__ __device__ float get_porosity(SoilPtrs soil, size_t i);
+__host__ __device__ float get_pore_capacity(SoilPtrs soil, size_t i, float target_density);
+__host__ __device__ float get_capillary_strength(SoilPtrs soil, size_t i);
 __host__ __device__ float get_friction(SoilPtrs soil, size_t i);

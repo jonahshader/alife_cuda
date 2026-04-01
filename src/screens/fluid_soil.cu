@@ -73,7 +73,7 @@ void FluidSoil::update(float dt) {
   auto &profiler = TimingProfiler::get_instance();
 
   update_soil_cuda(soil, dt);
-  p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
+  p2::update_fluid(fluid, soil);
 
   if (grabbing || repelling) {
     const auto world_coords = vp.unproject({mouse_pos.x, mouse_pos.y});

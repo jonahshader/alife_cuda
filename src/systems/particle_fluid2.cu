@@ -163,7 +163,7 @@ __host__ __device__ inline float smoothstep01_derivative(float x) {
 
 __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, SoilPtrs soil,
                                                                     int w, int h, float soil_size,
-                                                                    float particle_radius) {
+                                                                    float target_density) {
   // Calculate the floating-point cell coordinates
   float half_soil_size = soil_size * 0.5f;
   float fx = (pos.x - half_soil_size) / soil_size;
@@ -177,10 +177,9 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
   float dx = fx - x0;
   float dy = fy - y0;
 
-  // Wrap x coordinates
   int x[2];
-  x[0] = (x0 + w) % w;     // wrap
-  x[1] = (x0 + 1 + w) % w; // wrap
+  x[0] = ((x0 % w) + w) % w;
+  x[1] = (((x0 + 1) % w) + w) % w;
 
   // Clamp y coordinates
   int y[2];
@@ -192,7 +191,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = get_density(soil, idx);
+      d[j][i] = get_solid_density(soil, idx, target_density);
     }
   }
 
@@ -218,7 +217,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_smoothstep(float2 pos, 
 
 __host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos, SoilPtrs soil,
                                                                       int w, int h, float soil_size,
-                                                                      float particle_radius) {
+                                                                      float target_density) {
   // Calculate the floating-point cell coordinates
   float half_soil_size = soil_size * 0.5f;
   float fx = (pos.x - half_soil_size) / soil_size;
@@ -247,7 +246,7 @@ __host__ __device__ float2 calculate_soil_density_gradient_smoothstep(float2 pos
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
-      d[j][i] = get_density(soil, idx);
+      d[j][i] = get_solid_density(soil, idx, target_density);
     }
   }
 
@@ -311,7 +310,7 @@ __host__ __device__ int wrap_x(int x, int w) {
 // Bicubic interpolation version
 __host__ __device__ float2 calculate_soil_density_at_pos_bicubic(float2 pos, SoilPtrs soil, int w,
                                                                  int h, float soil_size,
-                                                                 float particle_radius) {
+                                                                 float target_density) {
   // Calculate the floating-point cell coordinates
   float fx = pos.x / soil_size;
   float fy = pos.y / soil_size;
@@ -335,7 +334,7 @@ __host__ __device__ float2 calculate_soil_density_at_pos_bicubic(float2 pos, Soi
       int wrapped_x = wrap_x(x1 + x, w);
       int idx = clamped_y * w + wrapped_x;
 
-      densities[y + 1][x + 1] = get_density(soil, idx);
+      densities[y + 1][x + 1] = get_solid_density(soil, idx, target_density);
     }
   }
 
@@ -353,13 +352,140 @@ __host__ __device__ float2 calculate_soil_density_at_pos_bicubic(float2 pos, Soi
   return make_float2(density, density);
 }
 
+// compute saturation for each soil cell by summing nearby particle density contributions
+__global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h, float soil_size,
+                                          SPHPtrs sph, ParticleGridPtrs grid,
+                                          int max_particles_per_cell, int2 particle_grid_dims,
+                                          float cell_size, float smoothing_radius,
+                                          size_t num_particles, float2 bounds,
+                                          float target_density) {
+  int soil_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (soil_idx >= soil_w * soil_h)
+    return;
+
+  float pore_cap = get_pore_capacity(soil, soil_idx, target_density);
+  if (pore_cap < 1e-6f) {
+    soil.saturation[soil_idx] = 0.0f;
+    return;
+  }
+
+  // cell center in world space
+  int sx = soil_idx % soil_w;
+  int sy = soil_idx / soil_w;
+  float2 pos = make_float2((sx + 0.5f) * soil_size, (sy + 0.5f) * soil_size);
+
+  // find particle grid cell for this position
+  int pcx = static_cast<int>(pos.x / cell_size);
+  int pcy = static_cast<int>(pos.y / cell_size);
+
+  float water_density = 0.0f;
+
+  int xi_neg_dist = pcx == 0 ? 2 : 1;
+  int xi_pos_dist = pcx >= particle_grid_dims.x - 2 ? 2 : 1;
+
+  for (int yi = pcy - 1; yi <= pcy + 1; yi++) {
+    for (int xi = pcx - xi_neg_dist; xi <= pcx + xi_pos_dist; xi++) {
+      if (yi < 0 || yi >= particle_grid_dims.y)
+        continue;
+      int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
+      int ni = yi * particle_grid_dims.x + wrapped_x;
+      int np = min(grid.particles_per_cell[ni], max_particles_per_cell);
+      for (int i = 0; i < np; i++) {
+        int pid = grid.grid_indices[ni * max_particles_per_cell + i];
+        float2 ppos = sph.pos[pid];
+        if (xi < 0)
+          ppos.x -= bounds.x;
+        else if (xi >= particle_grid_dims.x)
+          ppos.x += bounds.x;
+        float dist = length(pos - ppos);
+        water_density += sph.mass[pid] * density_kernel(smoothing_radius, dist);
+      }
+    }
+  }
+
+  soil.saturation[soil_idx] = water_density / pore_cap;
+}
+
+struct SoilPropertiesAtPos {
+  float2 solid_density_gradient;
+  float saturation;
+  float2 saturation_gradient;
+  float capillary_strength;
+};
+
+// combined smoothstep bilinear lookup for all soil properties needed per particle:
+// solid density gradient, saturation + gradient, capillary strength
+__host__ __device__ SoilPropertiesAtPos calculate_soil_properties_at_pos(float2 pos, SoilPtrs soil,
+                                                                         int w, int h,
+                                                                         float soil_size,
+                                                                         float target_density) {
+  float half_soil_size = soil_size * 0.5f;
+  float fx = (pos.x - half_soil_size) / soil_size;
+  float fy = (pos.y - half_soil_size) / soil_size;
+
+  int x0 = floorf(fx);
+  int y0 = floorf(fy);
+
+  float dx = fx - x0;
+  float dy = fy - y0;
+
+  int x[2], y[2];
+  x[0] = ((x0 % w) + w) % w;
+  x[1] = (((x0 + 1) % w) + w) % w;
+  y[0] = max(0, min(h - 1, y0));
+  y[1] = max(0, min(h - 1, y0 + 1));
+
+  float sd[2][2], sat[2][2], cap[2][2];
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      int idx = y[j] * w + x[i];
+      sd[j][i] = get_solid_density(soil, idx, target_density);
+      sat[j][i] = soil.saturation[idx];
+      cap[j][i] = get_capillary_strength(soil, idx);
+    }
+  }
+
+  float tx = smoothstep01(dx);
+  float ty = smoothstep01(dy);
+  float dtx = smoothstep01_derivative(dx);
+  float dty = smoothstep01_derivative(dy);
+  float inv_soil_size = 1.0f / soil_size;
+
+  SoilPropertiesAtPos result;
+
+  // solid density gradient
+  float sd0 = sd[0][0] * (1.0f - tx) + sd[0][1] * tx;
+  float sd1 = sd[1][0] * (1.0f - tx) + sd[1][1] * tx;
+  float psd_tx = (sd[0][1] - sd[0][0]) * (1.0f - ty) + (sd[1][1] - sd[1][0]) * ty;
+  float psd_ty = sd1 - sd0;
+  result.solid_density_gradient =
+      make_float2(psd_tx * dtx * inv_soil_size, psd_ty * dty * inv_soil_size);
+
+  // saturation + gradient
+  float s0 = sat[0][0] * (1.0f - tx) + sat[0][1] * tx;
+  float s1 = sat[1][0] * (1.0f - tx) + sat[1][1] * tx;
+  result.saturation = s0 * (1.0f - ty) + s1 * ty;
+  float ps_tx = (sat[0][1] - sat[0][0]) * (1.0f - ty) + (sat[1][1] - sat[1][0]) * ty;
+  float ps_ty = s1 - s0;
+  result.saturation_gradient =
+      make_float2(ps_tx * dtx * inv_soil_size, ps_ty * dty * inv_soil_size);
+
+  // capillary strength
+  float c0 = cap[0][0] * (1.0f - tx) + cap[0][1] * tx;
+  float c1 = cap[1][0] * (1.0f - tx) + cap[1][1] * tx;
+  result.capillary_strength = c0 * (1.0f - ty) + c1 * ty;
+
+  return result;
+}
+
 // calculate the density of each particle, with contributions from other particles and soil
 // particles
 __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
                                            int max_particles_per_cell, int2 particle_grid_dims,
                                            float cell_size, float smoothing_radius,
                                            size_t num_particles, float2 bounds, SoilPtrs soil_read,
-                                           int soil_w, int soil_h, float soil_size) {
+                                           int soil_w, int soil_h, float soil_size,
+                                           float target_density) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
@@ -367,7 +493,7 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
   float2 density_from_soil = calculate_soil_density_at_pos_smoothstep(
-      sph.pos[i], soil_read, soil_w, soil_h, soil_size, smoothing_radius);
+      sph.pos[i], soil_read, soil_w, soil_h, soil_size, target_density);
   sph.density[i] = density_from_p.x + density_from_soil.x;
   sph.near_density[i] = density_from_p.y + density_from_soil.y;
 }
@@ -543,20 +669,22 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
     }
   }
 
-  float2 soil_grad = calculate_soil_density_gradient_smoothstep(pos, soil_read, soil_w, soil_h,
-                                                                soil_size, params.smoothing_radius);
-  pressure_force = pressure_force - (total_pressure * soil_grad * 0.5f / density);
+  SoilPropertiesAtPos soil_props = calculate_soil_properties_at_pos(
+      pos, soil_read, soil_w, soil_h, soil_size, params.target_density);
+  pressure_force =
+      pressure_force - (total_pressure * soil_props.solid_density_gradient * 0.5f / density);
+  float2 capillary_force = make_float2(0.0f, 0.0f);
+  if (soil_props.saturation < 1.0f && soil_props.capillary_strength > 0.0f) {
+    float suction =
+        soil_props.capillary_strength * (1.0f - soil_props.saturation) * params.capillary_mult;
+    capillary_force = make_float2(0.0f, 0.0f) - suction * soil_props.saturation_gradient;
+  }
 
-  // apply pressure force
-  // float2 acc = make_float2(0.0f, params.gravity) + pressure_force / density;
-  float2 acc = make_float2(0.0f, params.gravity) +
-               (pressure_force + viscosity_force * params.viscosity_strength) / density;
+  // apply pressure + viscosity + capillary forces
+  float2 acc =
+      make_float2(0.0f, params.gravity) +
+      (pressure_force + viscosity_force * params.viscosity_strength + capillary_force) / density;
 
-  // float vel_mag = length(vel);
-  // // apply sigmoid
-  // vel_mag = 1.0f / (1.0f + expf(-vel_mag));
-
-  // acc = acc - vel * vel_mag;
   int soil_idx = floor(pos.x / soil_size) + floor(pos.y / soil_size) * soil_w;
   acc = acc - vel * get_friction(soil_read, soil_idx);
   sph.vel[pid] = vel + acc * params.dt;
@@ -794,13 +922,19 @@ void update_fluid(ParticleFluidState &state) {
   }
 }
 
-void update_fluid(ParticleFluidState &state, const SoilPtrs &soil_ptrs, int soil_width,
-                  int soil_height, float soil_cell_size) {
+void update_fluid(ParticleFluidState &state, SoilState &soil) {
   auto &profiler = TimingProfiler::get_instance();
   SPHPtrs sph;
   ParticleGridPtrs grid_ptrs;
   sph.get_ptrs(state.particles_device);
   grid_ptrs.get_ptrs(state.grid_device);
+
+  SoilPtrs soil_ptrs;
+  soil_ptrs.get_ptrs(soil.read);
+  int soil_w = soil.width;
+  int soil_h = soil.height;
+  float soil_size = soil.cell_size;
+  size_t soil_cell_count = static_cast<size_t>(soil_w) * soil_h;
 
   size_t num_particles = state.particles_device.pos.size();
   size_t grid_size = state.grid.width * state.grid.height;
@@ -829,22 +963,34 @@ void update_fluid(ParticleFluidState &state, const SoilPtrs &soil_ptrs, int soil
     check_cuda("populate_grid_indices");
   }
 
-  // calculate density of particles, including contributions from soil
+  // calculate soil saturation from nearby particles
+  {
+    auto scope = profiler.scoped_measure("calculate_soil_saturation");
+    dim3 soil_block(256);
+    dim3 soil_grid_dim((soil_cell_count + soil_block.x - 1) / soil_block.x);
+    calculate_soil_saturation<<<soil_grid_dim, soil_block>>>(
+        soil_ptrs, soil_w, soil_h, soil_size, sph, grid_ptrs, state.grid.max_particles_per_cell,
+        grid_dims, cell_size, state.params.smoothing_radius, num_particles, state.bounds,
+        state.params.target_density);
+    check_cuda("calculate_soil_saturation");
+  }
+
+  // calculate density of particles, including solid fraction from soil
   {
     auto scope = profiler.scoped_measure("calculate_particle_density");
     calculate_particle_density<<<sph_grid_dim, sph_block>>>(
         sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size,
-        state.params.smoothing_radius, num_particles, state.bounds, soil_ptrs, soil_width,
-        soil_height, soil_cell_size);
+        state.params.smoothing_radius, num_particles, state.bounds, soil_ptrs, soil_w, soil_h,
+        soil_size, state.params.target_density);
     check_cuda("calculate_particle_density");
   }
 
-  // calculate acceleration with soil
+  // calculate acceleration with soil + capillary
   {
     auto scope = profiler.scoped_measure("calculate_accel");
     calculate_accel<<<sph_grid_dim, sph_block>>>(
         sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size, state.params,
-        num_particles, state.bounds, soil_ptrs, soil_width, soil_height, soil_cell_size);
+        num_particles, state.bounds, soil_ptrs, soil_w, soil_h, soil_size);
     check_cuda("calculate_accel");
   }
 

@@ -80,8 +80,7 @@ void init_fluid(ParticleFluidState &state, float width, float height, const SimP
 void init_fluid(ParticleFluidState &state, float width, float height);
 void init_fluid_grid(ParticleFluidState &state);
 void update_fluid(ParticleFluidState &state);
-void update_fluid(ParticleFluidState &state, const SoilPtrs &soil_ptrs, int soil_width,
-                  int soil_height, float soil_cell_size);
+void update_fluid(ParticleFluidState &state, SoilState &soil);
 void attract_fluid(ParticleFluidState &state, float2 pos, float max_thrust, float radius);
 void calculate_fluid_density_grid(ParticleFluidState &state,
                                   thrust::device_vector<unsigned char> &texture_data, int width,

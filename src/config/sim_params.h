@@ -29,6 +29,8 @@
   X(world_height, float, 16.0f, "world.height", "world-height", "World height in meters")          \
   X(soil_cell_size, float, 0.1f, "world.soil_cell_size", "soil-cell-size",                         \
     "Soil grid cell size in meters")                                                               \
+  X(capillary_mult, float, 1.0f, "fluid.capillary_mult", "capillary-mult",                         \
+    "Global multiplier for capillary suction force")                                               \
   X(seed, int64_t, 0, "world.seed", "seed", "RNG seed (0 = random)")
 
 struct SimParams {

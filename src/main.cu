@@ -156,6 +156,7 @@ int main(int argc, char *argv[]) {
   {
     CLI::App pre_app{"ALife CUDA"};
     pre_app.allow_extras();
+    pre_app.set_help_flag(); // disable --help in pre-parse; let pass 2 handle it
     pre_app.add_option("--config", config_file, "Path to TOML config file");
     pre_app.add_flag("--write-config", write_config, "Write default config file and exit");
     pre_app.parse(argc, argv);
@@ -209,7 +210,7 @@ int main(int argc, char *argv[]) {
     int step = 0;
     while (!g_stop_requested.load(std::memory_order_relaxed)) {
       update_soil_cuda(soil, sim_params.dt);
-      p2::update_fluid(fluid, get_soil_read_ptrs(soil), soil.width, soil.height, soil.cell_size);
+      p2::update_fluid(fluid, soil);
       step++;
       if (iterations > 0 && step >= iterations)
         break;
