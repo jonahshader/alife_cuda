@@ -49,8 +49,10 @@ struct SoilState {
 };
 
 // Free functions for simulation logic
-void init_soil(SoilState &state, uint width, uint height, float cell_size, uint64_t seed);
+void init_soil(SoilState &state, uint width, uint height, float cell_size, uint64_t seed,
+               int terrain_mode = 0);
 void reset_soil(SoilState &state, uint64_t seed);
+void reset_soil_capillary_test(SoilState &state);
 void update_soil_cpu(SoilState &state, float dt);
 void update_soil_cuda(SoilState &state, float dt);
 SoilPtrs get_soil_read_ptrs(SoilState &state);

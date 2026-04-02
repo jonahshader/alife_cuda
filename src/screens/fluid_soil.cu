@@ -16,7 +16,7 @@ FluidSoil::FluidSoil(Game &game, const SimParams &params)
   auto resolved_seed = sim_params.resolve_seed();
   init_soil(soil, (unsigned int)std::round(bounds.x / sim_params.soil_cell_size),
             (unsigned int)std::round(bounds.y / sim_params.soil_cell_size),
-            sim_params.soil_cell_size, resolved_seed);
+            sim_params.soil_cell_size, resolved_seed, sim_params.terrain_mode);
   p2::init_fluid(fluid, bounds.x, bounds.y, sim_params);
 }
 

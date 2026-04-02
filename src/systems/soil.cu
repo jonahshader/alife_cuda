@@ -35,11 +35,19 @@ __host__ __device__ float get_friction(SoilPtrs soil, size_t i) {
          soil.clay_density[i] * CLAY_FRICTION;
 }
 
-void init_soil(SoilState &state, uint width, uint height, float cell_size, uint64_t seed) {
+void init_soil(SoilState &state, uint width, uint height, float cell_size, uint64_t seed,
+               int terrain_mode) {
   state.width = width;
   state.height = height;
   state.cell_size = cell_size;
-  reset_soil(state, seed);
+  switch (terrain_mode) {
+    case 1:
+      reset_soil_capillary_test(state);
+      break;
+    default:
+      reset_soil(state, seed);
+      break;
+  }
 }
 
 // __global__ void init_rng(curandState *states, unsigned long seed, size_t num_particles) {
@@ -139,6 +147,74 @@ void reset_soil(SoilState &state, uint64_t seed) {
       float sand = soil.sand_density[id];
       float silt = soil.silt_density[id];
       float clay = soil.clay_density[id];
+    }
+  }
+
+  copy(state.read, soil);
+  copy(state.write, soil);
+}
+
+// Test terrain for capillary/soil interaction.
+// Left half: three pure columns (sand | silt | clay), tall.
+// Right half: three gradient columns (sand→silt | silt→clay | sand→clay).
+void reset_soil_capillary_test(SoilState &state) {
+  SoilSoA<HostBuffer> soil{};
+  resize_all(soil, state.width * state.height);
+
+  uint terrain_h = state.height;
+  uint gap = state.width / 60;
+  uint half_w = state.width / 2;
+
+  // -- Left half: three pure columns --
+  uint pure_col_w = (half_w - 2 * gap) / 3;
+  uint pure_x[3][2] = {
+      {0, pure_col_w},
+      {pure_col_w + gap, 2 * pure_col_w + gap},
+      {2 * pure_col_w + 2 * gap, half_w},
+  };
+
+  for (uint y = 0; y < terrain_h; ++y) {
+    for (uint x = pure_x[0][0]; x < pure_x[0][1]; ++x) {
+      soil.sand_density[x + y * state.width] = 1.0f;
+    }
+    for (uint x = pure_x[1][0]; x < pure_x[1][1]; ++x) {
+      soil.silt_density[x + y * state.width] = 1.0f;
+    }
+    for (uint x = pure_x[2][0]; x < pure_x[2][1]; ++x) {
+      soil.clay_density[x + y * state.width] = 1.0f;
+    }
+  }
+
+  // -- Right half: three gradient columns --
+  uint grad_x0 = half_w + gap;
+  uint grad_col_w = (state.width - grad_x0 - 2 * gap) / 3;
+  uint grad_x[3][2] = {
+      {grad_x0, grad_x0 + grad_col_w},
+      {grad_x0 + grad_col_w + gap, grad_x0 + 2 * grad_col_w + gap},
+      {grad_x0 + 2 * grad_col_w + 2 * gap, state.width},
+  };
+
+  for (uint y = 0; y < terrain_h; ++y) {
+    // sand → silt gradient
+    for (uint x = grad_x[0][0]; x < grad_x[0][1]; ++x) {
+      float t = static_cast<float>(x - grad_x[0][0]) / (grad_x[0][1] - grad_x[0][0]);
+      auto id = x + y * state.width;
+      soil.sand_density[id] = 1.0f - t;
+      soil.silt_density[id] = t;
+    }
+    // silt → clay gradient
+    for (uint x = grad_x[1][0]; x < grad_x[1][1]; ++x) {
+      float t = static_cast<float>(x - grad_x[1][0]) / (grad_x[1][1] - grad_x[1][0]);
+      auto id = x + y * state.width;
+      soil.silt_density[id] = 1.0f - t;
+      soil.clay_density[id] = t;
+    }
+    // sand → clay gradient
+    for (uint x = grad_x[2][0]; x < grad_x[2][1]; ++x) {
+      float t = static_cast<float>(x - grad_x[2][0]) / (grad_x[2][1] - grad_x[2][0]);
+      auto id = x + y * state.width;
+      soil.sand_density[id] = 1.0f - t;
+      soil.clay_density[id] = t;
     }
   }
 

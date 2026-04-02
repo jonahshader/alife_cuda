@@ -205,7 +205,7 @@ int main(int argc, char *argv[]) {
     SoilState soil{};
     init_soil(soil, (unsigned int)std::round(sim_params.world_width / sim_params.soil_cell_size),
               (unsigned int)std::round(sim_params.world_height / sim_params.soil_cell_size),
-              sim_params.soil_cell_size, resolved_seed);
+              sim_params.soil_cell_size, resolved_seed, sim_params.terrain_mode);
 
     int step = 0;
     while (!g_stop_requested.load(std::memory_order_relaxed)) {

@@ -31,6 +31,8 @@
     "Soil grid cell size in meters")                                                               \
   X(capillary_mult, float, 1.0f, "fluid.capillary_mult", "capillary-mult",                         \
     "Global multiplier for capillary suction force")                                               \
+  X(terrain_mode, int, 0, "world.terrain_mode", "terrain-mode",                                    \
+    "Terrain mode (0=normal, 1=capillary test)")                                                   \
   X(seed, int64_t, 0, "world.seed", "seed", "RNG seed (0 = random)")
 
 struct SimParams {

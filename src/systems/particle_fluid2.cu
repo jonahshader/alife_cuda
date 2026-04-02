@@ -369,7 +369,7 @@ __global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h,
     return;
   }
 
-  // cell center in world space
+  // soil cell grid coordinates
   int sx = soil_idx % soil_w;
   int sy = soil_idx / soil_w;
   float2 pos = make_float2((sx + 0.5f) * soil_size, (sy + 0.5f) * soil_size);
@@ -379,6 +379,7 @@ __global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h,
   int pcy = static_cast<int>(pos.y / cell_size);
 
   float water_density = 0.0f;
+  float inv_cell_area = 1.0f / (soil_size * soil_size);
 
   int xi_neg_dist = pcx == 0 ? 2 : 1;
   int xi_pos_dist = pcx >= particle_grid_dims.x - 2 ? 2 : 1;
@@ -397,8 +398,11 @@ __global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h,
           ppos.x -= bounds.x;
         else if (xi >= particle_grid_dims.x)
           ppos.x += bounds.x;
-        float dist = length(pos - ppos);
-        water_density += sph.mass[pid] * density_kernel(smoothing_radius, dist);
+        // bilinear weight: how much of this particle belongs to this soil cell
+        float wx = 1.0f - fabsf(ppos.x / soil_size - 0.5f - sx);
+        float wy = 1.0f - fabsf(ppos.y / soil_size - 0.5f - sy);
+        float weight = fmaxf(0.0f, wx) * fmaxf(0.0f, wy);
+        water_density += sph.mass[pid] * weight * inv_cell_area;
       }
     }
   }
@@ -407,14 +411,13 @@ __global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h,
 }
 
 struct SoilPropertiesAtPos {
+  float solid_density;
   float2 solid_density_gradient;
-  float saturation;
-  float2 saturation_gradient;
   float capillary_strength;
+  float pore_capacity;
 };
 
-// combined smoothstep bilinear lookup for all soil properties needed per particle:
-// solid density gradient, saturation + gradient, capillary strength
+// smoothstep bilinear lookup for static soil properties at a particle position
 __host__ __device__ SoilPropertiesAtPos calculate_soil_properties_at_pos(float2 pos, SoilPtrs soil,
                                                                          int w, int h,
                                                                          float soil_size,
@@ -435,13 +438,13 @@ __host__ __device__ SoilPropertiesAtPos calculate_soil_properties_at_pos(float2 
   y[0] = max(0, min(h - 1, y0));
   y[1] = max(0, min(h - 1, y0 + 1));
 
-  float sd[2][2], sat[2][2], cap[2][2];
+  float sd[2][2], cap[2][2], pc[2][2];
   for (int j = 0; j < 2; j++) {
     for (int i = 0; i < 2; i++) {
       int idx = y[j] * w + x[i];
       sd[j][i] = get_solid_density(soil, idx, target_density);
-      sat[j][i] = soil.saturation[idx];
       cap[j][i] = get_capillary_strength(soil, idx);
+      pc[j][i] = get_pore_capacity(soil, idx, target_density);
     }
   }
 
@@ -453,27 +456,24 @@ __host__ __device__ SoilPropertiesAtPos calculate_soil_properties_at_pos(float2 
 
   SoilPropertiesAtPos result;
 
-  // solid density gradient
+  // solid density value + gradient
   float sd0 = sd[0][0] * (1.0f - tx) + sd[0][1] * tx;
   float sd1 = sd[1][0] * (1.0f - tx) + sd[1][1] * tx;
+  result.solid_density = sd0 * (1.0f - ty) + sd1 * ty;
   float psd_tx = (sd[0][1] - sd[0][0]) * (1.0f - ty) + (sd[1][1] - sd[1][0]) * ty;
   float psd_ty = sd1 - sd0;
   result.solid_density_gradient =
       make_float2(psd_tx * dtx * inv_soil_size, psd_ty * dty * inv_soil_size);
 
-  // saturation + gradient
-  float s0 = sat[0][0] * (1.0f - tx) + sat[0][1] * tx;
-  float s1 = sat[1][0] * (1.0f - tx) + sat[1][1] * tx;
-  result.saturation = s0 * (1.0f - ty) + s1 * ty;
-  float ps_tx = (sat[0][1] - sat[0][0]) * (1.0f - ty) + (sat[1][1] - sat[1][0]) * ty;
-  float ps_ty = s1 - s0;
-  result.saturation_gradient =
-      make_float2(ps_tx * dtx * inv_soil_size, ps_ty * dty * inv_soil_size);
-
   // capillary strength
   float c0 = cap[0][0] * (1.0f - tx) + cap[0][1] * tx;
   float c1 = cap[1][0] * (1.0f - tx) + cap[1][1] * tx;
   result.capillary_strength = c0 * (1.0f - ty) + c1 * ty;
+
+  // pore capacity
+  float p0 = pc[0][0] * (1.0f - tx) + pc[0][1] * tx;
+  float p1 = pc[1][0] * (1.0f - tx) + pc[1][1] * tx;
+  result.pore_capacity = p0 * (1.0f - ty) + p1 * ty;
 
   return result;
 }
@@ -618,7 +618,19 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   int cell_x = grid_index % particle_grid_dims.x;
   int cell_y = grid_index / particle_grid_dims.x;
 
-  float pressure = calculate_pressure(density, params);
+  // capillary action: modify effective target density based on local saturation.
+  // In unsaturated soil, raise the target so pressure becomes negative (suction),
+  // which draws water in via SPH pressure gradients. No grid feedback loop.
+  SoilPropertiesAtPos soil_props = calculate_soil_properties_at_pos(
+      pos, soil_read, soil_w, soil_h, soil_size, params.target_density);
+  float local_water_density = density - soil_props.solid_density;
+  float local_sat =
+      soil_props.pore_capacity > 1e-6f ? local_water_density / soil_props.pore_capacity : 1.0f;
+  float capillary_bonus =
+      soil_props.capillary_strength * fmaxf(0.0f, 1.0f - local_sat) * params.capillary_mult;
+  float effective_target = params.target_density + capillary_bonus;
+
+  float pressure = params.pressure_mult * (density - effective_target);
   float near_pressure = calculate_near_pressure(near_density, params);
   float total_pressure = pressure + near_pressure;
   float2 pressure_force = make_float2(0.0f, 0.0f);
@@ -669,21 +681,11 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
     }
   }
 
-  SoilPropertiesAtPos soil_props = calculate_soil_properties_at_pos(
-      pos, soil_read, soil_w, soil_h, soil_size, params.target_density);
   pressure_force =
       pressure_force - (total_pressure * soil_props.solid_density_gradient * 0.5f / density);
-  float2 capillary_force = make_float2(0.0f, 0.0f);
-  if (soil_props.saturation < 1.0f && soil_props.capillary_strength > 0.0f) {
-    float suction =
-        soil_props.capillary_strength * (1.0f - soil_props.saturation) * params.capillary_mult;
-    capillary_force = make_float2(0.0f, 0.0f) - suction * soil_props.saturation_gradient;
-  }
 
-  // apply pressure + viscosity + capillary forces
-  float2 acc =
-      make_float2(0.0f, params.gravity) +
-      (pressure_force + viscosity_force * params.viscosity_strength + capillary_force) / density;
+  float2 acc = make_float2(0.0f, params.gravity) +
+               (pressure_force + viscosity_force * params.viscosity_strength) / density;
 
   int soil_idx = floor(pos.x / soil_size) + floor(pos.y / soil_size) * soil_w;
   acc = acc - vel * get_friction(soil_read, soil_idx);
@@ -783,7 +785,7 @@ static void init_fluid_particles(ParticleFluidState &state) {
   // init some particles
   std::default_random_engine rand(state.params.resolve_seed());
   std::uniform_real_distribution<float> dist_x(0.0f, state.bounds.x);
-  std::uniform_real_distribution<float> dist_y(state.bounds.y / 2, state.bounds.y);
+  std::uniform_real_distribution<float> dist_y(0.0f, state.bounds.y / 2);
 
   // velocity init with gaussian
   std::normal_distribution<float> dist_vel(0.0f, 0.001f);
@@ -934,7 +936,6 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
   int soil_w = soil.width;
   int soil_h = soil.height;
   float soil_size = soil.cell_size;
-  size_t soil_cell_count = static_cast<size_t>(soil_w) * soil_h;
 
   size_t num_particles = state.particles_device.pos.size();
   size_t grid_size = state.grid.width * state.grid.height;
@@ -961,18 +962,6 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
                                                        state.grid.max_particles_per_cell, grid_dims,
                                                        state.params.smoothing_radius);
     check_cuda("populate_grid_indices");
-  }
-
-  // calculate soil saturation from nearby particles
-  {
-    auto scope = profiler.scoped_measure("calculate_soil_saturation");
-    dim3 soil_block(256);
-    dim3 soil_grid_dim((soil_cell_count + soil_block.x - 1) / soil_block.x);
-    calculate_soil_saturation<<<soil_grid_dim, soil_block>>>(
-        soil_ptrs, soil_w, soil_h, soil_size, sph, grid_ptrs, state.grid.max_particles_per_cell,
-        grid_dims, cell_size, state.params.smoothing_radius, num_particles, state.bounds,
-        state.params.target_density);
-    check_cuda("calculate_soil_saturation");
   }
 
   // calculate density of particles, including solid fraction from soil
