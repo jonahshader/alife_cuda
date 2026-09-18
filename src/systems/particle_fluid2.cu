@@ -4,6 +4,9 @@
 #include "systems/cuda_utils.cuh"
 #include "systems/timing_profiler.cuh"
 
+#include <Random123/threefry.h>
+#include <Random123/uniform.hpp>
+
 #include <cmath>
 #include <random>
 
@@ -32,6 +35,8 @@ __global__ void populate_grid_indices(SPHPtrs sph, ParticleGridPtrs grid, int ma
                                       float cell_size) {
   int i = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (i >= max_particles)
+    return;
+  if (sph.state[i] != 0)
     return;
 
   int grid_index = particle_to_cid(sph.pos[i], p_grid_dims.x, cell_size);
@@ -489,6 +494,8 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
+  if (sph.state[i] != 0)
+    return;
   float2 density_from_p =
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
                                cell_size, smoothing_radius, bounds);
@@ -505,6 +512,8 @@ __global__ void calculate_particle_density(SPHPtrs sph, ParticleGridPtrs grid,
                                            size_t num_particles, float2 bounds) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
+    return;
+  if (sph.state[i] != 0)
     return;
   float2 density_from_p =
       calculate_density_at_pos(sph.pos[i], sph, grid, max_particles_per_cell, particle_grid_dims,
@@ -532,6 +541,8 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
                                 size_t particle_count, float2 bounds) {
   size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (pid >= particle_count)
+    return;
+  if (sph.state[pid] != 0)
     return;
 
   auto pos = sph.pos[pid];
@@ -608,6 +619,8 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
                                 int soil_w, int soil_h, float soil_size) {
   size_t pid = blockIdx.x * blockDim.x + threadIdx.x; // particle id
   if (pid >= particle_count)
+    return;
+  if (sph.state[pid] != 0)
     return;
 
   auto pos = sph.pos[pid];
@@ -834,6 +847,8 @@ __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t n
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
+  if (sph.state[i] != 0)
+    return;
 
   auto vel = sph.vel[i];
   // use previous position to calculate new position
@@ -863,6 +878,194 @@ __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t n
 
   sph.ppos[i] = new_pos;
   sph.pos[i] = new_pos2;
+}
+
+// compute vertical density gradient per liquid particle → evap_prob (raw surface signal)
+__global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
+                                    int2 particle_grid_dims, float cell_size, float smoothing_radius,
+                                    size_t num_particles, float2 bounds) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+  if (sph.state[i] != 0) {
+    sph.evap_prob[i] = 0.0f;
+    return;
+  }
+
+  float2 pos = sph.pos[i];
+  int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
+  int cell_x = grid_index % particle_grid_dims.x;
+  int cell_y = grid_index / particle_grid_dims.x;
+
+  // sum m_j * density_kernel_gradient().y over neighbors
+  float drho_dy = 0.0f;
+
+  int xi_neg_dist = cell_x == 0 ? 2 : 1;
+  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
+
+  for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
+    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+      if (yi < 0 || yi >= particle_grid_dims.y)
+        continue;
+      int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
+      int ni = yi * particle_grid_dims.x + wrapped_x;
+      int np = min(grid.particles_per_cell[ni], max_particles_per_cell);
+      for (int j = 0; j < np; j++) {
+        int pid = grid.grid_indices[ni * max_particles_per_cell + j];
+        float2 other_pos = sph.pos[pid];
+        if (xi < 0)
+          other_pos.x -= bounds.x;
+        else if (xi >= particle_grid_dims.x)
+          other_pos.x += bounds.x;
+        float2 grad = density_kernel_gradient(smoothing_radius, pos - other_pos);
+        drho_dy += sph.mass[pid] * grad.y;
+      }
+    }
+  }
+
+  // Surface particles have neighbors below → grad.y < 0 → drho_dy < 0
+  // Negate so surface gets positive probability.
+  // Store raw surface signal (no evap_rate) — evap_rate * dt applied in evaporate kernel.
+  float normalized_grad = -drho_dy / fmaxf(sph.density[i], 1e-6f);
+  sph.evap_prob[i] = fmaxf(0.0f, normalized_grad);
+}
+
+// soil-aware overload: suppress evaporation where solid density is significant
+__global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
+                                    int2 particle_grid_dims, float cell_size, float smoothing_radius,
+                                    size_t num_particles, float2 bounds, SoilPtrs soil, int soil_w,
+                                    int soil_h, float soil_size, float target_density) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+  if (sph.state[i] != 0) {
+    sph.evap_prob[i] = 0.0f;
+    return;
+  }
+
+  float2 pos = sph.pos[i];
+
+  // suppress evaporation inside soil — check total soil material (sand+silt+clay)
+  // which is 1.0 in soil cells and 0.0 in air, with smooth bilinear transition at surface
+  float half_soil_size = soil_size * 0.5f;
+  float fx = (pos.x - half_soil_size) / soil_size;
+  float fy = (pos.y - half_soil_size) / soil_size;
+  int x0 = floorf(fx);
+  int y0 = floorf(fy);
+  float dx = fx - x0;
+  float dy = fy - y0;
+  int sx[2] = {((x0 % soil_w) + soil_w) % soil_w, (((x0 + 1) % soil_w) + soil_w) % soil_w};
+  int sy[2] = {max(0, min(soil_h - 1, y0)), max(0, min(soil_h - 1, y0 + 1))};
+  float tx = smoothstep01(dx);
+  float ty = smoothstep01(dy);
+  float soil_presence = 0.0f;
+  for (int j = 0; j < 2; j++) {
+    for (int i = 0; i < 2; i++) {
+      int idx = sy[j] * soil_w + sx[i];
+      float s = soil.sand_density[idx] + soil.silt_density[idx] + soil.clay_density[idx];
+      float wx = (i == 0) ? (1.0f - tx) : tx;
+      float wy = (j == 0) ? (1.0f - ty) : ty;
+      soil_presence += s * wx * wy;
+    }
+  }
+  float soil_factor = 1.0f - soil_presence;
+
+  int grid_index = particle_to_cid(pos, particle_grid_dims.x, cell_size);
+  int cell_x = grid_index % particle_grid_dims.x;
+  int cell_y = grid_index / particle_grid_dims.x;
+
+  float drho_dy = 0.0f;
+
+  int xi_neg_dist = cell_x == 0 ? 2 : 1;
+  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
+
+  for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
+    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+      if (yi < 0 || yi >= particle_grid_dims.y)
+        continue;
+      int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
+      int ni = yi * particle_grid_dims.x + wrapped_x;
+      int np = min(grid.particles_per_cell[ni], max_particles_per_cell);
+      for (int j = 0; j < np; j++) {
+        int pid = grid.grid_indices[ni * max_particles_per_cell + j];
+        float2 other_pos = sph.pos[pid];
+        if (xi < 0)
+          other_pos.x -= bounds.x;
+        else if (xi >= particle_grid_dims.x)
+          other_pos.x += bounds.x;
+        float2 grad = density_kernel_gradient(smoothing_radius, pos - other_pos);
+        drho_dy += sph.mass[pid] * grad.y;
+      }
+    }
+  }
+
+  float normalized_grad = -drho_dy / fmaxf(sph.density[i], 1e-6f);
+  sph.evap_prob[i] = fmaxf(0.0f, normalized_grad) * soil_factor;
+}
+
+// flip qualifying liquid particles to vapor state
+__global__ void evaporate_particles(SPHPtrs sph, size_t num_particles, float evap_rate, float dt,
+                                    rng_ctr_t ctr) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+  if (sph.state[i] != 0)
+    return;
+
+  float prob = sph.evap_prob[i] * evap_rate * dt;
+  if (prob <= 0.0f)
+    return;
+
+  RNG rng;
+  rng_key_t key = {{(uint32_t)i, 1u, 0u, 0u}};
+  auto result = rng(ctr, key);
+  float roll = r123::u01<float>(result[0]);
+
+  if (roll < prob) {
+    sph.state[i] = 1;
+    sph.vel[i] = make_float2(0.0f, 0.5f);
+  }
+}
+
+// simple vapor physics: buoyancy, drift, condensation
+__global__ void move_vapor_particles(SPHPtrs sph, float dt, size_t num_particles, float2 bounds,
+                                     float buoyancy, float drift_strength, float condense_rate,
+                                     float condense_altitude_power, rng_ctr_t ctr) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= num_particles)
+    return;
+  if (sph.state[i] != 1)
+    return;
+
+  RNG rng;
+  rng_key_t key = {{(uint32_t)i, 2u, 0u, 0u}};
+  auto result = rng(ctr, key);
+  float drift_x = (r123::u01<float>(result[0]) - 0.5f) * 2.0f * drift_strength;
+  float condense_roll = r123::u01<float>(result[1]);
+
+  float2 vel = sph.vel[i];
+  vel.y += buoyancy * dt;
+  vel.x += drift_x * dt;
+  vel = vel * powf(0.99f, dt * 600.0f);
+
+  float2 new_pos = sph.ppos[i] + vel * dt;
+  new_pos.x = fmodf(new_pos.x + bounds.x, bounds.x);
+  new_pos.y = fmaxf(0.0f, fminf(bounds.y, new_pos.y));
+
+  // condensation: probability increases with altitude
+  float normalized_alt = new_pos.y / bounds.y;
+  float condense_prob = powf(normalized_alt, condense_altitude_power) * condense_rate * dt;
+
+  if (condense_roll < condense_prob) {
+    sph.state[i] = 0;
+    sph.vel[i] = make_float2(vel.x * 0.1f, -0.5f);
+    sph.evap_prob[i] = 0.0f;
+  } else {
+    sph.vel[i] = vel;
+  }
+
+  sph.ppos[i] = new_pos;
+  sph.pos[i] = new_pos + vel * dt;
 }
 
 void update_fluid(ParticleFluidState &state) {
@@ -908,6 +1111,14 @@ void update_fluid(ParticleFluidState &state) {
   }
 
   {
+    auto scope = profiler.scoped_measure("calculate_evap_prob");
+    calculate_evap_prob<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size,
+        state.params.smoothing_radius, num_particles, state.bounds);
+    check_cuda("calculate_evap_prob");
+  }
+
+  {
     auto scope = profiler.scoped_measure("calculate_accel");
     calculate_accel<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, state.grid.max_particles_per_cell,
                                                  grid_dims, cell_size, state.params, num_particles,
@@ -916,11 +1127,29 @@ void update_fluid(ParticleFluidState &state) {
   }
 
   {
+    auto scope = profiler.scoped_measure("evaporate_particles");
+    evaporate_particles<<<sph_grid_dim, sph_block>>>(sph, num_particles, state.params.evap_rate,
+                                                     state.params.dt, state.rng_counter);
+    check_cuda("evaporate_particles");
+    state.rng_counter.incr();
+  }
+
+  {
     auto scope = profiler.scoped_measure("move_particles");
     move_particles<<<sph_grid_dim, sph_block>>>(sph, state.params.dt, state.params.dt_predict,
                                                 num_particles, state.bounds,
                                                 state.params.collision_damping);
     check_cuda("move_particles");
+  }
+
+  {
+    auto scope = profiler.scoped_measure("move_vapor_particles");
+    move_vapor_particles<<<sph_grid_dim, sph_block>>>(
+        sph, state.params.dt, num_particles, state.bounds, state.params.vapor_buoyancy,
+        state.params.vapor_drift, state.params.condense_rate,
+        state.params.condense_altitude_power, state.rng_counter);
+    check_cuda("move_vapor_particles");
+    state.rng_counter.incr();
   }
 }
 
@@ -974,6 +1203,16 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
     check_cuda("calculate_particle_density");
   }
 
+  // evaporation probability from vertical density gradient (soil-aware)
+  {
+    auto scope = profiler.scoped_measure("calculate_evap_prob");
+    calculate_evap_prob<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, state.grid.max_particles_per_cell, grid_dims, cell_size,
+        state.params.smoothing_radius, num_particles, state.bounds, soil_ptrs, soil_w, soil_h,
+        soil_size, state.params.target_density);
+    check_cuda("calculate_evap_prob");
+  }
+
   // calculate acceleration with soil + capillary
   {
     auto scope = profiler.scoped_measure("calculate_accel");
@@ -983,13 +1222,33 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
     check_cuda("calculate_accel");
   }
 
-  // move particles
+  // evaporate surface particles
+  {
+    auto scope = profiler.scoped_measure("evaporate_particles");
+    evaporate_particles<<<sph_grid_dim, sph_block>>>(sph, num_particles, state.params.evap_rate,
+                                                     state.params.dt, state.rng_counter);
+    check_cuda("evaporate_particles");
+    state.rng_counter.incr();
+  }
+
+  // move liquid particles
   {
     auto scope = profiler.scoped_measure("move_particles");
     move_particles<<<sph_grid_dim, sph_block>>>(sph, state.params.dt, state.params.dt_predict,
                                                 num_particles, state.bounds,
                                                 state.params.collision_damping);
     check_cuda("move_particles");
+  }
+
+  // move vapor particles (buoyancy + drift + condensation)
+  {
+    auto scope = profiler.scoped_measure("move_vapor_particles");
+    move_vapor_particles<<<sph_grid_dim, sph_block>>>(
+        sph, state.params.dt, num_particles, state.bounds, state.params.vapor_buoyancy,
+        state.params.vapor_drift, state.params.condense_rate,
+        state.params.condense_altitude_power, state.rng_counter);
+    check_cuda("move_vapor_particles");
+    state.rng_counter.incr();
   }
 }
 

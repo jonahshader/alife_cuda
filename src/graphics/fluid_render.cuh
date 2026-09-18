@@ -8,7 +8,7 @@
 namespace p2 {
 
 void render_fluid(const ParticleFluidState &state, CircleRenderer &renderer,
-                  const glm::mat4 &transform);
+                  const glm::mat4 &transform, bool debug_evap = false);
 
 // ImGui parameter panel — mutates state.params via sliders
 void render_fluid_imgui(ParticleFluidState &state);

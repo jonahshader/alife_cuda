@@ -188,6 +188,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tomlplusplus)
 
+# Random123 (header-only counter-based RNG)
+FetchContent_Declare(
+  random123
+  GIT_REPOSITORY https://github.com/DEShawResearch/random123.git
+  GIT_TAG v1.14.0
+)
+FetchContent_MakeAvailable(random123)
+add_library(random123_headers INTERFACE)
+target_include_directories(random123_headers INTERFACE ${random123_SOURCE_DIR}/include)
+
 # Find OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -268,6 +278,7 @@ target_link_libraries(alife_cuda PRIVATE
         imgui
         CLI11::CLI11
         tomlplusplus::tomlplusplus
+        random123_headers
 )
 
 # Include headers

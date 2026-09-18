@@ -42,4 +42,5 @@ private:
   float grab_strength{0.15f};
   ProfilerGui profiler_gui{};
   bool show_density_grid{true};
+  bool debug_evap{false};
 };

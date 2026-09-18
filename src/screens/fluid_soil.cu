@@ -100,6 +100,7 @@ void FluidSoil::render() {
 
   ImGui::Begin("Particle Fluid");
   ImGui::Checkbox("Show Density Grid", &show_density_grid);
+  ImGui::Checkbox("Debug Evap Colors", &debug_evap);
   ImGui::End();
   p2::render_fluid_imgui(fluid);
 
@@ -149,7 +150,7 @@ void FluidSoil::render() {
 
   {
     auto scope = profiler.scoped_measure("fluid.render");
-    p2::render_fluid(fluid, circle_renderer, vp.get_transform());
+    p2::render_fluid(fluid, circle_renderer, vp.get_transform(), debug_evap);
     check_cuda("fluid.render");
   }
 

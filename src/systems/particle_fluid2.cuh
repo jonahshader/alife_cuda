@@ -6,6 +6,8 @@
 
 #include <glm/glm.hpp>
 
+#include <Random123/threefry.h>
+
 #include <cstdint>
 #include <vector>
 
@@ -20,9 +22,16 @@
   D(float, mass, 1)                                                                                \
   D(float, density, 0)                                                                             \
   D(float, near_density, 0)                                                                        \
-  D(uint8_t, sym_break, 0)
+  D(uint8_t, sym_break, 0)                                                                \
+  D(uint8_t, state, 0)                                                                    \
+  D(float, evap_prob, 0)
 
 namespace p2 {
+
+using RNG = r123::Threefry4x32;
+using rng_ctr_t = RNG::ctr_type;
+using rng_key_t = RNG::key_type;
+
 DEFINE_STRUCTS(SPH, FOR_SPH)
 
 template <template <typename> class Buffer>
@@ -73,6 +82,7 @@ struct ParticleFluidState {
   SPHSoA<DeviceBuffer> particles_device{};
   ParticleGrid<HostBuffer> grid{};
   ParticleGrid<DeviceBuffer> grid_device{};
+  rng_ctr_t rng_counter{{}};
 };
 
 // Free functions for simulation logic
