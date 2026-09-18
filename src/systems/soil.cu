@@ -154,18 +154,20 @@ void reset_soil(SoilState &state, uint64_t seed) {
   copy(state.write, soil);
 }
 
-// Test terrain for capillary/soil interaction.
-// Left half: three pure columns (sand | silt | clay), tall.
-// Right half: three gradient columns (sand→silt | silt→clay | sand→clay).
+// Capillary tube test: shared water pool at the bottom, separate soil columns above.
+// Bottom 20%: empty (no soil) — water pool.
+// Above 20%: soil columns with air gaps between them.
+// Left half: pure sand | silt | clay. Right half: gradients.
 void reset_soil_capillary_test(SoilState &state) {
   SoilSoA<HostBuffer> soil{};
   resize_all(soil, state.width * state.height);
 
+  uint pool_h = state.height * 0.2f; // bottom 20% is open water pool
   uint terrain_h = state.height;
-  uint gap = state.width / 60;
+  uint gap = state.width / 40;
   uint half_w = state.width / 2;
 
-  // -- Left half: three pure columns --
+  // -- Left half: three pure columns with gaps --
   uint pure_col_w = (half_w - 2 * gap) / 3;
   uint pure_x[3][2] = {
       {0, pure_col_w},
@@ -173,7 +175,7 @@ void reset_soil_capillary_test(SoilState &state) {
       {2 * pure_col_w + 2 * gap, half_w},
   };
 
-  for (uint y = 0; y < terrain_h; ++y) {
+  for (uint y = pool_h; y < terrain_h; ++y) {
     for (uint x = pure_x[0][0]; x < pure_x[0][1]; ++x) {
       soil.sand_density[x + y * state.width] = 1.0f;
     }
@@ -185,7 +187,7 @@ void reset_soil_capillary_test(SoilState &state) {
     }
   }
 
-  // -- Right half: three gradient columns --
+  // -- Right half: three gradient columns with gaps --
   uint grad_x0 = half_w + gap;
   uint grad_col_w = (state.width - grad_x0 - 2 * gap) / 3;
   uint grad_x[3][2] = {
@@ -194,7 +196,7 @@ void reset_soil_capillary_test(SoilState &state) {
       {grad_x0 + 2 * grad_col_w + 2 * gap, state.width},
   };
 
-  for (uint y = 0; y < terrain_h; ++y) {
+  for (uint y = pool_h; y < terrain_h; ++y) {
     // sand → silt gradient
     for (uint x = grad_x[0][0]; x < grad_x[0][1]; ++x) {
       float t = static_cast<float>(x - grad_x[0][0]) / (grad_x[0][1] - grad_x[0][0]);

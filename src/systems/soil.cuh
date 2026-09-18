@@ -18,9 +18,9 @@ constexpr float SILT_POROSITY = 0.45f;
 constexpr float CLAY_POROSITY = 0.50f;
 
 // Capillary strength: suction pressure in SPH units (clay >> silt >> sand)
-constexpr float SAND_CAPILLARY = 20.0f;
-constexpr float SILT_CAPILLARY = 120.0f;
-constexpr float CLAY_CAPILLARY = 400.0f;
+constexpr float SAND_CAPILLARY = 5.0f;
+constexpr float SILT_CAPILLARY = 100.0f;
+constexpr float CLAY_CAPILLARY = 8000.0f;
 
 constexpr float SAND_FRICTION = 8.0f;
 constexpr float SILT_FRICTION = 20.0f;
