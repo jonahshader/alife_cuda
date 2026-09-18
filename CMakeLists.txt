@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.28)
+
+# Default to the local GPU's architecture so no PTX JIT is needed at runtime.
+# Override with -DCMAKE_CUDA_ARCHITECTURES=<arch> for cross-machine builds.
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "")
+  set(CMAKE_CUDA_ARCHITECTURES native)
+endif()
+
 project(alife_cuda CUDA CXX) # removed C
 
 set(CMAKE_CXX_STANDARD 20)
@@ -27,12 +34,13 @@ endif()
 find_package(CUDAToolkit REQUIRED)
 get_filename_component(CUDA_ROOT_DIR "${CUDAToolkit_BIN_DIR}" DIRECTORY)
 file(TO_CMAKE_PATH "${CUDA_ROOT_DIR}" CUDA_ROOT_DIR)
-if(CMAKE_CUDA_ARCHITECTURES)
-  list(GET CMAKE_CUDA_ARCHITECTURES 0 CUDA_ARCH)
-  set(CLANGD_CUDA_ARCH "sm_${CUDA_ARCH}")
+if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
+  list(GET CMAKE_CUDA_ARCHITECTURES_NATIVE 0 CUDA_ARCH) # resolved by CMake, e.g. "120-real"
 else()
-  set(CLANGD_CUDA_ARCH "sm_75")
+  list(GET CMAKE_CUDA_ARCHITECTURES 0 CUDA_ARCH)
 endif()
+string(REGEX REPLACE "-(real|virtual)$" "" CUDA_ARCH "${CUDA_ARCH}")
+set(CLANGD_CUDA_ARCH "sm_${CUDA_ARCH}")
 file(WRITE "${CMAKE_SOURCE_DIR}/.clangd"
 "CompileFlags:
   Remove:
@@ -75,6 +83,8 @@ endif()
 include(FetchContent)
 
 # SDL2
+# Audio is unused; disable libsamplerate so the build does not depend on its dev headers
+set(SDL_LIBSAMPLERATE OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
         SDL2
         URL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz
@@ -98,7 +108,7 @@ endif()
 FetchContent_Declare(
         glm
         GIT_REPOSITORY https://github.com/g-truc/glm.git
-        GIT_TAG 0.9.9.8
+        GIT_TAG 1.0.1
 )
 FetchContent_MakeAvailable(glm)
 
