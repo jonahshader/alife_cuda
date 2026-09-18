@@ -101,6 +101,16 @@ void init_imgui() {
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
+  // scale ImGui for high-DPI displays
+  float dpi_scale = 1.0f;
+  float ddpi;
+  int display_index = SDL_GetWindowDisplayIndex(window);
+  if (SDL_GetDisplayDPI(display_index, &ddpi, nullptr, nullptr) == 0) {
+    dpi_scale = ddpi / 96.0f;
+  }
+  ImGui::GetStyle().ScaleAllSizes(dpi_scale);
+  io.FontGlobalScale = dpi_scale;
+
   // setup platform/renderer backends
   ImGui_ImplSDL2_InitForOpenGL(window, main_context);
   ImGui_ImplOpenGL3_Init("#version 430");
