@@ -882,8 +882,8 @@ __global__ void move_particles(SPHPtrs sph, float dt, float dt_predict, size_t n
 
 // compute vertical density gradient per liquid particle → evap_prob (raw surface signal)
 __global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                    int2 particle_grid_dims, float cell_size, float smoothing_radius,
-                                    size_t num_particles, float2 bounds) {
+                                    int2 particle_grid_dims, float cell_size,
+                                    float smoothing_radius, size_t num_particles, float2 bounds) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
@@ -932,9 +932,10 @@ __global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_
 
 // soil-aware overload: suppress evaporation where solid density is significant
 __global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_particles_per_cell,
-                                    int2 particle_grid_dims, float cell_size, float smoothing_radius,
-                                    size_t num_particles, float2 bounds, SoilPtrs soil, int soil_w,
-                                    int soil_h, float soil_size, float target_density) {
+                                    int2 particle_grid_dims, float cell_size,
+                                    float smoothing_radius, size_t num_particles, float2 bounds,
+                                    SoilPtrs soil, int soil_w, int soil_h, float soil_size,
+                                    float target_density) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i >= num_particles)
     return;
@@ -1146,8 +1147,8 @@ void update_fluid(ParticleFluidState &state) {
     auto scope = profiler.scoped_measure("move_vapor_particles");
     move_vapor_particles<<<sph_grid_dim, sph_block>>>(
         sph, state.params.dt, num_particles, state.bounds, state.params.vapor_buoyancy,
-        state.params.vapor_drift, state.params.condense_rate,
-        state.params.condense_altitude_power, state.rng_counter);
+        state.params.vapor_drift, state.params.condense_rate, state.params.condense_altitude_power,
+        state.rng_counter);
     check_cuda("move_vapor_particles");
     state.rng_counter.incr();
   }
@@ -1245,8 +1246,8 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
     auto scope = profiler.scoped_measure("move_vapor_particles");
     move_vapor_particles<<<sph_grid_dim, sph_block>>>(
         sph, state.params.dt, num_particles, state.bounds, state.params.vapor_buoyancy,
-        state.params.vapor_drift, state.params.condense_rate,
-        state.params.condense_altitude_power, state.rng_counter);
+        state.params.vapor_drift, state.params.condense_rate, state.params.condense_altitude_power,
+        state.rng_counter);
     check_cuda("move_vapor_particles");
     state.rng_counter.incr();
   }

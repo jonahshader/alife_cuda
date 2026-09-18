@@ -4,9 +4,8 @@
 #include "soa_helper.h"
 #include "soil.cuh"
 
-#include <glm/glm.hpp>
-
 #include <Random123/threefry.h>
+#include <glm/glm.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -22,8 +21,8 @@
   D(float, mass, 1)                                                                                \
   D(float, density, 0)                                                                             \
   D(float, near_density, 0)                                                                        \
-  D(uint8_t, sym_break, 0)                                                                \
-  D(uint8_t, state, 0)                                                                    \
+  D(uint8_t, sym_break, 0)                                                                         \
+  D(uint8_t, state, 0)                                                                             \
   D(float, evap_prob, 0)
 
 namespace p2 {

@@ -33,16 +33,15 @@
     "Global multiplier for capillary suction force")                                               \
   X(terrain_mode, int, 0, "world.terrain_mode", "terrain-mode",                                    \
     "Terrain mode (0=normal, 1=capillary test)")                                                   \
-  X(evap_rate, float, 0.01f, "fluid.evap_rate", "evap-rate",                                \
-    "Evaporation rate scaling factor")                                                     \
-  X(condense_rate, float, 0.005f, "fluid.condense_rate", "condense-rate",                  \
-    "Condensation rate scaling factor")                                                    \
-  X(vapor_buoyancy, float, 3.0f, "fluid.vapor_buoyancy", "vapor-buoyancy",                 \
-    "Upward acceleration for vapor particles")                                             \
-  X(vapor_drift, float, 0.5f, "fluid.vapor_drift", "vapor-drift",                          \
-    "Random horizontal drift strength for vapor")                                          \
-  X(condense_altitude_power, float, 2.0f, "fluid.condense_altitude_power",                 \
-    "condense-alt-power", "Power curve for altitude-based condensation")                   \
+  X(evap_rate, float, 0.01f, "fluid.evap_rate", "evap-rate", "Evaporation rate scaling factor")    \
+  X(condense_rate, float, 0.005f, "fluid.condense_rate", "condense-rate",                          \
+    "Condensation rate scaling factor")                                                            \
+  X(vapor_buoyancy, float, 3.0f, "fluid.vapor_buoyancy", "vapor-buoyancy",                         \
+    "Upward acceleration for vapor particles")                                                     \
+  X(vapor_drift, float, 0.5f, "fluid.vapor_drift", "vapor-drift",                                  \
+    "Random horizontal drift strength for vapor")                                                  \
+  X(condense_altitude_power, float, 2.0f, "fluid.condense_altitude_power", "condense-alt-power",   \
+    "Power curve for altitude-based condensation")                                                 \
   X(seed, int64_t, 0, "world.seed", "seed", "RNG seed (0 = random)")
 
 struct SimParams {
