@@ -147,9 +147,10 @@ static void print_profiler_stats() {
   for (const auto &name : names) {
     auto point = profiler.get_point(name);
     if (point && point->get_sample_count() > 0) {
-      std::cout << "  " << name << ": avg=" << point->get_average_duration() * 1000.0 << "ms"
-                << " min=" << point->get_min_duration() * 1000.0 << "ms"
-                << " max=" << point->get_max_duration() * 1000.0 << "ms"
+      // durations are already in milliseconds (cudaEventElapsedTime units)
+      std::cout << "  " << name << ": avg=" << point->get_average_duration() << "ms"
+                << " min=" << point->get_min_duration() << "ms"
+                << " max=" << point->get_max_duration() << "ms"
                 << " samples=" << point->get_sample_count() << std::endl;
     }
   }
