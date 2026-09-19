@@ -285,16 +285,31 @@ impl<R: Runtime> Sim<R> {
       self.record_births(1);
     }
 
+    // --- Seed particles are claimed before any seed becomes a birth ---
+    // `claim_particles` hands back as many slots as are free, which can be
+    // fewer than asked once the world is near its particle capacity. A seed
+    // with no particle is not a birth: the trailing seeds are dropped here,
+    // their parents refunded, and nothing below sees them.
+    let mut seeds = decisions.seeds;
+    let ids = if seeds.is_empty() {
+      Vec::new()
+    } else {
+      let access = self.body_access();
+      bodies::claim_particles(&access, seeds.len())
+    };
+    for (parent, _, _) in seeds.drain(ids.len()..) {
+      self.pop.organisms.energy[parent] += p.seed_cost;
+    }
+
     // --- Newborn slots, so the device sees them before anything grows ---
-    let births: Vec<Birth> = decisions
-      .seeds
+    let births: Vec<Birth> = seeds
       .iter()
       .map(|(parent, child, _)| Birth {
         child: *child as u32,
         parent: *parent as u32,
       })
       .collect();
-    for (parent, child, _) in &decisions.seeds {
+    for (parent, child, _) in &seeds {
       let organisms = &mut self.pop.organisms;
       organisms.alive[*child] = 1;
       organisms.stage[*child] = STAGE_SEED;
@@ -312,13 +327,9 @@ impl<R: Runtime> Sim<R> {
     self.pop.upload_organisms(&self.client);
 
     // --- The seed particles themselves ---
-    if !decisions.seeds.is_empty() {
-      let ids = {
-        let access = self.body_access();
-        bodies::claim_particles(&access, decisions.seeds.len())
-      };
+    if !seeds.is_empty() {
       let mut placement = Placement::default();
-      for ((_, child, at), id) in decisions.seeds.iter().zip(&ids) {
+      for ((_, child, at), id) in seeds.iter().zip(&ids) {
         placement.ids.push(*id);
         placement.positions.push(at.x);
         placement.positions.push(at.y);

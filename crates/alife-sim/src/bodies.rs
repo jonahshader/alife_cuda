@@ -243,26 +243,6 @@ pub struct GrowRequest {
   pub limb: usize,
 }
 
-/// Install a genome in an organism slot and lay its whole body out from the
-/// anchor.
-///
-/// Returns the particles placed. The lineage fields (`parent_id`,
-/// `birth_step`, `lineage_id`) are the life cycle's; this sets only what a
-/// body needs: the genome, the anchor and `alive`.
-pub fn spawn<R: Runtime>(
-  sim: &mut crate::sim::Sim<R>,
-  organism: usize,
-  genome: &Genome,
-  anchor: Vec2,
-) -> usize {
-  install(sim, organism, genome, anchor);
-  {
-    let access = sim.body_access();
-    access.pop.upload(access.client);
-  }
-  grow_bodies(sim, &[organism])
-}
-
 /// Write one organism's genome, anchor and `alive` flag into the host
 /// mirrors. The caller uploads, so a batch of founders pays for one upload.
 fn install<R: Runtime>(
@@ -435,12 +415,6 @@ fn growable<R: Runtime>(
     return Err(SpawnError::ParentNotGrown);
   }
   Ok(count)
-}
-
-/// Whether a limb record could be grown right now — what the sprout head
-/// asks before it spends anything.
-pub fn can_grow<R: Runtime>(sim: &mut crate::sim::Sim<R>, organism: usize, limb: usize) -> bool {
-  growable(&sim.body_access(), organism, limb).is_ok()
 }
 
 /// The first `n` claimable particle slots, ascending, or as many as there are.

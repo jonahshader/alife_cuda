@@ -451,9 +451,13 @@ impl SimParams {
     // A seed that costs more than the threshold that triggers it would leave
     // its parent with negative energy, which is death: reproducing would be
     // suicide rather than a budget.
-    if !self.seed_threshold.is_finite() || self.seed_threshold < self.seed_cost {
+    // Also strictly positive: the energy sensor divides by it.
+    if !self.seed_threshold.is_finite()
+      || self.seed_threshold <= 0.0
+      || self.seed_threshold < self.seed_cost
+    {
       return Err(format!(
-        "--seed-threshold must be finite and at least --seed-cost ({}), got {}",
+        "--seed-threshold must be finite, positive and at least --seed-cost ({}), got {}",
         self.seed_cost, self.seed_threshold
       ));
     }
