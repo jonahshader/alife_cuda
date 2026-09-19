@@ -12,11 +12,10 @@
 
 use std::sync::Arc;
 
-use alife_sim::wgpu_backend::shared_buffer;
+use alife_sim::wgpu_backend::{SharedBuffer, shared_buffer};
 use cubecl::prelude::ComputeClient;
 use cubecl_wgpu::WgpuRuntime;
 use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
-use wgpu::util::DeviceExt as _;
 
 /// World-to-clip transform and the sizes the shaders need.
 #[repr(C)]
@@ -240,11 +239,28 @@ impl Pipelines {
   }
 }
 
-/// What `prepare` hands to `paint`.
+/// What `prepare` hands to `paint`, and what it keeps between frames.
+///
+/// The uniform buffer and the bind group outlive a frame. The bind group is
+/// rebuilt only when a bound window moves: CubeCL hands out slices of pooled
+/// buffers, and the sim swaps `vel` and can reallocate between frames, so the
+/// binding a handle resolves to is not stable — but it is also not usually
+/// different, and rebuilding it unconditionally made egui's device do that
+/// work every frame.
 struct Frame {
+  uniform: wgpu::Buffer,
+  bindings: Vec<BoundWindow>,
   bind_group: wgpu::BindGroup,
   soil_vertices: u32,
   particle_vertices: u32,
+}
+
+/// The identity of one bound storage window: which buffer, and where in it.
+#[derive(PartialEq, Eq)]
+struct BoundWindow {
+  buffer: wgpu::Buffer,
+  offset: u64,
+  size: u64,
 }
 
 /// One frame's worth of everything the callback needs.
@@ -261,46 +277,71 @@ impl CallbackTrait for SimCallback {
   fn prepare(
     &self,
     device: &wgpu::Device,
-    _queue: &wgpu::Queue,
+    queue: &wgpu::Queue,
     _screen: &ScreenDescriptor,
     _encoder: &mut wgpu::CommandEncoder,
     resources: &mut CallbackResources,
   ) -> Vec<wgpu::CommandBuffer> {
-    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-      label: Some("alife view"),
-      contents: bytemuck::bytes_of(&self.view),
-      usage: wgpu::BufferUsages::UNIFORM,
-    });
-
     // Each handle's window into its pooled buffer, resolved fresh: the sim
     // swaps and reallocates handles between frames.
-    let bound = [
-      shared_buffer(&self.client, &self.soil.sand_density),
-      shared_buffer(&self.client, &self.soil.silt_density),
-      shared_buffer(&self.client, &self.soil.clay_density),
-      shared_buffer(&self.client, &self.sph.pos),
-      shared_buffer(&self.client, &self.sph.state),
-      shared_buffer(&self.client, &self.sph.evap_prob),
-    ];
+    let bound: Vec<SharedBuffer> = [
+      &self.soil.sand_density,
+      &self.soil.silt_density,
+      &self.soil.clay_density,
+      &self.sph.pos,
+      &self.sph.state,
+      &self.sph.evap_prob,
+    ]
+    .into_iter()
+    .map(|handle| shared_buffer(&self.client, handle))
+    .collect();
+    let bindings: Vec<BoundWindow> = bound
+      .iter()
+      .map(|b| BoundWindow {
+        buffer: b.buffer.clone(),
+        offset: b.offset,
+        size: b.size,
+      })
+      .collect();
 
-    let mut entries = vec![wgpu::BindGroupEntry {
-      binding: 0,
-      resource: uniform.as_entire_binding(),
-    }];
-    for (i, buffer) in bound.iter().enumerate() {
-      entries.push(wgpu::BindGroupEntry {
-        binding: 1 + i as u32,
-        resource: buffer.binding(),
-      });
-    }
+    let uniform = match resources.get::<Frame>() {
+      Some(frame) => frame.uniform.clone(),
+      None => device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("alife view"),
+        size: size_of::<ViewUniform>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+      }),
+    };
+    queue.write_buffer(&uniform, 0, bytemuck::bytes_of(&self.view));
 
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-      label: Some("alife sim frame"),
-      layout: &self.pipelines.layout,
-      entries: &entries,
-    });
+    let reusable = resources
+      .get::<Frame>()
+      .filter(|frame| frame.bindings == bindings);
+    let bind_group = match reusable {
+      Some(frame) => frame.bind_group.clone(),
+      None => {
+        let mut entries = vec![wgpu::BindGroupEntry {
+          binding: 0,
+          resource: uniform.as_entire_binding(),
+        }];
+        for (i, buffer) in bound.iter().enumerate() {
+          entries.push(wgpu::BindGroupEntry {
+            binding: 1 + i as u32,
+            resource: buffer.binding(),
+          });
+        }
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+          label: Some("alife sim bind group"),
+          layout: &self.pipelines.layout,
+          entries: &entries,
+        })
+      }
+    };
 
     resources.insert(Frame {
+      uniform,
+      bindings,
       bind_group,
       soil_vertices: self.soil_cells * 6,
       particle_vertices: self.view.particle_count * 6,
@@ -327,7 +368,23 @@ impl CallbackTrait for SimCallback {
 
 #[cfg(test)]
 mod tests {
-  use super::Pipelines;
+  use super::{Frame, Pipelines, SimCallback, ViewUniform};
+  use alife_sim::SimParams;
+  use alife_sim::particles::SphDevice;
+  use alife_sim::sim::Sim;
+  use alife_sim::wgpu_backend::{client_on, headless_setup};
+  use cubecl_wgpu::WgpuSetup;
+  use eframe::egui_wgpu::{CallbackResources, CallbackTrait, ScreenDescriptor};
+
+  fn setup() -> Option<WgpuSetup> {
+    match headless_setup(wgpu::Backends::PRIMARY, None) {
+      Ok(setup) => Some(setup),
+      Err(_) => {
+        eprintln!("skipping: no wgpu adapter on this box");
+        None
+      }
+    }
+  }
 
   /// Build the shaders and pipelines on a headless device.
   ///
@@ -336,13 +393,102 @@ mod tests {
   /// can be checked without a window, and the window is the user's to open.
   #[test]
   fn shaders_and_pipelines_build() {
-    let Ok(setup) = alife_sim::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, None) else {
-      eprintln!("skipping: no wgpu adapter on this box");
-      return;
-    };
+    let Some(setup) = setup() else { return };
     let scope = setup.device.push_error_scope(wgpu::ErrorFilter::Validation);
     let _pipelines = Pipelines::new(&setup.device, wgpu::TextureFormat::Bgra8UnormSrgb);
     let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
+  }
+
+  /// `prepare` is the only part of the render path a test can reach — `paint`
+  /// needs a render pass, which needs a surface. This drives it across steps,
+  /// which is where the reuse it now does has to hold: the uniform is written
+  /// rather than recreated, and the bind group survives as long as every
+  /// bound window does.
+  #[test]
+  fn prepare_reuses_the_uniform_and_the_bind_group_across_steps() {
+    let Some(setup) = setup() else { return };
+    let (_device, client) = client_on(&setup);
+
+    // A small world: this is about buffer identity, not about the sim.
+    let params = SimParams {
+      smoothing_radius: 2.0,
+      particles_per_cell: 2,
+      ..SimParams::default()
+    };
+    let mut sim = Sim::new(client, params, 42, None);
+    let pipelines = std::sync::Arc::new(Pipelines::new(
+      &setup.device,
+      wgpu::TextureFormat::Bgra8UnormSrgb,
+    ));
+
+    let callback = |sim: &Sim<cubecl_wgpu::WgpuRuntime>, sph: SphDevice| SimCallback {
+      pipelines: pipelines.clone(),
+      client: sim.client().clone(),
+      view: ViewUniform {
+        scale: [1.0, 1.0],
+        offset: [0.0, 0.0],
+        soil_cell_size: sim.geometry().soil_cell_size,
+        particle_radius: 0.01,
+        _pad: [0.0; 2],
+        soil_width: sim.geometry().soil_width as u32,
+        soil_height: sim.geometry().soil_height as u32,
+        particle_count: sim.geometry().num_particles as u32,
+        debug_evap: 0,
+      },
+      sph,
+      soil: sim.device_soil().clone(),
+      soil_cells: sim.geometry().num_soil_cells() as u32,
+    };
+
+    let screen = ScreenDescriptor {
+      size_in_pixels: [64, 64],
+      pixels_per_point: 1.0,
+    };
+    let mut resources = CallbackResources::default();
+    let prepare =
+      |sim: &Sim<cubecl_wgpu::WgpuRuntime>, sph: SphDevice, resources: &mut CallbackResources| {
+        let mut encoder = setup
+          .device
+          .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let scope = setup.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        callback(sim, sph).prepare(
+          &setup.device,
+          &setup.queue,
+          &screen,
+          &mut encoder,
+          resources,
+        );
+        let error = pollster::block_on(scope.pop());
+        assert!(error.is_none(), "{error:?}");
+      };
+
+    prepare(&sim, sim.device_particles().clone(), &mut resources);
+    let first = resources.get::<Frame>().expect("prepare stored a frame");
+    let (uniform, bind_group) = (first.uniform.clone(), first.bind_group.clone());
+
+    for _ in 0..3 {
+      sim.step();
+      prepare(&sim, sim.device_particles().clone(), &mut resources);
+      let frame = resources.get::<Frame>().unwrap();
+      assert_eq!(frame.uniform, uniform, "the uniform buffer was recreated");
+      assert_eq!(
+        frame.bind_group, bind_group,
+        "the bind group was rebuilt although nothing it binds moved"
+      );
+    }
+
+    // And the other way: a bound handle pointing somewhere else has to be
+    // noticed. `pos` and `ppos` are two windows into the pool, so swapping
+    // them is the cheapest stand-in for the reallocation this guards against.
+    let mut moved = sim.device_particles().clone();
+    std::mem::swap(&mut moved.pos, &mut moved.ppos);
+    prepare(&sim, moved, &mut resources);
+    let frame = resources.get::<Frame>().unwrap();
+    assert_eq!(frame.uniform, uniform, "the uniform buffer was recreated");
+    assert_ne!(
+      frame.bind_group, bind_group,
+      "a bound window moved and the bind group was kept anyway"
+    );
   }
 }
