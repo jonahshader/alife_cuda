@@ -70,9 +70,10 @@ impl WorldGeometry {
     let fluid_particles = params.particles_per_cell.max(0) as usize * grid_width * grid_height;
     // Capacity is fixed at start, as `organism.md` requires: no buffer grows
     // once the kernels have baked `num_particles` in as a comptime constant.
-    let body_slots = params.max_organisms.max(0) as usize
-      * params.max_limbs.max(0) as usize
-      * params.max_particles_per_limb.max(0) as usize;
+    // One source for the reserved capacity: `BodyState` sizes its particle
+    // map from the same `BodyCfg`, so the two cannot disagree about how many
+    // slots the buffers hold (they did when this clamped to 0 and it to 1).
+    let body_slots = crate::bodies::BodyCfg::from_params(params).particle_map_len();
 
     Self {
       bounds,

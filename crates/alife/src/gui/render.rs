@@ -394,6 +394,25 @@ impl CallbackTrait for SimCallback {
 
 #[cfg(test)]
 mod tests {
+  /// The WGSL colour switch spells the part-type codes as literals; pin them
+  /// to the enum so a reordering there cannot silently recolour bodies.
+  #[test]
+  fn shader_part_type_codes_match_the_enum() {
+    use alife_sim::genome::population::PartType;
+    for (part, code) in [
+      (PartType::Root, "case 1u:"),
+      (PartType::Stem, "case 2u:"),
+      (PartType::Leaf, "case 3u:"),
+      (PartType::Seed, "case 4u:"),
+    ] {
+      assert_eq!(format!("case {}u:", part as u8), code);
+      assert!(
+        super::SHADER.contains(code),
+        "{code} missing from the shader"
+      );
+    }
+  }
+
   use super::{Frame, Pipelines, SimCallback, ViewUniform};
   use alife_sim::SimParams;
   use alife_sim::particles::SphDevice;
@@ -459,7 +478,7 @@ mod tests {
         _pad: [0.0; 2],
         soil_width: sim.geometry().soil_width as u32,
         soil_height: sim.geometry().soil_height as u32,
-        particle_count: sim.geometry().num_particles as u32,
+        particle_count: sim.live_particles().0 as u32,
         debug_evap: 0,
       },
       sph,

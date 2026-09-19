@@ -152,13 +152,14 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
   println!("Using seed: {}", sim.seed());
   let geom = sim.geometry();
   println!(
-    "World {} x {} m, grid {}x{} cells of {} m, {} particles",
+    "World {} x {} m, grid {}x{} cells of {} m, {} fluid particles + {} body slots",
     geom.bounds.x,
     geom.bounds.y,
     geom.grid_width,
     geom.grid_height,
     geom.cell_size,
-    geom.num_particles,
+    geom.fluid_particles,
+    geom.body_slots,
   );
   print!("Running headless");
   if cli.iterations > 0 {

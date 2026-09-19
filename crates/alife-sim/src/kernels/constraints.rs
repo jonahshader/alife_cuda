@@ -726,7 +726,7 @@ fn seg_dir_ref(particles: &SphHost, a: usize, b: usize, bounds_x: f32) -> Vec2 {
   if len > 1e-6 { d / len } else { Vec2::ZERO }
 }
 
-fn rotate_ref(d: Vec2, angle: f32) -> Vec2 {
+pub fn rotate_ref(d: Vec2, angle: f32) -> Vec2 {
   let (s, c) = (angle.sin(), angle.cos());
   Vec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
 }

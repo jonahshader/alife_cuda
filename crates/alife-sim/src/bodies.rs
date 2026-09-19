@@ -344,10 +344,7 @@ fn claim_particles<R: Runtime>(
   Ok(free[..n].to_vec())
 }
 
-fn rotate_ref(d: Vec2, angle: f32) -> Vec2 {
-  let (s, c) = (angle.sin(), angle.cos());
-  Vec2::new(d.x * c - d.y * s, d.x * s + d.y * c)
-}
+use crate::kernels::constraints::rotate_ref;
 
 /// Seed `count` founders: one [`Genome::seed_plant`] each, at evenly spaced
 /// x, anchored on the soil surface of its own column.

@@ -47,6 +47,13 @@ Left open by the genome chunk, for the chunk that first steps organisms:
 
 Left open by the bodies chunk:
 
+- The two spawn kernels (`kernels/spawn.rs`: occupancy marking and
+  particle placement) have no plain-Rust reference or reference test, the
+  one exception to the crate's rule; `grow_limb` also downloads the whole
+  `ppos` buffer and re-uploads the whole limb map per limb, and an organism
+  whose every `grow_limb` fails is marked alive with a stale device anchor.
+  All three go away when the life-cycle chunk moves spawning into a kernel
+  over a newborn list, which must come with its reference.
 - **Spawning is host-side.** `bodies::spawn` and `bodies::grow_limb` read
   `ppos` back and claim slots with a scan plus two small reads per call, and
   `Sim::step` decides whether to run the organism passes from a host-side

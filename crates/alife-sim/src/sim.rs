@@ -98,7 +98,13 @@ impl<R: Runtime> Sim<R> {
     );
 
     let sph = SphDevice::upload(&client, &particles);
-    let vel_next = client.empty(particles.len() * 2 * size_of::<f32>());
+    // Zeroed, not `empty`: `calculate_accel` runs over the live prefix only
+    // and the whole buffer is swapped into `sph.vel` afterwards, so slots
+    // above the prefix carry whatever this held. Nothing reads a `Free`
+    // slot's velocity today, but uninitialised memory in a buffer that
+    // reaches the dump would be a reproducibility trap waiting to spring.
+    let vel_next =
+      client.create_from_slice(bytemuck::cast_slice(&vec![0.0f32; particles.len() * 2]));
     let soil_device = SoilDevice::upload(&client, &soil.cells);
     let grid = GridDevice::alloc(&client, &cfg);
     let pop = Population::new(&client, &params, BrainShape::from_params(&params));

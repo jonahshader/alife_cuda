@@ -375,7 +375,9 @@ impl eframe::App for SimApp {
           _pad: [0.0; 2],
           soil_width: geom.soil_width as u32,
           soil_height: geom.soil_height as u32,
-          particle_count: geom.num_particles as u32,
+          // Only the live prefix: unclaimed body slots are `Free` and would
+          // be a discarded quad each, per frame.
+          particle_count: self.sim.live_particles().0 as u32,
           debug_evap: u32::from(self.debug_evap),
         };
 
