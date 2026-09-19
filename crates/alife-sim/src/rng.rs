@@ -293,6 +293,28 @@ pub fn u01(x: u32) -> f32 {
   x as f32 * U01_FACTOR + U01_HALF_FACTOR
 }
 
+/// One standard normal from two uniform words, Box–Muller.
+///
+/// Only the cosine half is returned: the sine half would need a second
+/// output, and the callers draw one Threefry block per Gaussian anyway, so
+/// there is nothing to pair it with. `u01` is open at zero, so the logarithm
+/// never sees zero and the radius is always finite.
+#[cube]
+pub fn gaussian(w0: u32, w1: u32) -> f32 {
+  let radius = f32::sqrt(-2.0f32 * f32::ln(u01(w0)));
+  let theta = TWO_PI * u01(w1);
+  radius * f32::cos(theta)
+}
+
+/// Plain-Rust reference for [`gaussian`].
+pub fn gaussian_ref(w0: u32, w1: u32) -> f32 {
+  let radius = (-2.0f32 * u01_ref(w0).ln()).sqrt();
+  let theta = TWO_PI * u01_ref(w1);
+  radius * theta.cos()
+}
+
+const TWO_PI: f32 = 2.0 * core::f32::consts::PI;
+
 /// Plain-Rust reference for [`threefry4x32_20`], and the host-side generator
 /// the kernel references use.
 pub fn threefry4x32_20_ref(ctr: [u32; 4], key: [u32; 4]) -> [u32; 4] {
@@ -496,6 +518,64 @@ impl RngCounter {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use cubecl_cpu::{CpuDevice, CpuRuntime};
+
+  /// Draw one Threefry block per output and turn it into one Gaussian, which
+  /// is exactly what the mutation kernel does per parameter.
+  #[cube(launch)]
+  fn fill_gaussian(key: &[u32], out: &mut [f32], #[comptime] n: u32) {
+    let i = ABSOLUTE_POS;
+    if i >= n as usize {
+      terminate!();
+    }
+    let r = threefry4x32_20(i as u32, 0u32, 0u32, 0u32, key[0], key[1], key[2], key[3]);
+    out[i] = gaussian(r.x0, r.x1);
+  }
+
+  fn fill_gaussian_ref(key: [u32; 4], n: u32) -> Vec<f32> {
+    (0..n)
+      .map(|i| {
+        let r = threefry4x32_20_ref([i, 0, 0, 0], key);
+        gaussian_ref(r[0], r[1])
+      })
+      .collect()
+  }
+
+  #[test]
+  fn gaussian_kernel_matches_its_reference() {
+    const N: u32 = 4096;
+    let key = [0xC0FFEE, 3, 0, 0];
+    let client = CpuRuntime::client(&CpuDevice);
+    let key_buf = client.create_from_slice(bytemuck::cast_slice(&key));
+    let out = client.empty(N as usize * size_of::<f32>());
+
+    fill_gaussian::launch::<CpuRuntime>(
+      &client,
+      CubeCount::Static(N.div_ceil(256), 1, 1),
+      CubeDim::new_1d(256),
+      crate::kernels::whole(&key_buf, 4),
+      crate::kernels::whole(&out, N as usize),
+      N,
+    );
+
+    let bytes = client.read_one_unchecked(out);
+    let actual = bytemuck::cast_slice::<u8, f32>(&bytes);
+    let expected = fill_gaussian_ref(key, N);
+    for (i, (a, e)) in actual.iter().zip(&expected).enumerate() {
+      assert_eq!(a.to_bits(), e.to_bits(), "gaussian {i}: {a} vs {e}");
+    }
+  }
+
+  #[test]
+  fn gaussian_is_standard_normal() {
+    let n = 100_000;
+    let values = fill_gaussian_ref([1, 2, 3, 4], n);
+    let mean = values.iter().sum::<f32>() / n as f32;
+    let var = values.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / n as f32;
+    assert!(mean.abs() < 0.02, "mean {mean}");
+    assert!((var.sqrt() - 1.0).abs() < 0.02, "sigma {}", var.sqrt());
+    assert!(values.iter().all(|v| v.is_finite()));
+  }
 
   #[test]
   fn counter_carries_like_random123() {
