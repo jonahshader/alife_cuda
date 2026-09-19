@@ -129,6 +129,14 @@ downstream diverges, `REVIEW.md`). What is left:
   L-system trees, which the plant milestone supersedes, so it goes when
   particle-body plants render — together with `src/`, `CMakeLists.txt`, the
   SDL/ImGui/GL dependencies and the parity references that check against it.
+- **Segfault at exit when CUDA is present but unusable.**
+  `CUDA_VISIBLE_DEVICES="" ./target/release/alife --headless --iterations 1`
+  runs on wgpu and then dies with SIGSEGV in teardown (exit 139,
+  reproduced 2026-09-19): the auto-selection probe creates a CUDA client
+  that panics, and its runner thread is torn down badly. A machine with a
+  CUDA library but no usable device is a real target. Probe the driver
+  through `cudarc` (init + device count) before ever creating a CubeCL
+  CUDA client, so no failed client exists to unwind.
 - **The GUI has never been looked at.** It builds and its shaders validate,
   but nobody has opened the window. Check it before trusting it: soil
   colors, particle size and the evap debug ramp against the C++ screen, and

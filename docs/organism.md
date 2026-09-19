@@ -362,6 +362,16 @@ owns sense → forward → apply.
   because no fluid kernel calls a transcendental. Rule for later kernels:
   exact within one runtime, tolerance across them, and keep anything that
   must agree across backends on the integer side of the draw.
+- 2026-09-19 — **Restructuring a gather kernel needs a dump diff, not just
+  the determinism test.** Two measured facts from the cleanup pass, both
+  recorded next to the code they constrain in `kernels/grid.rs`: flattening
+  the 3×3 neighbour loop to a single `0..9` loop cost wgpu's
+  `calculate_accel` 14% (the nested loops stay); and applying the seam
+  x-shift unconditionally (`pos + 0.0`) changed the CUDA backend's float
+  contraction, moving 4157 of 51200 densities by up to 4 ulp after one
+  step and diverging visibly by 50. Same-seed reproducibility on one
+  backend cannot see either; only a byte-for-byte diff against the
+  previous binary's dump can.
 - 2026-09-19 — **The GUI runs the sim on the wgpu runtime, always.** The
   renderer binds CubeCL's own buffers; a sim on the CUDA or CPU runtime
   would have to copy every buffer through the host each frame, which is the
