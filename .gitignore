@@ -13,3 +13,6 @@ resources/imgui.ini
 
 # harness agent worktrees
 .claude/worktrees/
+
+# experiment output (scripts/soil_experiment.sh)
+runs
