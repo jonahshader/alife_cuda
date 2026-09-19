@@ -39,14 +39,18 @@ struct ParticleGrid {
   Buffer<int> particles_per_cell{};
   int width{0};
   int height{0};
+  // >= smoothing_radius: the columns tile the world width exactly, so a
+  // wrapped neighborhood never needs to reach past cell_x +/- 1
+  float cell_size{0};
   int max_particles_per_cell{4};
 };
 
 template <template <typename> class Buffer>
 void reconfigure_grid(ParticleGrid<Buffer> &grid, int new_width, int new_height,
-                      int new_max_particles_per_cell) {
+                      float new_cell_size, int new_max_particles_per_cell) {
   grid.width = new_width;
   grid.height = new_height;
+  grid.cell_size = new_cell_size;
   grid.max_particles_per_cell = new_max_particles_per_cell;
 
   grid.grid_indices.resize(new_width * new_height * new_max_particles_per_cell);
@@ -59,6 +63,7 @@ void copy(ParticleGrid<Dst> &dst, const ParticleGrid<Src> &src) {
   dst.particles_per_cell = src.particles_per_cell;
   dst.width = src.width;
   dst.height = src.height;
+  dst.cell_size = src.cell_size;
   dst.max_particles_per_cell = src.max_particles_per_cell;
 }
 

@@ -16,7 +16,9 @@ namespace p2 {
 
 // given a particle's position, return the cell index it belongs to
 __host__ __device__ int particle_to_cid(float2 pos, int grid_width, float cell_size) {
-  int grid_x = pos.x / cell_size;
+  // the columns tile the width exactly, so pos.x == bounds.x lands one column
+  // past the last one; clamp rather than index out of the grid
+  int grid_x = min(max(static_cast<int>(pos.x / cell_size), 0), grid_width - 1);
   int grid_y = pos.y / cell_size;
   return grid_y * grid_width + grid_x;
 }
@@ -122,13 +124,9 @@ __host__ __device__ float2 calculate_density_at_pos(float2 pos, SPHPtrs sph, Par
   int cell_x = grid_index % particle_grid_dims.x;
   int cell_y = grid_index / particle_grid_dims.x;
 
-  int xi_neg_dist = cell_x == 0 ? 2 : 1;
-  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
-
   // iterate through cell neighborhood
   for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) // TEMP
-    {
+    for (int xi = cell_x - 1; xi <= cell_x + 1; xi++) {
       // skip if cell is out of vertical bounds
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
@@ -386,11 +384,8 @@ __global__ void calculate_soil_saturation(SoilPtrs soil, int soil_w, int soil_h,
   float water_density = 0.0f;
   float inv_cell_area = 1.0f / (soil_size * soil_size);
 
-  int xi_neg_dist = pcx == 0 ? 2 : 1;
-  int xi_pos_dist = pcx >= particle_grid_dims.x - 2 ? 2 : 1;
-
   for (int yi = pcy - 1; yi <= pcy + 1; yi++) {
-    for (int xi = pcx - xi_neg_dist; xi <= pcx + xi_pos_dist; xi++) {
+    for (int xi = pcx - 1; xi <= pcx + 1; xi++) {
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
       int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
@@ -558,12 +553,9 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   float2 pressure_force = make_float2(0.0f, 0.0f);
   float2 viscosity_force = make_float2(0.0f, 0.0f);
 
-  int xi_neg_dist = cell_x == 0 ? 2 : 1;
-  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
-
   // iterate through cell neighborhood
   for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+    for (int xi = cell_x - 1; xi <= cell_x + 1; xi++) {
       // skip if cell is out of vertical bounds
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
@@ -649,12 +641,9 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
   float2 pressure_force = make_float2(0.0f, 0.0f);
   float2 viscosity_force = make_float2(0.0f, 0.0f);
 
-  int xi_neg_dist = cell_x == 0 ? 2 : 1;
-  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
-
   // iterate through cell neighborhood
   for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+    for (int xi = cell_x - 1; xi <= cell_x + 1; xi++) {
       // skip if cell is out of vertical bounds
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
@@ -712,16 +701,13 @@ __host__ __device__ void attract_particles_at_pos(float2 pos, float max_thrust, 
   int cell_x = grid_index % p_grid_dims.x;
   int cell_y = grid_index / p_grid_dims.x;
 
-  // compute neighborhood size from c_size and radius
+  // compute neighborhood size from c_size and radius. the columns tile the
+  // width exactly, so no extra overlap is needed at the wrap seam.
   int cell_radius = ceil(radius / c_size);
-  // need additional overlap to account for bounds that
-  // are indivisible by c_size. TODO: do this for y too?
-  int xi_neg_dist = (cell_x == 0 ? 1 : 0) + cell_radius;
-  int xi_pos_dist = (cell_x >= p_grid_dims.x - 2 ? 1 : 0) + cell_radius;
 
   // iterate through cell neighborhood
   for (int yi = cell_y - cell_radius; yi <= cell_y + cell_radius; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+    for (int xi = cell_x - cell_radius; xi <= cell_x + cell_radius; xi++) {
       // skip if cell is out of vertical bounds
       if (yi < 0 || yi >= p_grid_dims.y)
         continue;
@@ -773,7 +759,7 @@ void attract_fluid(ParticleFluidState &state, float2 pos, float max_thrust, floa
 
   attract_single_kernel<<<grid_dim, block>>>(pos, max_thrust, radius, sph, grid_ptrs,
                                              state.grid.max_particles_per_cell, grid_dims,
-                                             state.params.smoothing_radius, state.bounds);
+                                             state.grid.cell_size, state.bounds);
 
   check_cuda("attract_single_kernel");
 }
@@ -786,10 +772,17 @@ __host__ __device__ float sd_box(float2 p, float2 b) {
 }
 
 void init_fluid_grid(ParticleFluidState &state) {
-  int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
-  int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
+  // x wraps, so the columns must tile the width exactly: round the column
+  // count down and widen the cells to fit. cell_size >= smoothing_radius, so a
+  // 3x3 neighborhood still covers every particle within the radius.
+  int grid_width =
+      std::max(1, static_cast<int>(std::floor(state.bounds.x / state.params.smoothing_radius)));
+  float cell_size = state.bounds.x / grid_width;
+  // y does not wrap and a partial top row is harmless, so it just rounds up
+  int grid_height = std::ceil(state.bounds.y / cell_size);
 
-  reconfigure_grid(state.grid, grid_width, grid_height, state.params.max_particles_per_cell);
+  reconfigure_grid(state.grid, grid_width, grid_height, cell_size,
+                   state.params.max_particles_per_cell);
 }
 
 static void init_fluid_particles(ParticleFluidState &state) {
@@ -806,9 +799,7 @@ static void init_fluid_particles(ParticleFluidState &state) {
   // sym_break, random uint8_t
   std::uniform_int_distribution<int> dist_sym(0, 255);
 
-  int grid_width = std::ceil(state.bounds.x / state.params.smoothing_radius);
-  int grid_height = std::ceil(state.bounds.y / state.params.smoothing_radius);
-  const int NUM_PARTICLES = state.params.particles_per_cell * grid_width * grid_height;
+  const int NUM_PARTICLES = state.params.particles_per_cell * state.grid.width * state.grid.height;
   resize_all(state.particles, NUM_PARTICLES);
 
   for (int i = 0; i < NUM_PARTICLES; ++i)
@@ -900,11 +891,8 @@ __global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_
   // sum m_j * density_kernel_gradient().y over neighbors
   float drho_dy = 0.0f;
 
-  int xi_neg_dist = cell_x == 0 ? 2 : 1;
-  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
-
   for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+    for (int xi = cell_x - 1; xi <= cell_x + 1; xi++) {
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
       int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
@@ -977,11 +965,8 @@ __global__ void calculate_evap_prob(SPHPtrs sph, ParticleGridPtrs grid, int max_
 
   float drho_dy = 0.0f;
 
-  int xi_neg_dist = cell_x == 0 ? 2 : 1;
-  int xi_pos_dist = cell_x >= particle_grid_dims.x - 2 ? 2 : 1;
-
   for (int yi = cell_y - 1; yi <= cell_y + 1; yi++) {
-    for (int xi = cell_x - xi_neg_dist; xi <= cell_x + xi_pos_dist; xi++) {
+    for (int xi = cell_x - 1; xi <= cell_x + 1; xi++) {
       if (yi < 0 || yi >= particle_grid_dims.y)
         continue;
       int wrapped_x = (xi + particle_grid_dims.x) % particle_grid_dims.x;
@@ -1079,7 +1064,7 @@ void update_fluid(ParticleFluidState &state) {
   size_t num_particles = state.particles_device.pos.size();
   size_t grid_size = state.grid.width * state.grid.height;
   int2 grid_dims = make_int2(state.grid.width, state.grid.height);
-  float cell_size = state.params.smoothing_radius;
+  float cell_size = state.grid.cell_size;
 
   dim3 sph_block(256);
   dim3 sph_grid_dim((num_particles + sph_block.x - 1) / sph_block.x);
@@ -1097,9 +1082,8 @@ void update_fluid(ParticleFluidState &state) {
 
   {
     auto scope = profiler.scoped_measure("populate_grid_indices");
-    populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                       state.grid.max_particles_per_cell, grid_dims,
-                                                       state.params.smoothing_radius);
+    populate_grid_indices<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, num_particles, state.grid.max_particles_per_cell, grid_dims, cell_size);
     check_cuda("populate_grid_indices");
   }
 
@@ -1170,7 +1154,7 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
   size_t num_particles = state.particles_device.pos.size();
   size_t grid_size = state.grid.width * state.grid.height;
   int2 grid_dims = make_int2(state.grid.width, state.grid.height);
-  float cell_size = state.params.smoothing_radius;
+  float cell_size = state.grid.cell_size;
 
   dim3 sph_block(256);
   dim3 sph_grid_dim((num_particles + sph_block.x - 1) / sph_block.x);
@@ -1188,9 +1172,8 @@ void update_fluid(ParticleFluidState &state, SoilState &soil) {
 
   {
     auto scope = profiler.scoped_measure("populate_grid_indices");
-    populate_grid_indices<<<sph_grid_dim, sph_block>>>(sph, grid_ptrs, num_particles,
-                                                       state.grid.max_particles_per_cell, grid_dims,
-                                                       state.params.smoothing_radius);
+    populate_grid_indices<<<sph_grid_dim, sph_block>>>(
+        sph, grid_ptrs, num_particles, state.grid.max_particles_per_cell, grid_dims, cell_size);
     check_cuda("populate_grid_indices");
   }
 
@@ -1301,7 +1284,7 @@ __global__ void calculate_density_grid_kernel(int density_grid_size, SPHPtrs sph
 void calculate_fluid_density_grid(ParticleFluidState &state,
                                   thrust::device_vector<unsigned char> &texture_data, int width,
                                   int height, float max_density) {
-  float cell_size = state.params.smoothing_radius;
+  float cell_size = state.grid.cell_size;
   float sample_interval = state.bounds.x / width;
   // sample_interval *= 0.5f;
 

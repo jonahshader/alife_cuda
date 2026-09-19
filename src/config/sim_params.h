@@ -12,7 +12,7 @@
   X(collision_damping, float, 0.5f, "fluid.collision_damping", "collision-damping",                \
     "Velocity damping on boundary collision")                                                      \
   X(smoothing_radius, float, 0.2f, "fluid.smoothing_radius", "smoothing-radius",                   \
-    "SPH smoothing radius (also grid cell size)")                                                  \
+    "SPH smoothing radius (lower bound on the grid cell size)")                                    \
   X(target_density, float, 234.0f, "fluid.target_density", "target-density",                       \
     "Target rest density for pressure calculation")                                                \
   X(pressure_mult, float, 225.0f, "fluid.pressure_mult", "pressure-mult",                          \
