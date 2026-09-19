@@ -191,8 +191,8 @@ impl Sampler {
     );
     let _ = writeln!(
       out,
-      "  births={} deaths={}",
-      last.counters.births, last.counters.deaths
+      "  births={} deaths={} limbs broken={}",
+      last.counters.births, last.counters.deaths, last.counters.breaks
     );
     let _ = writeln!(
       out,
@@ -220,8 +220,8 @@ impl Sampler {
   }
 }
 
-/// The header row: the fixed columns, then six per soil column named after
-/// its label.
+/// The header row: the seventeen fixed columns, then six per soil column
+/// named after its label.
 fn header(columns: &[ColumnExtent]) -> String {
   let mut names: Vec<String> = [
     "step",
@@ -233,6 +233,7 @@ fn header(columns: &[ColumnExtent]) -> String {
     "alive",
     "births",
     "deaths",
+    "breaks",
     "energy_mean",
     "energy_min",
     "energy_max",
@@ -270,6 +271,7 @@ fn row(s: &Sample) -> String {
     s.alive.to_string(),
     s.counters.births.to_string(),
     s.counters.deaths.to_string(),
+    s.counters.breaks.to_string(),
     format!("{:.6}", s.energy_mean),
     format!("{:.6}", s.energy_min),
     format!("{:.6}", s.energy_max),

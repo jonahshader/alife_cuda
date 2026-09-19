@@ -55,6 +55,10 @@ struct Decisions {
   expired: Vec<usize>,
   /// Seeds that landed: `(slot, where its particle came to rest)`.
   germinating: Vec<(usize, Vec2)>,
+  /// Limbs whose base joint broke, and everything that was hanging off one:
+  /// `(organism, limb)`, in slot then limb order. Their particles go into the
+  /// soil as organic matter and their `grown` back to zero.
+  breaking: Vec<(usize, usize)>,
   /// What every limb that grew this tick has grown to, in segments:
   /// `(flat (organism, limb) index, length)`.
   lengthened: Vec<(usize, f32)>,
@@ -192,6 +196,12 @@ impl<R: Runtime> Sim<R> {
         continue;
       }
 
+      // What broke over the interval, before anything is spent growing it:
+      // a limb that is about to be shed does not grow this tick, and next
+      // tick it starts again from nothing.
+      let broken = broken_limbs(&self.pop, &self.bodies, &p, o, &packed[base..]);
+      out.breaking.extend(broken.iter().map(|limb| (o, *limb)));
+
       // Charged before the batch: `grow_limbs` drops a limb off the end of
       // a batch when the particle capacity is short, and this pays for one
       // that was dropped. The capacity is
@@ -204,6 +214,7 @@ impl<R: Runtime> Sim<R> {
         &p,
         o,
         energy,
+        &broken,
         &mut out.lengthened,
         &mut grew,
       );
@@ -248,10 +259,15 @@ impl<R: Runtime> Sim<R> {
     let p = self.params;
     let step = self.step_count;
 
-    // --- Deaths: the particles go back, and the body goes into the soil ---
+    // --- Deaths, and limbs that broke off: both leave their particles in the
+    // soil where they stood. One batch, so a tick pays for one `launch_free`
+    // and one pass over the deposits. ---
     let mut death_ids: Vec<u32> = Vec::new();
     for o in &decisions.dying {
       death_ids.extend(self.bodies.organism_particles(*o));
+    }
+    for (o, limb) in &decisions.breaking {
+      death_ids.extend(self.bodies.limb_particles_of(*o, *limb));
     }
     if !death_ids.is_empty() {
       let where_they_stood = launch_free(&self.client, &self.sph, &death_ids);
@@ -268,6 +284,12 @@ impl<R: Runtime> Sim<R> {
       self.clear_slot(*o);
       self.record_deaths(1);
     }
+    // The genome keeps the record, so the limb may grow again from nothing;
+    // only the body forgets it.
+    for (o, limb) in &decisions.breaking {
+      self.bodies.release_limb(*o, *limb);
+    }
+    self.record_breaks(decisions.breaking.len() as u64);
 
     // --- Seeds that ran out of time, and the particles of seeds that
     // germinated: both just go back, neither is a death ---
@@ -371,9 +393,10 @@ impl<R: Runtime> Sim<R> {
     }
     if !decisions.growth.is_empty() {
       bodies::grow_limbs(self, &decisions.growth);
-    } else if !decisions.lengthened.is_empty() {
-      // A tick where every limb grew inside the segment it was already in:
-      // no particle to claim, but the constraint pass reads `grown`.
+    } else if !decisions.lengthened.is_empty() || !decisions.breaking.is_empty() {
+      // A tick where every limb grew inside the segment it was already in,
+      // or where one only broke off: no particle to claim, but the map and
+      // `grown` both moved and the constraint pass reads them.
       self.bodies.upload(&self.client);
     }
 
@@ -434,14 +457,19 @@ impl<R: Runtime> Sim<R> {
 /// record's length or a second-order rate cap cut short is not spent, so no
 /// energy vanishes into growth that never happened.
 ///
+/// `broken` is the limbs [`broken_limbs`] has decided are coming off this
+/// tick; none of them grows, whatever it could have absorbed.
+///
 /// Writes nothing: the new lengths go to `lengthened` and the limbs that
 /// crossed a whole segment — so the map owes them a particle — to `growth`.
+#[allow(clippy::too_many_arguments)]
 fn allocate_growth(
   pop: &crate::genome::Population,
   bodies: &crate::bodies::BodyState,
   params: &crate::SimParams,
   organism: usize,
   energy: f32,
+  broken: &[usize],
   lengthened: &mut Vec<(usize, f32)>,
   growth: &mut Vec<GrowRequest>,
 ) -> f32 {
@@ -470,7 +498,7 @@ fn allocate_growth(
 
   let growing: Vec<usize> = (0..max_limbs)
     .filter(|limb| {
-      if full(*limb) == 0.0 || progress(*limb) >= 1.0 {
+      if full(*limb) == 0.0 || progress(*limb) >= 1.0 || broken.contains(limb) {
         return false;
       }
       let parent = pop.limbs.parent[pop.limb_index(organism, *limb)] as usize;
@@ -567,6 +595,92 @@ fn allocate_growth(
   charged.min(spend)
 }
 
+/// Which of one organism's limbs break this tick, in limb order.
+///
+/// `docs/organism.md`, *Growth*: a base joint whose worst bend over the
+/// interval — `packed`, the organism's slice of the life buffer, one float
+/// per limb — passed `break_angle × clamp(thickness / break_thickness_ref,
+/// 0, 1)` snaps, and everything descended from that limb comes off with it.
+/// The threshold scales with the limb's *live* thickness, so a limb is
+/// fragile while it is young and bears the whole of `break_angle` once it has
+/// thickened past the reference.
+///
+/// Exempt: the root limb, which has no base joint to bend — it is pinned to
+/// the anchor and measured against the world frame — and any limb of part
+/// type `Root`, whose failure mode is being pulled out of the soil rather
+/// than snapping, which is a different mechanism for later. A root hanging
+/// off a limb that broke still goes with it: what breaks is the joint above
+/// it, and nothing holds it to the body any more.
+///
+/// A limb with no length has no bend to report and no thickness to bear one,
+/// so it never appears here even though its threshold is zero.
+fn broken_limbs(
+  pop: &crate::genome::Population,
+  bodies: &crate::bodies::BodyState,
+  params: &crate::SimParams,
+  organism: usize,
+  packed: &[f32],
+) -> Vec<usize> {
+  use crate::genome::PartType;
+
+  let cfg = bodies.cfg;
+  let mp = cfg.max_particles_per_limb as usize;
+  let max_limbs = pop.max_limbs;
+  let grown = |limb: usize| bodies.grown[cfg.limb_index(organism, limb)];
+
+  let mut broken = vec![false; max_limbs];
+  let mut any = false;
+  for limb in 0..max_limbs {
+    let record = pop.limb_index(organism, limb);
+    let part_type = pop.limbs.part_type[record];
+    if !part_type.is_present()
+      || part_type == PartType::Root
+      || pop.limbs.parent[record] as usize == limb
+    {
+      continue;
+    }
+    let target = (pop.limbs.length[record] as usize).min(mp) as f32;
+    let thickness = bodies::limb_thickness(pop.limbs.target_thickness[record], target, grown(limb));
+    let bears = params.break_angle * (thickness / params.break_thickness_ref).clamp(0.0, 1.0);
+    if packed[pack::LIFE_FIXED + limb] > bears {
+      broken[limb] = true;
+      any = true;
+    }
+  }
+  if !any {
+    return Vec::new();
+  }
+
+  // Cascade to the descendants. A record's parent can sit at a higher index
+  // than the record — a structural add takes the first absent record — so one
+  // pass down the indices is not enough.
+  for _ in 0..max_limbs {
+    let mut spread = false;
+    for limb in 0..max_limbs {
+      let record = pop.limb_index(organism, limb);
+      let parent = pop.limbs.parent[record] as usize;
+      if !broken[limb]
+        && pop.limbs.part_type[record].is_present()
+        && parent != limb
+        && parent < max_limbs
+        && broken[parent]
+      {
+        broken[limb] = true;
+        spread = true;
+      }
+    }
+    if !spread {
+      break;
+    }
+  }
+
+  // A descendant that had not grown yet has nothing to shed, and counting it
+  // as a break would only inflate the metric.
+  (0..max_limbs)
+    .filter(|limb| broken[*limb] && grown(*limb) > 0.0)
+    .collect()
+}
+
 /// The limb that is its own parent. Mutation never removes or retypes the
 /// root, so a present genome has exactly one; a corrupt one has none and
 /// grows nothing.
@@ -582,7 +696,7 @@ mod tests {
   use super::*;
   use crate::SimParams;
   use crate::bodies::BodyState;
-  use crate::genome::{BrainShape, Genome, Population};
+  use crate::genome::{BrainShape, Genome, PartType, Population};
   use crate::world::WorldGeometry;
   use cubecl::prelude::Runtime;
   use cubecl_cpu::{CpuDevice, CpuRuntime};
@@ -646,8 +760,130 @@ mod tests {
     energy: f32,
   ) -> (f32, Vec<(usize, f32)>, Vec<GrowRequest>) {
     let (mut lengths, mut requests) = (Vec::new(), Vec::new());
-    let spend = allocate_growth(pop, bodies, params, 0, energy, &mut lengths, &mut requests);
+    let spend = allocate_growth(
+      pop,
+      bodies,
+      params,
+      0,
+      energy,
+      &[],
+      &mut lengths,
+      &mut requests,
+    );
     (spend, lengths, requests)
+  }
+
+  /// The seedling grown to its records' full lengths, and a packed life
+  /// entry with no bend in it.
+  ///
+  /// `break_thickness_ref` is this fixture's own founder thickness, so a
+  /// fully grown limb bears the whole of `break_angle` and a part-grown one
+  /// bears `sqrt(progress)` of it — the scaling, at numbers a test can read.
+  fn grown_seedling(params: &mut SimParams) -> (Population, BodyState, Vec<f32>) {
+    params.break_angle = 1.0;
+    params.break_thickness_ref = 1.0;
+    let (pop, mut bodies) = seedling(params);
+    let mp = params.max_particles_per_limb as usize;
+    for limb in 0..pop.max_limbs {
+      let record = pop.limb_index(0, limb);
+      if pop.limbs.part_type[record].is_present() {
+        bodies.grown[limb] = (pop.limbs.length[record] as usize).min(mp) as f32;
+      }
+    }
+    let packed = vec![0.0f32; pack::stride(bodies.cfg)];
+    (pop, bodies, packed)
+  }
+
+  /// A base joint bent past what its limb's thickness bears snaps, and
+  /// everything hanging off that limb comes away with it.
+  #[test]
+  fn a_limb_bent_past_what_it_bears_breaks_with_its_descendants() {
+    let mut params = params();
+    let (pop, bodies, mut packed) = grown_seedling(&mut params);
+
+    // The stem, at its full thickness, bears the whole of `break_angle`.
+    packed[pack::LIFE_FIXED + 1] = 0.99;
+    assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
+
+    packed[pack::LIFE_FIXED + 1] = 1.01;
+    assert_eq!(
+      broken_limbs(&pop, &bodies, &params, 0, &packed),
+      vec![1, 2],
+      "the leaf hanging off the stem stayed on"
+    );
+  }
+
+  /// Roots do not break: not the root limb, which has no base joint to bend,
+  /// and not a limb of root type anywhere else in the body.
+  #[test]
+  fn a_root_does_not_break_under_a_bend_that_snaps_a_stem() {
+    let mut params = params();
+    let (mut pop, bodies, mut packed) = grown_seedling(&mut params);
+
+    packed[pack::LIFE_FIXED] = 10.0;
+    assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
+
+    // The same bend on a root-typed limb that *does* have a base joint.
+    pop.limbs.part_type[1] = PartType::Root;
+    packed[pack::LIFE_FIXED + 1] = 10.0;
+    assert!(
+      broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty(),
+      "a root limb snapped"
+    );
+
+    // And the stem back as a stem breaks under it, so the bend was real.
+    pop.limbs.part_type[1] = PartType::Stem;
+    assert_eq!(broken_limbs(&pop, &bodies, &params, 0, &packed), vec![1, 2]);
+  }
+
+  /// The threshold scales with the limb's *live* thickness, so a young limb
+  /// snaps at a bend a grown one shrugs off — and a descendant that has not
+  /// grown yet has nothing to shed.
+  #[test]
+  fn a_half_thick_limb_breaks_at_half_the_angle() {
+    let mut params = params();
+    let (pop, mut bodies, mut packed) = grown_seedling(&mut params);
+    // A quarter of the way along its three segments is half its thickness,
+    // because thickness goes as `sqrt(progress)`.
+    bodies.grown[1] = 0.75;
+    bodies.grown[2] = 0.0;
+
+    packed[pack::LIFE_FIXED + 1] = 0.49;
+    assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
+
+    packed[pack::LIFE_FIXED + 1] = 0.51;
+    assert_eq!(
+      broken_limbs(&pop, &bodies, &params, 0, &packed),
+      vec![1],
+      "the ungrown leaf was counted as a break"
+    );
+  }
+
+  /// A broken limb is not allocated any of the tick's growth: it is coming
+  /// off, and next tick it starts again from nothing.
+  #[test]
+  fn a_breaking_limb_does_not_grow_on_its_way_out() {
+    let params = params();
+    let (pop, mut bodies) = seedling(&params);
+    bodies.grown[0] = 1.0;
+
+    let (mut lengths, mut requests) = (Vec::new(), Vec::new());
+    let spend = allocate_growth(
+      &pop,
+      &bodies,
+      &params,
+      0,
+      99.0,
+      &[1],
+      &mut lengths,
+      &mut requests,
+    );
+    assert!(
+      lengths.iter().all(|(record, _)| *record != 1),
+      "the stem grew while breaking: {lengths:?}"
+    );
+    // Only the root is left growing, so the spend is one limb's rate.
+    assert!((spend - params.growth_rate).abs() < 1e-6, "{spend}");
   }
 
   /// Growth is funded by what is left over `seed_cost` and capped by what the

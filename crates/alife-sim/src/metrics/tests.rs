@@ -11,6 +11,9 @@ use crate::sim::Sim;
 /// Fields the time series writes per soil column.
 const PER_COLUMN: usize = 6;
 
+/// Fields the time series writes before the first soil column's.
+const FIXED: usize = 17;
+
 /// A world narrow enough that the capillary test's `width / 40` gap is zero,
 /// so its six columns tile the soil and every founder lands in one of them
 /// (`soil::tests::a_narrow_world_has_no_gaps_between_its_columns`).
@@ -95,7 +98,7 @@ fn the_time_series_counts_three_founders_one_per_column() {
 
   // The header names every column, in the documented order.
   assert_eq!(
-    &header[..16],
+    &header[..FIXED],
     [
       "step",
       "wall_ms",
@@ -106,6 +109,7 @@ fn the_time_series_counts_three_founders_one_per_column() {
       "alive",
       "births",
       "deaths",
+      "breaks",
       "energy_mean",
       "energy_min",
       "energy_max",
@@ -115,9 +119,9 @@ fn the_time_series_counts_three_founders_one_per_column() {
       "species",
     ]
   );
-  assert_eq!(header.len(), 16 + PER_COLUMN * columns.len());
+  assert_eq!(header.len(), FIXED + PER_COLUMN * columns.len());
   for (c, extent) in columns.iter().enumerate() {
-    let base = 16 + PER_COLUMN * c;
+    let base = FIXED + PER_COLUMN * c;
     assert_eq!(header[base], format!("alive_{}", extent.label));
     assert_eq!(header[base + 1], format!("root_frac_{}", extent.label));
     assert_eq!(header[base + 2], format!("height_{}", extent.label));
@@ -169,7 +173,7 @@ fn the_time_series_counts_three_founders_one_per_column() {
 
   // One founder per column, and every founder accounted for.
   let alive_per_column: Vec<usize> = (0..columns.len())
-    .map(|c| last[16 + PER_COLUMN * c].parse().unwrap())
+    .map(|c| last[FIXED + PER_COLUMN * c].parse().unwrap())
     .collect();
   assert_eq!(alive_per_column.iter().sum::<usize>(), 3);
   assert!(
@@ -178,10 +182,10 @@ fn the_time_series_counts_three_founders_one_per_column() {
   );
   // The seed plant is 2 root, 3 stem, 1 leaf particles.
   for (c, n) in alive_per_column.iter().enumerate() {
-    let root_frac: f32 = last[16 + PER_COLUMN * c + 1].parse().unwrap();
-    let leaf_count: f32 = last[16 + PER_COLUMN * c + 3].parse().unwrap();
-    let energy: f32 = last[16 + PER_COLUMN * c + 4].parse().unwrap();
-    let species: usize = last[16 + PER_COLUMN * c + 5].parse().unwrap();
+    let root_frac: f32 = last[FIXED + PER_COLUMN * c + 1].parse().unwrap();
+    let leaf_count: f32 = last[FIXED + PER_COLUMN * c + 3].parse().unwrap();
+    let energy: f32 = last[FIXED + PER_COLUMN * c + 4].parse().unwrap();
+    let species: usize = last[FIXED + PER_COLUMN * c + 5].parse().unwrap();
     if *n == 0 {
       assert_eq!(root_frac, 0.0);
       assert_eq!(energy, 0.0);
@@ -232,7 +236,7 @@ fn a_run_with_no_organisms_writes_the_fluid_columns_and_zeros() {
   assert_eq!(field("energy_mean"), "0.000000");
   assert!(field("fluid_liquid").parse::<usize>().unwrap() > 0);
   assert!(field("mean_density").parse::<f32>().unwrap() > 0.0);
-  for cell in &row[16..] {
+  for cell in &row[FIXED..] {
     assert!(
       cell.parse::<f32>().unwrap() == 0.0,
       "a per-column cell is not zero: {cell}"
@@ -264,9 +268,9 @@ fn another_terrain_gets_one_column_spanning_the_world() {
   sampler.flush().unwrap();
 
   let (header, rows) = read_csv(&path);
-  assert_eq!(header.len(), 16 + PER_COLUMN);
-  assert_eq!(header[16], "alive_world");
-  assert_eq!(rows[0][16], "2", "both founders are in the one column");
+  assert_eq!(header.len(), FIXED + PER_COLUMN);
+  assert_eq!(header[FIXED], "alive_world");
+  assert_eq!(rows[0][FIXED], "2", "both founders are in the one column");
   let _ = std::fs::remove_file(&path);
 }
 
@@ -299,7 +303,7 @@ fn a_seed_in_flight_counts_in_alive_and_in_no_column() {
   let field = |name: &str| -> &str { &rows[0][header.iter().position(|h| h == name).expect(name)] };
   assert_eq!(field("alive"), "4");
   let per_column: usize = (0..columns.len())
-    .map(|c| rows[0][16 + PER_COLUMN * c].parse::<usize>().unwrap())
+    .map(|c| rows[0][FIXED + PER_COLUMN * c].parse::<usize>().unwrap())
     .collect::<Vec<_>>()
     .iter()
     .sum();
@@ -308,7 +312,7 @@ fn a_seed_in_flight_counts_in_alive_and_in_no_column() {
   // leftmost column is empty — and stays empty, which is what the seed's
   // `Vec2::ZERO` anchor would otherwise break.
   assert_eq!(
-    rows[0][16], "0",
+    rows[0][FIXED], "0",
     "a seed at the origin was binned into the leftmost column"
   );
   let _ = std::fs::remove_file(&path);

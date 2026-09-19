@@ -206,6 +206,10 @@ sim_params! {
         "Thickness a stem limb grows to, for a founder's and a new limb's record";
     thickness_leaf: f32 = 0.03, "organism.thickness_leaf", "thickness-leaf",
         "Thickness a leaf or seed limb grows to, for a founder's and a new limb's record";
+    break_angle: f32 = 1.2, "organism.break_angle", "break-angle",
+        "Base-joint bend a limb at or above --break-thickness-ref survives, in radians";
+    break_thickness_ref: f32 = 0.02, "organism.break_thickness_ref", "break-thickness-ref",
+        "Thickness in metres at which a limb bears the whole of --break-angle";
     structural_rate: f32 = 0.1, "organism.structural_rate", "structural-rate",
         "Probability that a birth also makes one structural edit";
     limb_segment_length: f32 = 0.15, "organism.limb_segment_length", "limb-segment-length",
@@ -450,6 +454,7 @@ impl SimParams {
       ("water-gain", self.water_gain),
       ("upkeep-per-volume", self.upkeep_per_volume),
       ("growth-rate", self.growth_rate),
+      ("break-angle", self.break_angle),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),
@@ -468,12 +473,14 @@ impl SimParams {
     // A limb's volume goes as its thickness squared, and growth solves a
     // length back out of a volume by dividing by it, so a founder thickness
     // of zero is a limb that grows an unbounded length for nothing. The
-    // growth charge divides by `volume_per_energy`, so that is a divisor too.
+    // growth charge divides by `volume_per_energy`, and the break threshold
+    // by `break_thickness_ref`, so those are divisors too.
     for (name, value) in [
       ("thickness-root", self.thickness_root),
       ("thickness-stem", self.thickness_stem),
       ("thickness-leaf", self.thickness_leaf),
       ("volume-per-energy", self.volume_per_energy),
+      ("break-thickness-ref", self.break_thickness_ref),
     ] {
       if value <= 0.0 || !value.is_finite() {
         return Err(format!(

@@ -67,6 +67,9 @@ pub struct Sim<R: Runtime> {
 pub struct Counters {
   pub births: u64,
   pub deaths: u64,
+  /// Limbs shed by a base joint breaking, descendants counted one by one
+  /// (`docs/organism.md`, *Growth*).
+  pub breaks: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,6 +289,12 @@ impl<R: Runtime> Sim<R> {
   /// Count `n` deaths; the other half of [`Self::record_births`].
   pub fn record_deaths(&mut self, n: u64) {
     self.counters.deaths += n;
+  }
+
+  /// Count `n` limbs shed by breaking. Not a death: the organism lives, and
+  /// the records it lost may grow back.
+  pub fn record_breaks(&mut self, n: u64) {
+    self.counters.breaks += n;
   }
 
   /// Everything a body spawn touches, borrowed at once — `bodies::spawn` and

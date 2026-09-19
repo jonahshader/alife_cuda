@@ -171,7 +171,7 @@ Settled 2026-09-19 (decisions). Limbs grow continuously in length and
 thickness, the way the C++ trees did, instead of appearing whole; the
 genome still says what the body is, and the brain only biases how fast
 each part gets there. Four chunks, in build order; `TODO.md` carries the
-ones still open.
+one still open.
 
 **1. Continuous length and allocation, and 2. thickness and volume.** Both
 built; the two together are the model below.
@@ -240,14 +240,33 @@ built; the two together are the model below.
 The renderer draws each segment at its limb's thickness, and the body discs
 at the same half-width, so a joint stays round.
 
-**3. Breaking.** A base joint whose angular error against its rest angle
-exceeds `break_angle × clamp(thickness / break_thickness_ref, 0, 1)`
-breaks: the limb and its descendants leave their particles as organic
-matter where they stand (the death path per particle) and their `grown`
-returns to 0, so the limb may regrow. Roots do not break. The error is what
-the constraint pass measures each sweep; its maximum per limb over the
-interval rides in the packed life buffer and the decision is the host's,
-in slot order, like every other life decision.
+**3. Breaking.** Built. A base joint whose angular error against its rest
+angle exceeds `break_angle × clamp(thickness / break_thickness_ref, 0, 1)`
+breaks: the limb and everything descended from it leave their particles as
+organic matter where they stand — the death path's per-particle deposit and
+release — and their `grown` returns to 0. The records stay in the genome, so
+a broken limb regrows from nothing through the ordinary allocation; it is
+allocated none of the growth of the tick it comes off in.
+
+`thickness` is the limb's *live* thickness, `target_thickness × sqrt(f)`, so
+a limb is fragile while it is young and bears the whole of `break_angle`
+once it has thickened past `break_thickness_ref`. The defaults are 1.2 rad
+(69°) and 0.02 m: every founder limb is thicker than the reference at full
+length — root 0.04, stem 0.05, leaf 0.03 — so a grown one only snaps under a
+large bend, and a stem reaches full strength at 16% of its length. Roots do
+not break: not the root limb, which has no base joint to bend (it is pinned
+to its anchor and measured against the world frame), and not a limb of root
+type anywhere else, whose failure is being pulled out rather than snapping.
+A root hanging off a limb that broke still comes away with it — what broke
+is the joint above it.
+
+The error is what the constraint pass measures at each base joint before
+every sweep pulls it back; its maximum per limb over the interval rides in
+the packed life buffer, one float per limb, written by the one unit that
+owns the organism and so needing no atomic. The pack kernel that reads it
+resets it, so each tick sees its own interval, and the decision is the
+host's, in slot order, like every other life decision. A limb shed this way
+counts in the `breaks` column of the metrics time series.
 
 **4. The brain's part.** `head_sprout` becomes `head_growth`, one logit
 per limb added to `growth_bias` before the softmax — the sprout head's

@@ -238,6 +238,28 @@ impl BodyState {
     out
   }
 
+  /// Every particle `(organism, limb)` holds, in index order.
+  pub fn limb_particles_of(&self, organism: usize, limb: usize) -> Vec<u32> {
+    let slice = self.cfg.limb_slice(organism, limb);
+    self.limb_particles[slice]
+      .iter()
+      .copied()
+      .take_while(|id| *id != NO_PARTICLE)
+      .collect()
+  }
+
+  /// Forget one limb's particles and its length: the limb is gone from the
+  /// body but its record stays in the genome, so it grows again from nothing
+  /// through the ordinary allocation (`docs/organism.md`, *Growth*, breaking).
+  ///
+  /// The caller frees the particle slots themselves — a break leaves them in
+  /// the soil as organic matter, exactly as a death does.
+  pub fn release_limb(&mut self, organism: usize, limb: usize) {
+    let slice = self.cfg.limb_slice(organism, limb);
+    self.limb_particles[slice].fill(NO_PARTICLE);
+    self.grown[self.cfg.limb_index(organism, limb)] = 0.0;
+  }
+
   /// Forget every particle `organism` held, and the seed slot with it. Its
   /// limbs are unlengthened too: the next organism in this slot starts from
   /// nothing.
@@ -1051,6 +1073,29 @@ mod tests {
     assert_eq!(limb_volume(seg, target_thickness, 0.0, 2.0), 0.0);
     assert_eq!(grown_from_volume(seg, target_thickness, 0.0, 1.0), 0.0);
     assert_eq!(grown_from_volume(seg, 0.0, target, 1.0), 0.0);
+  }
+
+  /// Shedding one limb takes its particles and its length and nothing else:
+  /// the record stays in the genome, so the limb can grow back.
+  #[test]
+  fn a_released_limb_keeps_its_record_and_loses_its_body() {
+    let mut sim = small_world();
+    assert_eq!(spawn_founders(&mut sim, 1), 1);
+    let cfg = sim.body_cfg();
+    let stem = sim.bodies().limb_particles_of(0, 1);
+    let root = sim.bodies().limb_particles_of(0, 0);
+    assert!(!stem.is_empty() && !root.is_empty());
+
+    let access = sim.body_access();
+    access.bodies.release_limb(0, 1);
+
+    assert!(sim.bodies().limb_particles_of(0, 1).is_empty());
+    assert_eq!(sim.bodies().limb_len(0, 1), 0);
+    assert_eq!(sim.bodies().grown[cfg.limb_index(0, 1)], 0.0);
+    // The genome still says what to grow back, and the root is untouched.
+    let record = sim.population().limb_index(0, 1);
+    assert_eq!(sim.population().limbs.part_type[record], PartType::Stem);
+    assert_eq!(sim.bodies().limb_particles_of(0, 0), root);
   }
 
   #[test]
