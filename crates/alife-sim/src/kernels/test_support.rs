@@ -260,6 +260,7 @@ impl OrganismHarness {
     crate::life::light::launch(
       &client,
       &sph,
+      &soil_dev,
       &light,
       &params_buf,
       cfg,

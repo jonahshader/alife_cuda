@@ -111,6 +111,7 @@ kernel_params! {
     "" P_LIFE_INTERVAL = |p, _g| p.life_interval as f32;
     "" P_LIGHT_TOP = |p, _g| p.light_top;
     "" P_LIGHT_ATTENUATION = |p, _g| p.light_attenuation;
+    "" P_LIGHT_SOIL_OPACITY = |p, _g| p.light_soil_opacity;
     "" P_LIGHT_GAIN = |p, _g| p.light_gain;
     "" P_WATER_GAIN = |p, _g| p.water_gain;
     "" P_UPKEEP_PER_PARTICLE = |p, _g| p.upkeep_per_particle;

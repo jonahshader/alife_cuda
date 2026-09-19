@@ -252,6 +252,7 @@ mod tests {
     super::super::light::launch(
       &h.client,
       &h.sph,
+      &h.soil_dev,
       &light,
       &h.params_buf,
       h.cfg,

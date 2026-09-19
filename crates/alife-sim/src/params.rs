@@ -212,6 +212,8 @@ sim_params! {
         "Light arriving at the top of the world";
     light_attenuation: f32 = 0.7, "life.light_attenuation", "light-attenuation",
         "Light left after passing one stem or leaf particle";
+    light_soil_opacity: f32 = 2.0, "life.light_soil_opacity", "light-soil-opacity",
+        "Light lost per soil cell per unit solid fraction; a cell at 1/opacity or more is opaque";
     light_gain: f32 = 0.012, "life.light_gain", "light-gain",
         "Energy a leaf particle gains per step at full light";
     water_gain: f32 = 0.004, "life.water_gain", "water-gain",
@@ -429,6 +431,7 @@ impl SimParams {
     }
     let non_negative = [
       ("light-top", self.light_top),
+      ("light-soil-opacity", self.light_soil_opacity),
       ("light-gain", self.light_gain),
       ("water-gain", self.water_gain),
       ("upkeep-per-particle", self.upkeep_per_particle),

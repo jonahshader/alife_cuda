@@ -133,9 +133,13 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   counts the stem and leaf particles per cell into a `u32` grid; a second,
   one unit per soil column, walks from the top down and multiplies the
   light by `light_attenuation` (default 0.7) once per particle it has
-  passed, starting at `light_top` (1.0). The sensors read the same grid, so
-  between rebuilds a limb's light reading is up to `life_interval` steps
-  stale.
+  passed, starting at `light_top` (1.0), and by the soil of each cell it
+  passes: a cell transmits `1 − solid_fraction × light_soil_opacity`,
+  floored at zero, so at the default opacity (2.0) one full cell of any
+  soil type is opaque and nothing under it earns light. A leaf in the top
+  soil cell still reads the light arriving at that cell. The sensors read
+  the same grid, so between rebuilds a limb's light reading is up to
+  `life_interval` steps stale.
 - **Energy.** One unit per organism, serial over its particles. Leaves earn
   `light_gain` times the light in their cell; roots earn `water_gain` times
   `max(0, water − 1)`, where `water` is the brain sensor's own quantity

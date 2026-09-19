@@ -6,7 +6,12 @@
 //!
 //! Two launches. The first counts the stem and leaf particles in each soil
 //! cell; the second walks each column from the top down, dimming the light by
-//! `light_attenuation` once per particle it has passed.
+//! `light_attenuation` once per particle it has passed and by the soil in
+//! each cell: a cell passes `1 - solid_fraction * light_soil_opacity` of what
+//! reaches it, floored at zero, so a full cell of any soil type is opaque at
+//! the default opacity and a buried leaf earns nothing. Without that, a plant
+//! whose seed sank into the soil read full light underground and was the
+//! best-fed plant in the world (2026-09-19).
 //!
 //! **The count is an integer atomic on purpose.** Adding 1 to a `u32` is
 //! associative and exact, so the order the units arrive in cannot change the
@@ -18,12 +23,13 @@ use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
 use crate::genome::PartType;
+use crate::kernels::soil_sample::{solid_fraction, solid_fraction_ref};
 use crate::kernels::{
-  CUBE_DIM, Cfg, KIND_BODY, LiveParticles, P_LIGHT_ATTENUATION, P_LIGHT_TOP, P_SOIL_SIZE,
-  PARAM_COUNT, clamp_i32, cube_count, whole,
+  CUBE_DIM, Cfg, KIND_BODY, LiveParticles, P_LIGHT_ATTENUATION, P_LIGHT_SOIL_OPACITY, P_LIGHT_TOP,
+  P_SOIL_SIZE, PARAM_COUNT, SoilArgs, clamp_i32, cube_count, soil_args, whole,
 };
 use crate::particles::{SphDevice, SphHost};
-use crate::soil::SoilGrid;
+use crate::soil::{SoilDevice, SoilGrid, SoilHost};
 
 /// Part-type codes that block light. Stem and leaf stand above ground; a root
 /// is in the soil, where there is nothing to shade, and a seed is in flight.
@@ -83,12 +89,19 @@ pub fn count_occluders(
 /// The counts are consumed as they are read — the next rebuild wants a clean
 /// grid, and this pass is the only reader, so zeroing here saves a launch.
 #[cube(launch)]
-pub fn column_light(counts: &mut [u32], light: &mut [f32], params: &[f32], #[comptime] cfg: Cfg) {
+pub fn column_light(
+  counts: &mut [u32],
+  light: &mut [f32],
+  soil: &SoilArgs,
+  params: &[f32],
+  #[comptime] cfg: Cfg,
+) {
   let x = ABSOLUTE_POS;
   if x >= cfg.soil_w as usize {
     terminate!();
   }
   let attenuation = params[P_LIGHT_ATTENUATION as usize];
+  let opacity = params[P_LIGHT_SOIL_OPACITY as usize];
   let mut l = params[P_LIGHT_TOP as usize];
   for row in 0..cfg.soil_h as usize {
     // Top row first: row `soil_h - 1` is the top of the world.
@@ -102,6 +115,7 @@ pub fn column_light(counts: &mut [u32], light: &mut [f32], params: &[f32], #[com
     for _ in 0..n {
       l *= attenuation;
     }
+    l *= f32::max(1.0f32 - solid_fraction(soil, cell) * opacity, 0.0f32);
   }
 }
 
@@ -134,6 +148,7 @@ impl LightGrid {
 pub fn launch<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
+  soil: &SoilDevice,
   grid: &LightGrid,
   params: &Handle,
   cfg: Cfg,
@@ -157,6 +172,7 @@ pub fn launch<R: Runtime>(
     CubeDim::new_1d(CUBE_DIM),
     whole(&grid.counts, grid.cells),
     whole(&grid.light, grid.cells),
+    soil_args(soil, &cfg),
     whole(params, PARAM_COUNT),
     cfg,
   );
@@ -169,9 +185,11 @@ pub fn launch<R: Runtime>(
 /// and the counts against a run of the first pass alone.
 pub fn light_grid_ref(
   particles: &SphHost,
+  soil: &SoilHost,
   soil_size: f32,
   light_top: f32,
   attenuation: f32,
+  soil_opacity: f32,
   cfg: &Cfg,
 ) -> (Vec<u32>, Vec<f32>) {
   let cells = (cfg.soil_w * cfg.soil_h) as usize;
@@ -195,6 +213,7 @@ pub fn light_grid_ref(
       for _ in 0..counts[cell] {
         l *= attenuation;
       }
+      l *= (1.0 - solid_fraction_ref(soil, cell) * soil_opacity).max(0.0);
     }
   }
   (counts, light)
@@ -214,6 +233,7 @@ mod tests {
     launch(
       &h.client,
       &h.sph,
+      &h.soil_dev,
       &grid,
       &h.params_buf,
       h.cfg,
@@ -222,9 +242,11 @@ mod tests {
     let actual = grid.read(&h.client);
     let (counts, expected) = light_grid_ref(
       &h.particles,
+      &h.soil.cells,
       h.geom.soil_cell_size,
       h.params.light_top,
       h.params.light_attenuation,
+      h.params.light_soil_opacity,
       &h.cfg,
     );
     assert_eq!(actual.len(), expected.len());
@@ -246,22 +268,41 @@ mod tests {
     let h = OrganismHarness::new();
     let grid = LightGrid::new(&h.client, &h.soil, h.params.light_top);
     let live = crate::kernels::LiveParticles(h.geom.num_particles);
-    launch(&h.client, &h.sph, &grid, &h.params_buf, h.cfg, live);
+    launch(
+      &h.client,
+      &h.sph,
+      &h.soil_dev,
+      &grid,
+      &h.params_buf,
+      h.cfg,
+      live,
+    );
     let first = grid.read(&h.client);
-    launch(&h.client, &h.sph, &grid, &h.params_buf, h.cfg, live);
+    launch(
+      &h.client,
+      &h.sph,
+      &h.soil_dev,
+      &grid,
+      &h.params_buf,
+      h.cfg,
+      live,
+    );
     assert_eq!(grid.read(&h.client), first);
   }
 
   /// Light falls off by one factor of the attenuation per occluding particle
-  /// above, and never rises going down a column.
+  /// above and by the soil of each cell passed, and never rises going down a
+  /// column.
   #[test]
   fn light_attenuates_monotonically_down_a_column() {
     let h = OrganismHarness::new();
     let (counts, light) = light_grid_ref(
       &h.particles,
+      &h.soil.cells,
       h.geom.soil_cell_size,
       h.params.light_top,
       h.params.light_attenuation,
+      h.params.light_soil_opacity,
       &h.cfg,
     );
     let (w, hgt) = (h.cfg.soil_w as usize, h.cfg.soil_h as usize);
@@ -270,14 +311,48 @@ mod tests {
       for row in (0..hgt - 1).rev() {
         let above = light[(row + 1) * w + x];
         let here = light[row * w + x];
+        let cell_above = (row + 1) * w + x;
         let expected = above
-          * h
-            .params
-            .light_attenuation
-            .powi(counts[(row + 1) * w + x] as i32);
+          * h.params.light_attenuation.powi(counts[cell_above] as i32)
+          * (1.0 - solid_fraction_ref(&h.soil.cells, cell_above) * h.params.light_soil_opacity)
+            .max(0.0);
         assert!((here - expected).abs() <= 1e-6, "column {x} row {row}");
         assert!(here <= above);
       }
     }
+  }
+
+  /// Soil is opaque: below the first full cell of any soil type, and with no
+  /// plant in the way, a column reads zero light. This is the underground
+  /// niche closed.
+  #[test]
+  fn a_full_soil_cell_is_opaque() {
+    let h = OrganismHarness::new();
+    let soil = &h.soil.cells;
+    let (w, hgt) = (h.cfg.soil_w as usize, h.cfg.soil_h as usize);
+    let (_, light) = light_grid_ref(
+      &h.particles,
+      soil,
+      h.geom.soil_cell_size,
+      h.params.light_top,
+      h.params.light_attenuation,
+      h.params.light_soil_opacity,
+      &h.cfg,
+    );
+    let mut checked = 0;
+    for x in 0..w {
+      let mut buried = false;
+      for row in (0..hgt).rev() {
+        let cell = row * w + x;
+        if buried {
+          assert_eq!(light[cell], 0.0, "column {x} row {row} lit under full soil");
+          checked += 1;
+        }
+        if solid_fraction_ref(soil, cell) * h.params.light_soil_opacity >= 1.0 {
+          buried = true;
+        }
+      }
+    }
+    assert!(checked > 0, "the fixture's terrain has full soil cells");
   }
 }

@@ -77,6 +77,7 @@ impl<R: Runtime> Sim<R> {
     let Self {
       client,
       sph,
+      soil_device,
       light,
       params_buf,
       cfg,
@@ -86,7 +87,7 @@ impl<R: Runtime> Sim<R> {
     } = self;
     let (cfg, timing) = (*cfg, *timing);
     run_timed(client, timing, timings, "light_grid", &mut || {
-      light::launch(client, sph, light, params_buf, cfg, live);
+      light::launch(client, sph, soil_device, light, params_buf, cfg, live);
     });
   }
 
