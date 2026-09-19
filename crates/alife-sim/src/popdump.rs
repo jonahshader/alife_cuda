@@ -552,6 +552,18 @@ mod tests {
         .iter()
         .all(|b| *b == 0.0)
     );
+    // And the field version 2 added is filled the same way as from a
+    // version-2 file: the founder thickness of each present record's type.
+    let limbs = &target.population().limbs;
+    let params = target.params();
+    for i in 0..limbs.part_type.len() {
+      if limbs.part_type[i].is_present() {
+        assert_eq!(
+          limbs.target_thickness[i],
+          crate::genome::seed::founder_thickness(params, limbs.part_type[i]),
+        );
+      }
+    }
   }
 
   /// A version-2 file predates `target_thickness` alone: its growth bias and

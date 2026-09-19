@@ -47,7 +47,8 @@ pub const K_GROWTH_RATE: u32 = 5;
 pub const K_THICKNESS_ROOT: u32 = 6;
 pub const K_THICKNESS_STEM: u32 = 7;
 pub const K_THICKNESS_LEAF: u32 = 8;
-pub const KNOB_COUNT: usize = 9;
+pub const K_THICKNESS_SIGMA: u32 = 9;
+pub const KNOB_COUNT: usize = 10;
 
 /// The floor a mutated `target_thickness` is held above.
 ///
@@ -221,8 +222,11 @@ pub fn mutate_structure(
         rate = 0.0f32;
       }
       limbs.growth_rate[cbase + l] = rate;
+      // Its own sigma: a thickness is metres, of the order of the founder
+      // values, and the growth genes' sigma would be a step the size of the
+      // value itself.
       let mut thickness = limbs.target_thickness[cbase + l]
-        + knobs[K_GROWTH_SIGMA as usize]
+        + knobs[K_THICKNESS_SIGMA as usize]
           * draw_gaussian(child, step, seed, STREAM_THICKNESS, l as u32);
       if thickness < MIN_THICKNESS {
         thickness = MIN_THICKNESS;
@@ -410,6 +414,7 @@ pub fn knob_values(params: &SimParams) -> [f32; KNOB_COUNT] {
     params.thickness_root,
     params.thickness_stem,
     params.thickness_leaf,
+    params.thickness_sigma,
   ]
 }
 
@@ -610,7 +615,7 @@ pub fn mutate_ref(
         // twin has to compute what the kernel computes.
         pop.limbs.growth_rate[cbase + l] = if rate < 0.0 { 0.0 } else { rate };
         let thickness = pop.limbs.target_thickness[cbase + l]
-          + knobs[K_GROWTH_SIGMA as usize]
+          + knobs[K_THICKNESS_SIGMA as usize]
             * draw_gaussian_ref(child, step_word, seed_word, STREAM_THICKNESS, l as u32);
         pop.limbs.target_thickness[cbase + l] = if thickness < MIN_THICKNESS {
           MIN_THICKNESS
@@ -961,6 +966,7 @@ pub mod tests {
       identity_sigma: 0.0,
       angle_sigma: 0.0,
       growth_sigma: 0.0,
+      thickness_sigma: 0.0,
       structural_rate: 0.0,
       ..test_params()
     };

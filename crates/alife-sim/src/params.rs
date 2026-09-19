@@ -195,7 +195,9 @@ sim_params! {
     angle_sigma: f32 = 0.05, "organism.angle_sigma", "angle-sigma",
         "Gaussian sigma in radians applied to a newborn's limb grow angles";
     growth_sigma: f32 = 0.05, "organism.growth_sigma", "growth-sigma",
-        "Gaussian sigma applied to a newborn's per-limb growth genes";
+        "Gaussian sigma applied to a newborn's per-limb growth bias and rate";
+    thickness_sigma: f32 = 0.005, "organism.thickness_sigma", "thickness-sigma",
+        "Gaussian sigma in metres applied to a newborn's per-limb target thickness";
     growth_rate: f32 = 0.05, "organism.growth_rate", "growth-rate",
         "Energy a limb absorbs per life tick, for a founder's and a new limb's record";
     thickness_root: f32 = 0.04, "organism.thickness_root", "thickness-root",
@@ -397,6 +399,7 @@ impl SimParams {
       ("identity-sigma", self.identity_sigma),
       ("angle-sigma", self.angle_sigma),
       ("growth-sigma", self.growth_sigma),
+      ("thickness-sigma", self.thickness_sigma),
     ];
     for (name, value) in sigmas {
       if value < 0.0 || !value.is_finite() {
@@ -447,7 +450,6 @@ impl SimParams {
       ("water-gain", self.water_gain),
       ("upkeep-per-volume", self.upkeep_per_volume),
       ("growth-rate", self.growth_rate),
-      ("volume-per-energy", self.volume_per_energy),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),
@@ -465,11 +467,13 @@ impl SimParams {
     }
     // A limb's volume goes as its thickness squared, and growth solves a
     // length back out of a volume by dividing by it, so a founder thickness
-    // of zero is a limb that grows an unbounded length for nothing.
+    // of zero is a limb that grows an unbounded length for nothing. The
+    // growth charge divides by `volume_per_energy`, so that is a divisor too.
     for (name, value) in [
       ("thickness-root", self.thickness_root),
       ("thickness-stem", self.thickness_stem),
       ("thickness-leaf", self.thickness_leaf),
+      ("volume-per-energy", self.volume_per_energy),
     ] {
       if value <= 0.0 || !value.is_finite() {
         return Err(format!(

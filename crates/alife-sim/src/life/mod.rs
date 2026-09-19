@@ -538,8 +538,8 @@ fn allocate_growth(
     // quadratic in the length, so the same energy buys a thin limb more
     // length than a thick one and a limb's later segments cost more than its
     // first (`bodies::limb_volume`).
-    let volume = bodies::limb_volume(seg, thickness, target, grown(*limb))
-      + share[i] * params.volume_per_energy;
+    let before = bodies::limb_volume(seg, thickness, target, grown(*limb));
+    let volume = before + share[i] * params.volume_per_energy;
     let mut length = bodies::grown_from_volume(seg, thickness, target, volume);
     let parent = pop.limbs.parent[pop.limb_index(organism, *limb)] as usize;
     if parent != *limb {
@@ -553,9 +553,8 @@ fn allocate_growth(
     }
     // What was converted is what is charged, so a share the clamps cut short
     // is not spent: the volume actually gained, back at the same rate.
-    charged += (bodies::limb_volume(seg, thickness, target, length)
-      - bodies::limb_volume(seg, thickness, target, grown(*limb)))
-      / params.volume_per_energy;
+    charged +=
+      (bodies::limb_volume(seg, thickness, target, length) - before) / params.volume_per_energy;
     lengthened.push((cfg.limb_index(organism, *limb), length));
     let held = bodies.limb_len(organism, *limb);
     let wants = length.ceil() as usize;

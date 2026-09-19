@@ -75,8 +75,11 @@ pub fn grown_from_volume(
   target: f32,
   volume: f32,
 ) -> f32 {
+  if target <= 0.0 {
+    return 0.0;
+  }
   let quadratic = segment_length * target_thickness * target_thickness / target;
-  if target <= 0.0 || quadratic <= 0.0 {
+  if quadratic <= 0.0 {
     return 0.0;
   }
   (volume / quadratic).max(0.0).sqrt()

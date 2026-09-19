@@ -197,8 +197,11 @@ built; the two together are the model below.
   and `target_thickness: f32` (the thickness at full length; founders and
   structural adds at the `thickness_root` / `thickness_stem` /
   `thickness_leaf` param of the record's part type, a seed record sharing
-  the leaf's). All three get a small Gaussian of their own, `growth_sigma`,
-  as `grow_angle` gets `angle_sigma`; the rate is floored at zero and the
+  the leaf's). The bias and rate get a small Gaussian of their own,
+  `growth_sigma`, and the thickness its own `thickness_sigma` in metres
+  (a thickness is of the order of the founder values, so the growth genes'
+  sigma would be a step the size of the value), as `grow_angle` gets
+  `angle_sigma`; the rate is floored at zero and the
   thickness strictly above it, because volume divides by the thickness
   squared. The population file format bumps its version per gene added and
   reads an older one with the founder values.
