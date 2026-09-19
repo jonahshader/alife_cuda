@@ -2,14 +2,23 @@
 //!
 //! `docs/organism.md`, *World coupling and life cycle*: "Leaf particles gain
 //! energy from light... Root particles draw water from their soil cell's
-//! saturation. Every particle costs energy per tick."
+//! saturation." What a body costs is its volume.
 //!
 //! ```text
 //! gain   = SUM_leaf light_gain * light(cell of particle)
 //!        + SUM_root water_gain * max(0, water - 1)
-//! upkeep = upkeep_per_particle * particles
+//! upkeep = upkeep_per_volume * SUM_limb volume(limb)
 //! energy += (gain - upkeep) * life_interval
 //! ```
+//!
+//! **Why volume rather than particles.** A limb's volume is
+//! `grown * limb_segment_length * thickness^2` with the thickness tied to the
+//! square root of its progress (`crate::bodies::limb_volume`), so a tall thin
+//! plant is cheaper than a tall thick one and a half-grown limb costs a
+//! quarter of what it will (`docs/organism.md`, *Growth*). Gain is still per
+//! particle: what a leaf catches and what a root drinks are surface
+//! phenomena, and a particle is the only place either is sampled. A seed in
+//! flight is in no limb, so it has no volume and costs nothing.
 //!
 //! **Why `water - 1`.** `water` is the same quantity the brain's sensor
 //! reads: `sph.density / target_density`. `kernels::density` adds the soil's
@@ -22,18 +31,22 @@
 //!
 //! **Why the defaults break a founder about even.** The founder plant
 //! (`Genome::seed_plant`) is a 2-particle root, a 3-particle stem and a
-//! 1-particle leaf: 6 particles. At `light_gain` 0.012, `water_gain` 0.004
-//! and `upkeep_per_particle` 0.003 it gains
-//! `0.012 * light + 0.008 * wet - 0.018` per step, so it breaks even in open
-//! light with a wet root (wetness about 0.75, which saturated soil reaches)
-//! and loses about 0.006 with a dry one or in shade. Upkeep is the one
-//! constant this chunk moved off the brief's figure, and the run is why: at
-//! 0.001 open light alone pays for the whole body, nothing ever starves, and
-//! a 3000-step run at `--founders 64` records 3 deaths against 99 births and
-//! fills every organism slot by step 400 — a population with no selection in
-//! it. At 0.003 the same run records 78 deaths against 68 births, ends at 93
-//! of 256 slots, and 45 of the 64 founder lineages are already extinct
-//! (`docs/perf.md`).
+//! 1-particle leaf. Fully grown, at `limb_segment_length` 0.15 and the
+//! `--thickness-*` defaults (root 0.04, stem 0.05, leaf 0.03), its volume is
+//! `2*0.15*0.04^2 + 3*0.15*0.05^2 + 1*0.15*0.03^2` = 0.00174, so at
+//! `upkeep_per_volume` 10 it costs 0.0174 a step — the 0.018 six particles
+//! cost at the `upkeep_per_particle` 0.003 this replaced, which is what that
+//! default was chosen to reproduce. At `light_gain` 0.012 and `water_gain`
+//! 0.004 it gains `0.012 * light + 0.008 * wet - 0.0174` per step, so it
+//! breaks even in open light with a wet root (wetness about 0.75, which
+//! saturated soil reaches) and loses about 0.006 with a dry one or in shade.
+//! The per-particle figure was the one constant the previous chunk moved off
+//! the brief's, and the run is why: at 0.001 open light alone paid for the
+//! whole body, nothing ever starved, and a 3000-step run at `--founders 64`
+//! recorded 3 deaths against 99 births and filled every organism slot by step
+//! 400 — a population with no selection in it. At 0.003 the same run recorded
+//! 78 deaths against 68 births, ended at 93 of 256 slots, and 45 of the 64
+//! founder lineages were already extinct (`docs/perf.md`).
 //!
 //! A seedling that has germinated but not yet grown a leaf is pure upkeep
 //! plus whatever its root drinks, so it lives about as long as its
@@ -51,13 +64,13 @@ use cubecl_runtime::server::Handle;
 
 use super::light::{LightGrid, soil_cell_index, soil_cell_index_ref};
 use crate::SimParams;
-use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
+use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE, limb_volume};
 use crate::genome::PartType;
 use crate::genome::population::{LimbArgs, Population, limb_args};
 use crate::kernels::constraints::{limb_len, particle_at};
 use crate::kernels::{
-  CUBE_DIM, Cfg, P_LIFE_INTERVAL, P_LIGHT_GAIN, P_SOIL_SIZE, P_TARGET_DENSITY,
-  P_UPKEEP_PER_PARTICLE, P_WATER_GAIN, PARAM_COUNT, cube_count, whole,
+  CUBE_DIM, Cfg, P_LIFE_INTERVAL, P_LIGHT_GAIN, P_LIMB_SEGMENT_LENGTH, P_SOIL_SIZE,
+  P_TARGET_DENSITY, P_UPKEEP_PER_VOLUME, P_WATER_GAIN, PARAM_COUNT, cube_count, whole,
 };
 use crate::particles::{SphDevice, SphHost};
 
@@ -72,6 +85,7 @@ pub fn organism_energy(
   density: &[f32],
   limbs: &LimbArgs,
   map: &[u32],
+  grown: &[f32],
   alive: &[u32],
   energy: &mut [f32],
   light: &[f32],
@@ -96,17 +110,33 @@ pub fn organism_energy(
   let target_density = params[P_TARGET_DENSITY as usize];
   let light_gain = params[P_LIGHT_GAIN as usize];
   let water_gain = params[P_WATER_GAIN as usize];
+  let segment_length = params[P_LIMB_SEGMENT_LENGTH as usize];
 
   let mut gain = 0.0f32;
-  let mut particles = 0u32;
+  let mut volume = 0.0f32;
   for l in 0..ml {
     let n = limb_len(map, pbase, l, body);
-    let part_type = limbs.part_type[(base + l) as usize];
+    let record = (base + l) as usize;
+    let part_type = limbs.part_type[record];
+
+    // `crate::bodies::limb_volume`, inlined: the record's length capped as
+    // growth caps it, the thickness from the progress, the volume from both.
+    if part_type != 0u32 {
+      let mut target = limbs.length[record] as f32;
+      if target > comptime!(mp as f32) {
+        target = comptime!(mp as f32);
+      }
+      if target > 0.0f32 {
+        let progress = f32::clamp(grown[record] / target, 0.0f32, 1.0f32);
+        let thickness = limbs.target_thickness[record] * f32::sqrt(progress);
+        volume += grown[record] * segment_length * thickness * thickness;
+      }
+    }
+
     for i in 0..n {
       let id = particle_at(map, pbase, l, i, body);
       if id != NO_PARTICLE {
         let id = id as usize;
-        particles += 1u32;
         if part_type == TYPE_LEAF {
           let cell = soil_cell_index(ppos[2 * id], ppos[2 * id + 1], soil_size, world);
           gain += light_gain * light[cell as usize];
@@ -120,7 +150,7 @@ pub fn organism_energy(
     }
   }
 
-  let upkeep = params[P_UPKEEP_PER_PARTICLE as usize] * particles as f32;
+  let upkeep = params[P_UPKEEP_PER_VOLUME as usize] * volume;
   energy[o as usize] += (gain - upkeep) * params[P_LIFE_INTERVAL as usize];
 }
 
@@ -147,6 +177,7 @@ pub fn launch<R: Runtime>(
     whole(&sph.density, n),
     limb_args(&pop.device.limbs),
     whole(&bodies.device.limb_particles, body.particle_map_len()),
+    whole(&bodies.device.grown, body.limb_count()),
     whole(&pop.device.organisms.alive, body.max_organisms as usize),
     whole(&pop.device.organisms.energy, body.max_organisms as usize),
     whole(&light.light, light.cells),
@@ -176,13 +207,20 @@ pub fn organism_energy_ref(
       continue;
     }
     let mut gain = 0.0f32;
-    let mut count = 0u32;
+    let mut volume = 0.0f32;
     for l in 0..ml {
       let record = o * ml + l;
       let part_type = pop.limbs.part_type[record];
       if !part_type.is_present() {
         continue;
       }
+      let target = (pop.limbs.length[record] as usize).min(cfg.max_particles_per_limb as usize);
+      volume += limb_volume(
+        params.limb_segment_length,
+        pop.limbs.target_thickness[record],
+        target as f32,
+        bodies.grown[cfg.limb_index(o, l)],
+      );
       let n = bodies.limb_len(o, l);
       for i in 0..n {
         let id = bodies.particle(o, l, i);
@@ -190,7 +228,6 @@ pub fn organism_energy_ref(
           continue;
         }
         let id = id as usize;
-        count += 1;
         match part_type {
           PartType::Leaf => {
             let cell = soil_cell_index_ref(particles.ppos[id], geom.soil_cell_size, &world);
@@ -206,7 +243,7 @@ pub fn organism_energy_ref(
         }
       }
     }
-    let upkeep = params.upkeep_per_particle * count as f32;
+    let upkeep = params.upkeep_per_volume * volume;
     energy[o] += (gain - upkeep) * params.life_interval as f32;
   }
   energy

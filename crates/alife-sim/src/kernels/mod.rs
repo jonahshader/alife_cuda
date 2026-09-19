@@ -114,7 +114,7 @@ kernel_params! {
     "" P_LIGHT_SOIL_OPACITY = |p, _g| p.light_soil_opacity;
     "" P_LIGHT_GAIN = |p, _g| p.light_gain;
     "" P_WATER_GAIN = |p, _g| p.water_gain;
-    "" P_UPKEEP_PER_PARTICLE = |p, _g| p.upkeep_per_particle;
+    "" P_UPKEEP_PER_VOLUME = |p, _g| p.upkeep_per_volume;
     "" P_SEED_THRESHOLD = |p, _g| p.seed_threshold;
 }
 

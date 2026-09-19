@@ -427,6 +427,11 @@ impl<R: Runtime> Sim<R> {
 /// share above a limb's own `growth_rate` is capped there and redistributed
 /// once over the limbs that were not capped.
 ///
+/// A share buys **volume** at `volume_per_energy`, and the limb's new length
+/// is solved from the volume it now has (`bodies::grown_from_volume`): a
+/// thick limb is dear per segment and every limb's later segments cost more
+/// than its first, because a limb thickens as it lengthens.
+///
 /// What is charged is what was converted: a share the parent clamp, the
 /// record's length or a second-order rate cap cut short is not spent, so no
 /// energy vanishes into growth that never happened.
@@ -527,7 +532,15 @@ fn allocate_growth(
   let mut charged = 0.0f32;
   for (i, limb) in growing.iter().enumerate() {
     let target = full(*limb);
-    let mut length = grown(*limb) + share[i] * params.length_per_energy;
+    let thickness = pop.limbs.target_thickness[pop.limb_index(organism, *limb)];
+    let seg = params.limb_segment_length;
+    // The share buys volume, and the length follows from it: volume is
+    // quadratic in the length, so the same energy buys a thin limb more
+    // length than a thick one and a limb's later segments cost more than its
+    // first (`bodies::limb_volume`).
+    let volume = bodies::limb_volume(seg, thickness, target, grown(*limb))
+      + share[i] * params.volume_per_energy;
+    let mut length = bodies::grown_from_volume(seg, thickness, target, volume);
     let parent = pop.limbs.parent[pop.limb_index(organism, *limb)] as usize;
     if parent != *limb {
       // A child ends the tick no further along than its parent stood at the
@@ -538,7 +551,11 @@ fn allocate_growth(
     if length <= grown(*limb) {
       continue;
     }
-    charged += (length - grown(*limb)) / params.length_per_energy;
+    // What was converted is what is charged, so a share the clamps cut short
+    // is not spent: the volume actually gained, back at the same rate.
+    charged += (bodies::limb_volume(seg, thickness, target, length)
+      - bodies::limb_volume(seg, thickness, target, grown(*limb)))
+      / params.volume_per_energy;
     lengthened.push((cfg.limb_index(organism, *limb), length));
     let held = bodies.limb_len(organism, *limb);
     let wants = length.ceil() as usize;
@@ -584,10 +601,30 @@ mod tests {
       max_limbs: 4,
       max_particles_per_limb: 4,
       seed_cost: 1.0,
-      length_per_energy: 1.0,
+      // One unit of energy buys one unit of volume, and every limb is a unit
+      // thick over half-metre segments, so a limb's volume is
+      // `grown^2 / length` and the arithmetic below is readable.
+      volume_per_energy: 1.0,
+      limb_segment_length: 0.5,
+      thickness_root: 1.0,
+      thickness_stem: 1.0,
+      thickness_leaf: 1.0,
       growth_rate: 0.1,
       ..SimParams::default()
     }
+  }
+
+  /// A limb's volume at a given length, from the record and the params the
+  /// test set up.
+  fn volume(pop: &Population, params: &SimParams, limb: usize, grown: f32) -> f32 {
+    let record = pop.limb_index(0, limb);
+    let target = (pop.limbs.length[record] as usize).min(params.max_particles_per_limb as usize);
+    crate::bodies::limb_volume(
+      params.limb_segment_length,
+      pop.limbs.target_thickness[record],
+      target as f32,
+      grown,
+    )
   }
 
   /// The founder plant — a 2-particle root, a 3-particle stem, a 1-particle
@@ -645,10 +682,11 @@ mod tests {
   /// share hands the excess back to the others.
   #[test]
   fn a_capped_share_is_redistributed_over_the_limbs_with_room() {
-    let mut params = params();
-    params.length_per_energy = 1.0;
+    let params = params();
     let (mut pop, mut bodies) = seedling(&params);
-    bodies.grown[0] = 1.0;
+    // Three quarters of the way along, so the stem's own clamp against it is
+    // not what this measures.
+    bodies.grown[0] = 1.5;
     // The root is capped low and biased high: its share overflows and the
     // stem takes the remainder.
     pop.limbs.growth_rate[0] = 0.01;
@@ -657,10 +695,14 @@ mod tests {
 
     let (spend, lengths, _) = allocate(&pop, &bodies, &params, 1.5);
     assert!((spend - 0.5).abs() < 1e-6, "{spend}");
-    let root = lengths.iter().find(|(r, _)| *r == 0).unwrap().1 - 1.0;
+    // A share buys volume, so that is where the split shows: the root took
+    // its cap and the stem the rest.
+    let root = lengths.iter().find(|(r, _)| *r == 0).unwrap().1;
     let stem = lengths.iter().find(|(r, _)| *r == 1).unwrap().1;
-    assert!((root - 0.01).abs() < 1e-6, "the root took {root}");
-    assert!((stem - 0.49).abs() < 1e-5, "the stem took {stem}");
+    let root_gain = volume(&pop, &params, 0, root) - volume(&pop, &params, 0, 1.5);
+    let stem_gain = volume(&pop, &params, 1, stem);
+    assert!((root_gain - 0.01).abs() < 1e-6, "the root took {root_gain}");
+    assert!((stem_gain - 0.49).abs() < 1e-5, "the stem took {stem_gain}");
   }
 
   /// A child ends the tick no further along than its parent, whatever it was
@@ -668,7 +710,7 @@ mod tests {
   #[test]
   fn a_child_never_outgrows_its_parent() {
     let mut params = params();
-    params.length_per_energy = 100.0;
+    params.volume_per_energy = 100.0;
     let (mut pop, mut bodies) = seedling(&params);
     // The root a quarter of the way along, the stem behind it, and the stem
     // biased hard enough to take almost everything.
@@ -681,9 +723,12 @@ mod tests {
     // three segments.
     assert!((stem - 0.75).abs() < 1e-5, "the stem reached {stem}");
     // And what the clamp cut off was not paid for: the charge is exactly
-    // the length the two limbs gained, at the conversion rate.
+    // the volume the two limbs gained, at the conversion rate.
     let root = lengths.iter().find(|(r, _)| *r == 0).unwrap().1;
-    let converted = ((stem - 0.0) + (root - 0.5)) / params.length_per_energy;
+    let converted = (volume(&pop, &params, 1, stem) - volume(&pop, &params, 1, 0.0)
+      + volume(&pop, &params, 0, root)
+      - volume(&pop, &params, 0, 0.5))
+      / params.volume_per_energy;
     assert!(
       (charged - converted).abs() < 1e-6,
       "charged {charged} for {converted}"
@@ -698,8 +743,7 @@ mod tests {
   /// one, growth is the rest length lengthening and nothing else.
   #[test]
   fn a_particle_is_claimed_when_the_length_crosses_a_segment() {
-    let mut params = params();
-    params.length_per_energy = 1.0;
+    let params = params();
     let (mut pop, mut bodies) = seedling(&params);
     // The root alone, so the whole spend lands on one limb.
     pop.limbs.part_type[1] = crate::genome::PartType::Absent;
@@ -707,10 +751,14 @@ mod tests {
     bodies.grown[0] = 0.5;
     bodies.limb_particles[0] = 7; // the root holds its first particle
 
-    // 0.5 -> 0.55: still inside the first segment.
+    // A 0.05 share of volume, which is not a whole segment's worth: still
+    // inside the first one, so nothing is owed.
     let (_, lengths, requests) = allocate(&pop, &bodies, &params, 1.05);
     assert_eq!(lengths.len(), 1);
-    assert!((lengths[0].1 - 0.55).abs() < 1e-6, "{:?}", lengths[0]);
+    let grown = lengths[0].1;
+    assert!((0.5..1.0).contains(&grown), "{grown}");
+    let gained = volume(&pop, &params, 0, grown) - volume(&pop, &params, 0, 0.5);
+    assert!((gained - 0.05).abs() < 1e-6, "{gained}");
     assert!(requests.is_empty());
 
     // Past 1: the second particle is owed.

@@ -40,6 +40,48 @@ define_soa! {
     }
 }
 
+/// A limb's live thickness: its `target_thickness` scaled by the square root
+/// of its progress, so it thickens as it lengthens (`docs/organism.md`,
+/// *Growth*). `target` is the record's length capped at
+/// `max_particles_per_limb`, and a limb with nowhere to grow has no
+/// thickness.
+pub fn limb_thickness(target_thickness: f32, target: f32, grown: f32) -> f32 {
+  if target <= 0.0 {
+    return 0.0;
+  }
+  target_thickness * (grown / target).clamp(0.0, 1.0).sqrt()
+}
+
+/// A limb's volume: `grown * limb_segment_length * thickness^2`.
+///
+/// With the thickness tied to `sqrt(grown / target)` this is
+/// `segment_length * target_thickness^2 * grown^2 / target`, quadratic in
+/// `grown` — which is what lets [`grown_from_volume`] invert it in closed
+/// form. It is what upkeep is charged on and what growth buys
+/// (`docs/organism.md`, *Growth*).
+pub fn limb_volume(segment_length: f32, target_thickness: f32, target: f32, grown: f32) -> f32 {
+  let thickness = limb_thickness(target_thickness, target, grown);
+  grown * segment_length * thickness * thickness
+}
+
+/// The length a volume buys: [`limb_volume`] inverted.
+///
+/// Zero when the limb has no volume to buy with — no length to grow into, or
+/// no thickness to grow at, which the thickness floor and the params
+/// validator between them keep out of a live genome.
+pub fn grown_from_volume(
+  segment_length: f32,
+  target_thickness: f32,
+  target: f32,
+  volume: f32,
+) -> f32 {
+  let quadratic = segment_length * target_thickness * target_thickness / target;
+  if target <= 0.0 || quadratic <= 0.0 {
+    return 0.0;
+  }
+  (volume / quadratic).max(0.0).sqrt()
+}
+
 /// An entry of [`BodyState::limb_particles`] that holds no particle: the limb
 /// is absent, or has not grown that far.
 pub const NO_PARTICLE: u32 = u32::MAX;
@@ -962,6 +1004,37 @@ mod tests {
       sim.bodies().anchors,
       "a failed move touched nothing"
     );
+  }
+
+  /// The three volume rules in one: a limb at full length is at its target
+  /// thickness, volume is quadratic in the length, and the length solves back
+  /// out of a volume exactly.
+  #[test]
+  fn volume_follows_the_length_squared_and_inverts() {
+    let (seg, target_thickness, target) = (0.15f32, 0.04f32, 4.0f32);
+
+    assert_eq!(limb_thickness(target_thickness, target, target), 0.04);
+    assert_eq!(limb_thickness(target_thickness, target, 0.0), 0.0);
+    // A quarter of the way along is half the thickness: `sqrt(f)`.
+    assert!((limb_thickness(target_thickness, target, 1.0) - 0.02).abs() < 1e-7);
+
+    let full = limb_volume(seg, target_thickness, target, target);
+    assert!((full - target * seg * target_thickness * target_thickness).abs() < 1e-9);
+    // Half the length is a quarter of the volume.
+    let half = limb_volume(seg, target_thickness, target, 0.5 * target);
+    assert!((half - 0.25 * full).abs() < 1e-9, "{half} against {full}");
+
+    for grown in [0.0f32, 0.3, 1.0, 2.5, 4.0] {
+      let volume = limb_volume(seg, target_thickness, target, grown);
+      let back = grown_from_volume(seg, target_thickness, target, volume);
+      assert!((back - grown).abs() < 1e-5, "{grown} came back as {back}");
+    }
+
+    // Nothing to grow into, or nothing to grow at: no volume either way, and
+    // no division by it.
+    assert_eq!(limb_volume(seg, target_thickness, 0.0, 2.0), 0.0);
+    assert_eq!(grown_from_volume(seg, target_thickness, 0.0, 1.0), 0.0);
+    assert_eq!(grown_from_volume(seg, 0.0, target, 1.0), 0.0);
   }
 
   #[test]

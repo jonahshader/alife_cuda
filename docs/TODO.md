@@ -19,12 +19,12 @@ Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
   energy-balance question as the `--column-top` band below and wants
   answering with it: what a root earns, what a seed germinates with, or
   whether the growth reserve is `seed_cost` at all. Changing the growth
-  constants does not touch it — `--length-per-energy` 2 through 16 is the
-  same run.
-- **Growth 2 — thickness and volume.** `target_thickness` per record,
-  thickness from progress, volume-priced growth and upkeep
-  (`upkeep_per_volume` replaces `upkeep_per_particle`), segments drawn at
-  thickness.
+  constants does not touch it — the conversion rate, then
+  `--length-per-energy` 2 through 16, was the same run.
+- **Growth 2 — thickness and volume, what is left of it.** The genome, the
+  volume-priced growth and the volume upkeep have landed; the renderer
+  still draws every segment at the particle radius rather than at its
+  limb's thickness.
 - **Growth 3 — breaking.** Joint angular error over the interval in the
   packed life buffer; a limb past its thickness-scaled threshold sheds
   itself and its descendants as organic matter and regrows from zero.

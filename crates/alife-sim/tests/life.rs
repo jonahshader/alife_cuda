@@ -40,7 +40,7 @@ fn params() -> SimParams {
     // in the full world (`docs/perf.md`); what this checks is the mechanism,
     // and eight founders in an 8 m world are too small a sample to survive
     // them.
-    upkeep_per_particle: 0.001,
+    upkeep_per_volume: 3.0,
     seed_threshold: 1.0,
     seed_cost: 0.5,
     ..SimParams::default()
@@ -50,6 +50,16 @@ fn params() -> SimParams {
 const FOUNDERS: usize = 8;
 
 fn run(kind: RuntimeKind, params: SimParams, steps: usize) -> AnySim {
+  run_watching_growth(kind, params, steps).0
+}
+
+/// Step a fresh world, and say whether any limb was ever *part way* into a
+/// segment.
+///
+/// Growth is continuous, but a limb that has reached its record's length
+/// stands on a whole number of segments again, so the property has to be
+/// watched over the run rather than read off the end of it.
+fn run_watching_growth(kind: RuntimeKind, params: SimParams, steps: usize) -> (AnySim, bool) {
   let mut sim = AnySim::new(
     kind,
     params,
@@ -59,11 +69,15 @@ fn run(kind: RuntimeKind, params: SimParams, steps: usize) -> AnySim {
   )
   .expect("building the sim");
   assert_eq!(sim.spawn_founders(FOUNDERS), FOUNDERS);
+  let mut part_way = false;
   for _ in 0..steps {
     sim.step();
+    let bodies = sim.bodies();
+    part_way |=
+      (0..bodies.cfg.limb_count()).any(|i| bodies.grown[i] > 0.0 && bodies.grown[i].fract() != 0.0);
   }
   sim.sync();
-  sim
+  (sim, part_way)
 }
 
 /// Every invariant the bookkeeping has to keep, whatever the population did.
@@ -197,7 +211,7 @@ fn a_population_turns_over_on_its_own() {
     let name = kind.name();
     // Long enough for founders to bank `seed_threshold`, seed, and for those
     // seeds to land and germinate.
-    let sim = run(kind, params(), 800);
+    let (sim, grew_part_way) = run_watching_growth(kind, params(), 800);
     check_consistent(&sim, name);
 
     let counters = sim.counters();
@@ -216,16 +230,11 @@ fn a_population_turns_over_on_its_own() {
         .any(|(g, a)| *a == 1 && *g >= 1),
       "{name}: no child is alive, so nothing descended from a founder"
     );
-    // Growth is continuous: something in the population is part way into a
-    // segment rather than standing at a whole number of them.
-    let bodies = sim.bodies();
-    let cfg = bodies.cfg;
+    // Growth is continuous: at some point in the run a limb was part way
+    // into a segment rather than standing at a whole number of them.
     assert!(
-      (0..cfg.limb_count()).any(|i| {
-        let grown = bodies.grown[i];
-        grown > 0.0 && grown.fract() != 0.0
-      }),
-      "{name}: every limb is a whole number of segments long, so nothing grew"
+      grew_part_way,
+      "{name}: every limb was always a whole number of segments long, so nothing grew"
     );
 
     // A child's lineage is its parent's, and a founder's is its own slot.

@@ -228,10 +228,10 @@ sim_params! {
         "Energy a leaf particle gains per step at full light";
     water_gain: f32 = 0.004, "life.water_gain", "water-gain",
         "Energy a root particle gains per step per unit of wetness";
-    upkeep_per_particle: f32 = 0.003, "life.upkeep_per_particle", "upkeep-per-particle",
-        "Energy a body particle costs its organism per step";
-    length_per_energy: f32 = 2.0, "life.length_per_energy", "length-per-energy",
-        "Segments of limb one unit of growth energy buys";
+    upkeep_per_volume: f32 = 10.0, "life.upkeep_per_volume", "upkeep-per-volume",
+        "Energy a unit of limb volume costs its organism per step";
+    volume_per_energy: f32 = 0.0006, "life.volume_per_energy", "volume-per-energy",
+        "Limb volume one unit of growth energy buys";
     seed_threshold: f32 = 2.0, "life.seed_threshold", "seed-threshold",
         "Energy above which an organism emits a seed";
     seed_cost: f32 = 1.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
@@ -445,9 +445,9 @@ impl SimParams {
       ("light-soil-opacity", self.light_soil_opacity),
       ("light-gain", self.light_gain),
       ("water-gain", self.water_gain),
-      ("upkeep-per-particle", self.upkeep_per_particle),
+      ("upkeep-per-volume", self.upkeep_per_volume),
       ("growth-rate", self.growth_rate),
-      ("length-per-energy", self.length_per_energy),
+      ("volume-per-energy", self.volume_per_energy),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),

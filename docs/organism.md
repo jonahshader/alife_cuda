@@ -144,14 +144,16 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   `light_gain` times the light in their cell; roots earn `water_gain` times
   `max(0, water − 1)`, where `water` is the brain sensor's own quantity
   (`density / target_density`, which reads exactly 1 in air because of the
-  soil's solid-density offset, so the `− 1` is the wetness). Every particle
-  costs `upkeep_per_particle`. Energy below zero is death: every particle
+  soil's solid-density offset, so the `− 1` is the wetness). Upkeep is
+  `upkeep_per_volume` times the volume of the organism's limbs, so what a
+  body costs is how much of it there is rather than how many particles it
+  is discretized into (*Growth*). Energy below zero is death: every particle
   goes back to the free pool and leaves `organic_matter_per_particle` in
   the soil cell it was standing in.
 - **Growth.** Continuous, every limb at once, the organism's growth spend
-  split across its growing limbs by a softmax over per-limb biases; a child
-  never outgrows its parent in progress. The whole model is the next
-  section, *Growth*.
+  split across its growing limbs by a softmax over per-limb biases and
+  spent on volume; a child never outgrows its parent in progress. The whole
+  model is the next section, *Growth*.
 - **Reproduction.** Energy above `seed_threshold` is spent on a seed
   particle carrying a mutated copy of the genome. The seed is a particle
   with no limb, so no constraint holds it: it falls, water carries it, and
@@ -171,7 +173,8 @@ genome still says what the body is, and the brain only biases how fast
 each part gets there. Four chunks, in build order; `TODO.md` carries the
 ones still open.
 
-**1. Continuous length and allocation.** Built.
+**1. Continuous length and allocation, and 2. thickness and volume.** Both
+built; the two together are the model below.
 
 - *State per `(organism, limb)`:* `grown: f32`, the limb's current length
   in segments, `0 ≤ grown ≤ length` (the record's `length` is now the
@@ -188,12 +191,23 @@ ones still open.
   is state rather than genome, and the two are one fact: a limb holds
   `ceil(grown)` particles, so the map's leading run is what every kernel
   reads as the limb's length rather than the record's.
-- *Genome per limb record*, both mutable: `growth_bias: f32` (softmax
-  logit, founders 0) and `growth_rate: f32` (energy the limb can absorb
-  per life tick, founders and structural adds at the `growth_rate` param).
-  Both get a small Gaussian of their own, `growth_sigma`, as `grow_angle`
-  gets `angle_sigma`, and the rate is floored at zero; the population file
-  format bumps its version and reads the old one with the founder values.
+- *Genome per limb record*, all three mutable: `growth_bias: f32` (softmax
+  logit, founders 0), `growth_rate: f32` (energy the limb can absorb
+  per life tick, founders and structural adds at the `growth_rate` param)
+  and `target_thickness: f32` (the thickness at full length; founders and
+  structural adds at the `thickness_root` / `thickness_stem` /
+  `thickness_leaf` param of the record's part type, a seed record sharing
+  the leaf's). All three get a small Gaussian of their own, `growth_sigma`,
+  as `grow_angle` gets `angle_sigma`; the rate is floored at zero and the
+  thickness strictly above it, because volume divides by the thickness
+  squared. The population file format bumps its version per gene added and
+  reads an older one with the founder values.
+- *Thickness is not state:* `thickness = target_thickness × sqrt(f)`, the
+  C++ rule, so a limb thickens as it lengthens, and *volume* is `V = grown ×
+  limb_segment_length × thickness²` — which with that rule is
+  `limb_segment_length × target_thickness² × grown² / length`, quadratic in
+  `grown` and therefore invertible in closed form
+  (`bodies::grown_from_volume`). Thickness does not enter the SPH coupling.
 - *Growing:* a present limb with `f < 1`, and — unless it is the root —
   `f < f_parent`. A child's increment is clamped so it ends the tick at
   `f ≤ f_parent`. This is the whole parent-before-child rule; there is no
@@ -202,10 +216,17 @@ ones still open.
   over growing limbs)`. Shares are `spend × softmax(growth_bias + logit)`
   over the growing limbs, `logit` being 0 until chunk 4; a share above the
   limb's `growth_rate` is capped and the excess redistributed once, by the
-  same softmax, over the uncapped limbs. Energy converts at
-  `length_per_energy` segments per unit until chunk 2 replaces it with
-  volume. What was converted is charged — a share cut short by the parent
-  clamp or the record's length is not spent; `sprout_cost` is gone.
+  same softmax, over the uncapped limbs. A share buys *volume* at
+  `volume_per_energy`, and the limb's new `grown` is solved from `V + ΔV`,
+  so a thick limb is dear per segment and a limb's later segments cost more
+  than its first. What was converted is charged — a share cut short by the
+  parent clamp or the record's length is not spent; `sprout_cost` is gone.
+- *Upkeep* is `upkeep_per_volume × Σ V` over the organism's present limbs,
+  in place of a per-particle charge, so a tall thin plant is cheaper than a
+  tall thick one and a half-grown limb costs a quarter of what it will. A
+  seed in flight is in no limb, has no volume, and costs nothing beyond
+  `seed_cost` at emission. Gain stays per particle: what a leaf catches and
+  what a root drinks are sampled at particles.
 - *Particles* are claimed when `ceil(grown)` rises, placed at the
   predecessor plus the rest offset along the limb's direction, by the
   existing growth kernel over a list of `(organism, limb, first index,
@@ -213,17 +234,8 @@ ones still open.
   one particle in an ordinary tick and a whole limb for a founder. The
   sprout head is read by nothing until chunk 4.
 
-**2. Thickness and volume.** Genome per limb record: `target_thickness:
-f32` (mutable; founders from the `thickness` params per part type). A
-limb's thickness is not state: `thickness = target_thickness × sqrt(f)`,
-the C++ rule, so a limb thickens as it lengthens. Volume `V = grown ×
-limb_segment_length × thickness²`. Growth spend buys volume at
-`volume_per_energy`, and `grown` is solved from the new volume in closed
-form (with thickness tied to `sqrt(f)`, `V ∝ grown²`). Upkeep is
-`upkeep_per_volume × Σ V` over the organism's limbs in place of
-`upkeep_per_particle`; a seed in flight has no volume and costs what it
-costs at emission. The renderer draws a segment at its limb's thickness.
-Thickness does not enter the SPH coupling yet.
+The renderer draws each segment at its limb's thickness, and the body discs
+at the same half-width, so a joint stays round.
 
 **3. Breaking.** A base joint whose angular error against its rest angle
 exceeds `break_angle × clamp(thickness / break_thickness_ref, 0, 1)`
@@ -776,3 +788,19 @@ uploads them.
   one-segment roots too would starve the run at the shipped constants (the
   entry above) and would make `--founders` a different experiment from the
   one every measurement in `perf.md` was taken with.
+- 2026-09-19 — **The volume constants are the per-particle ones, re-expressed
+  for one founder.** A founder at full length is 2 root segments at
+  thickness 0.04, 3 stem at 0.05 and 1 leaf at 0.03 over
+  `limb_segment_length` 0.15: volume 0.00174. `upkeep_per_volume` 10 makes
+  that 0.0174 a step against the 0.018 the six particles cost at
+  `upkeep_per_particle` 0.003, and `volume_per_energy` 0.0006 makes the whole
+  body cost 2.9 energy to grow against the 3.0 it cost at
+  `length_per_energy` 2.0 — so the 64-founder run starts from where it was
+  and what changed is the *shape* of the two costs, not their scale. The
+  thicknesses themselves are the only genuinely new numbers: a stem thicker
+  than a root and a root thicker than a leaf, at a third of a segment's
+  length, which is what makes a plant read as a plant in the window. What
+  the change does move, deliberately, is that a growing limb is cheaper than
+  a grown one (volume goes as `grown²`) and that a seedling's one root
+  segment, half way along a two-segment root, costs 0.0012 a step where one
+  particle cost 0.003.
