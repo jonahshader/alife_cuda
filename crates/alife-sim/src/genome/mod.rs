@@ -13,6 +13,7 @@ pub mod mutate;
 pub mod population;
 pub mod seed;
 pub mod shape;
+pub mod slots;
 
 pub use population::{
   Genome, LimbDevice, LimbHost, LimbRecord, OrganismDevice, OrganismHost, PartType, Population,
