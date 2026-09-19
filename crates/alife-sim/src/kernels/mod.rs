@@ -16,6 +16,7 @@ pub mod constraints;
 pub mod density;
 pub mod evap;
 pub mod grid;
+pub mod limb_geometry;
 pub mod motion;
 pub mod scan;
 pub mod soil_sample;
