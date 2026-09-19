@@ -102,9 +102,10 @@ A Perceiver-IO-style network over limb tokens, per organism.
   (decisions, 2026-09-19).
 - **Input cross-attention** from latents to tokens, a fixed-size **trunk**
   over the latents, and **output cross-attention** from tokens to latents.
-- **Output heads per limb:** actuator commands (target joint angle, later
-  more), and a **sprout head** that decides whether to grow a child limb of
-  which type. Development and control share the trunk.
+- **Output heads per limb:** actuator commands (a nudge on the base joint's
+  target angle, later more), and a **growth head**, one logit that biases how
+  much of the tick's growth this limb gets. Development and control share the
+  trunk.
 - **Held in reserve**, added only when evolved bodies plateau in a way that
   looks like the missing piece: an attention bias by tree distance (one
   scalar per hop count, Graphormer-style) to restore a locality prior, and a
@@ -234,8 +235,7 @@ built; the two together are the model below.
   predecessor plus the rest offset along the limb's direction, by the
   existing growth kernel over a list of `(organism, limb, first index,
   count)` — a *suffix* of a limb's chain rather than a whole limb, which is
-  one particle in an ordinary tick and a whole limb for a founder. The
-  sprout head is read by nothing until chunk 4.
+  one particle in an ordinary tick and a whole limb for a founder.
 
 The renderer draws each segment at its limb's thickness, and the body discs
 at the same half-width, so a joint stays round.
@@ -385,7 +385,7 @@ transplant and its no-transplant twin — into `runs/soil/`, and
 ## Milestones
 
 1. **Plants.** Anchored organisms with root, stem, leaf, and seed types; the
-   sprout head drives growth; energy, death, reproduction; evolutionary
+   growth head biases growth; energy, death, reproduction; evolutionary
    metrics; the soil-specialization experiment with its controls. This
    exercises every piece above except actuators.
 2. **Mobile creatures.** Add the actuated limb, a mouth, and contact and
@@ -510,11 +510,11 @@ range so both chunks index the same tensor:
 | `mlp_w1`, `mlp_b1`, `mlp_w2`, `mlp_b2` | `d_latent × trunk_hidden`, `trunk_hidden`, `trunk_hidden × d_latent`, `d_latent` |
 | `gate_w`, `gate_b` | `d_latent × d_latent`, `d_latent` |
 | `out_q`, `out_k`, `out_v`, `out_o` | `d_token × d_latent`, `d_latent × d_latent`, `d_latent × d_latent`, `d_latent × d_token` |
-| `head_sprout`, `sprout_b` | `d_token × n_types`, `n_types` (logits over child type, 0 = none) |
-| `head_actuator`, `actuator_b` | `d_token × 2`, `2` (target angle, reserved) |
+| `head_growth`, `growth_b` | `d_token × 1`, `1` (the growth logit) |
+| `head_actuator`, `actuator_b` | `d_token × 2`, `2` (joint nudge, reserved) |
 | `latent_init` | `n_latents × d_latent` |
 
-18,890 parameters at the defaults. Initialization is Gaussian with sigma
+18,659 parameters at the defaults. Initialization is Gaussian with sigma
 `1/sqrt(fan_in)` per slice, where a weight slice is stored `[input dim ×
 output dim]` so its fan-in is its row count; biases are zero and
 `latent_init` is sigma 1. One tick of the brain: tokens from limb
@@ -523,8 +523,8 @@ self-attention; MLP; gated update of the persistent latents, scaled to unit
 RMS; output cross-attention tokens→latents; heads per limb. Single-head
 attention, fp32 accumulate, one pass per tick. The trunk's activation is
 SiLU. Token features are built inline in the token kernel rather than
-materialized, and the heads are `[max_organisms × max_limbs × (n_types +
-2)]` — sprout logits then actuator outputs — zeroed for an absent limb or a
+materialized, and the heads are `[max_organisms × max_limbs × 3]` — the
+growth logit, then the two actuator outputs — zeroed for an absent limb or a
 free slot.
 
 The pass is **22 launches** (`brain::forward::LAUNCHES`), because kernels
@@ -711,20 +711,23 @@ uploads them.
   ppos_before_the_step) / dt` — the position-based-dynamics velocity —
   equals `vel + (ppos_projected - ppos_after_move) / dt`. Taking only the
   second term would throw a body's inertia away every step.
-- 2026-09-19 — **The sprout head decides *when* a genome's limb records
-  grow, not *what* they are.** The spec says the head "decides whether to
-  grow a child limb of which type", and the type logits exist; they are
-  read as a gate only — argmax against index 0, "none" — and the limb that
-  grows is the next ungrown child record already in the genome, by child
-  slot. Letting the head choose the type would make the body a product of
+- 2026-09-19 — **The growth head decides *how fast* a genome's limb records
+  grow, not *what* they are.** The spec said the head "decides whether to
+  grow a child limb of which type", and the type logits existed for one
+  chunk; they were read as a gate only — argmax against index 0, "none" —
+  and the limb that grew was the next ungrown child record already in the
+  genome, by child slot. Continuous growth deleted the gate and the type
+  logits with it: `head_growth` is one logit per limb, added to the record's
+  own `growth_bias` before the softmax that splits the tick's growth, so the
+  brain sets a limb's tempo relative to its siblings and nothing
+  else. Letting the head choose the type would make the body a product of
   the brain's runtime state rather than of the genome: the part type would
   stop being heritable, two siblings with one genome could grow different
   bodies, and `species_distance` — which is defined over the discrete
   section — would no longer describe anything an offspring inherits. That
   is Lamarckian development, and it takes the structural mutation operators
-  out of the loop they are there to close. The type logits stay in the
-  head's shape and stay informational; if evolved bodies ever plateau in a
-  way that looks like "the genome cannot express this limb", the thing to
+  out of the loop they are there to close. If evolved bodies ever plateau in
+  a way that looks like "the genome cannot express this limb", the thing to
   try is a richer discrete section, not a brain that overrides it.
 - 2026-09-19 — **An integer atomic is not the atomic the spec rules out.**
   The light grid's occluder count is an `atomicAdd` of 1 into a `u32` per

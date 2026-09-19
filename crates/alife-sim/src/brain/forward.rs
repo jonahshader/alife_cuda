@@ -4,7 +4,7 @@
 //! layout*): tokens; input cross-attention, latents attending to tokens; a
 //! self-attention and an MLP over the latents; the gated update that makes
 //! the latents persistent; output cross-attention, tokens attending to the
-//! updated latents; and a sprout head and an actuator head per limb. Single
+//! updated latents; and a growth head and an actuator head per limb. Single
 //! head throughout, fp32 accumulate, softmax with the row maximum subtracted.
 //!
 //! **Six kernels do the whole pass.** [`gemv`] is every projection — one
@@ -27,7 +27,10 @@
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
-use super::{BrainCfg, BrainDevice, HEAD_DIM, Weights, sigmoid, silu};
+use super::{
+  ACTUATOR_DIM, BrainCfg, BrainDevice, GROWTH_DIM, HEAD_ACTUATOR, HEAD_DIM, HEAD_GROWTH, Weights,
+  sigmoid, silu,
+};
 use crate::genome::Population;
 use crate::genome::shape::{BrainShape, IDENTITY_DIM, SENSOR_DIM};
 use crate::kernels::{CUBE_DIM, cube_count, whole};
@@ -331,12 +334,12 @@ pub fn latent_norm(gated: &[f32], latents: &mut [f32], alive: &[u32], #[comptime
   latents[t as usize] = gated[t as usize] * inv;
 }
 
-/// The two heads, one unit per output. The sprout logits come first, then the
+/// The two heads, one unit per output. The growth logit comes first, then the
 /// two actuator outputs, so a limb's outputs are `HEAD_DIM` contiguous
 /// floats.
 ///
 /// An absent limb and a free organism slot are written as zeros: whatever
-/// reads a sprout logit must not see the last organism that held the slot.
+/// reads a growth logit must not see the last organism that held the slot.
 #[cube(launch)]
 #[allow(clippy::too_many_arguments)]
 pub fn write_heads<W: Float>(
@@ -345,8 +348,8 @@ pub fn write_heads<W: Float>(
   part_type: &[u32],
   alive: &[u32],
   out: &mut [f32],
-  sprout_w_off: u32,
-  sprout_b_off: u32,
+  growth_w_off: u32,
+  growth_b_off: u32,
   act_w_off: u32,
   act_b_off: u32,
   #[comptime] cfg: BrainCfg,
@@ -367,18 +370,18 @@ pub fn write_heads<W: Float>(
 
   let row = o * comptime!(cfg.param_count);
   let dt = comptime!(cfg.d_token);
-  let nt = comptime!(cfg.n_types);
+  let ng = comptime!(GROWTH_DIM as u32);
   let zb = li * dt;
 
-  let mut wb = row + sprout_w_off;
-  let mut bb = row + sprout_b_off;
-  let mut cols = nt.runtime();
+  let mut wb = row + growth_w_off;
+  let mut bb = row + growth_b_off;
+  let mut cols = ng.runtime();
   let mut col = j;
-  if j >= nt {
+  if j >= ng {
     wb = row + act_w_off;
     bb = row + act_b_off;
-    cols = 2u32;
-    col = j - nt;
+    cols = comptime!(ACTUATOR_DIM as u32);
+    col = j - ng;
   }
 
   let mut acc = f32::cast_from(brain[(bb + col) as usize]);
@@ -866,8 +869,8 @@ fn launch_heads<R: Runtime>(
         whole(&pop.device.limbs.part_type, cfg.limbs()),
         whole(&pop.device.organisms.alive, cfg.max_organisms as usize),
         whole(&brain.heads, cfg.heads_len()),
-        shape.head_sprout().start as u32,
-        shape.sprout_b().start as u32,
+        shape.head_growth().start as u32,
+        shape.growth_b().start as u32,
         shape.head_actuator().start as u32,
         shape.actuator_b().start as u32,
         cfg,
@@ -899,7 +902,7 @@ pub struct OrganismInput<'a> {
 pub struct ForwardOutput {
   /// `max_limbs * d_token`.
   pub tokens: Vec<f32>,
-  /// `max_limbs * HEAD_DIM`: the sprout logits, then the actuator outputs.
+  /// `max_limbs * HEAD_DIM`: the growth logit, then the actuator outputs.
   pub heads: Vec<f32>,
 }
 
@@ -1098,33 +1101,32 @@ pub fn forward_ref(
   let z = matvec(&att, l, dl, dt, w(shape.out_o()), None);
 
   // The heads.
-  let sprout = matvec(
+  let growth = matvec(
     &z,
     l,
     dt,
-    shape.sprout_b().len(),
-    w(shape.head_sprout()),
-    Some(w(shape.sprout_b())),
+    GROWTH_DIM,
+    w(shape.head_growth()),
+    Some(w(shape.growth_b())),
   );
   let actuator = matvec(
     &z,
     l,
     dt,
-    2,
+    ACTUATOR_DIM,
     w(shape.head_actuator()),
     Some(w(shape.actuator_b())),
   );
-  let n_types = shape.sprout_b().len();
   let mut heads = vec![0.0f32; l * HEAD_DIM];
   for limb in 0..l {
     if !present[limb] {
       continue;
     }
-    for j in 0..n_types {
-      heads[limb * HEAD_DIM + j] = sprout[limb * n_types + j];
+    for j in 0..GROWTH_DIM {
+      heads[limb * HEAD_DIM + HEAD_GROWTH + j] = growth[limb * GROWTH_DIM + j];
     }
-    for j in 0..2 {
-      heads[limb * HEAD_DIM + n_types + j] = actuator[limb * 2 + j];
+    for j in 0..ACTUATOR_DIM {
+      heads[limb * HEAD_DIM + HEAD_ACTUATOR + j] = actuator[limb * ACTUATOR_DIM + j];
     }
   }
 
@@ -1230,7 +1232,7 @@ mod tests {
   }
 
   /// A free organism slot and an absent limb produce no head at all: the
-  /// life-cycle chunk reads sprout logits straight out of this buffer.
+  /// life tick reads growth logits straight out of this buffer.
   #[test]
   fn dead_slots_and_absent_limbs_have_zero_heads() {
     let h = OrganismHarness::new();

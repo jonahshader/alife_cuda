@@ -237,9 +237,9 @@ impl<R: Runtime> Sim<R> {
   }
 
   /// The brain's per-limb outputs, read back to the host:
-  /// `[max_organisms x max_limbs x HEAD_DIM]`, the sprout logits over child
-  /// types followed by the two actuator outputs. Zero for an absent limb or a
-  /// free organism slot.
+  /// `[max_organisms x max_limbs x HEAD_DIM]`, the growth logit followed by
+  /// the two actuator outputs. Zero for an absent limb or a free organism
+  /// slot.
   pub fn brain_outputs(&self) -> Vec<f32> {
     self.brain.read_heads(&self.client)
   }

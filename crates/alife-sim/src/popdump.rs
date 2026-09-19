@@ -11,7 +11,7 @@
 //!
 //! ```text
 //!   char[8]  magic "ALIFEPOP"
-//!   uint32   version (3)
+//!   uint32   version (4)
 //!   uint32   organism slots (max_organisms)
 //!   uint32   limb records per organism (max_limbs)
 //!   uint32   brain parameters per organism
@@ -37,9 +37,15 @@
 //! the arrays before them are a prefix of the current ones: version 1 stops
 //! before `growth_bias` and comes back with a founder's growth genes (bias 0,
 //! rate `--growth-rate`), version 2 stops before `target_thickness` and comes
-//! back with the `--thickness-*` param of each record's part type. The four
-//! shape words in the header are checked against the run's own before a byte
-//! of it is used.
+//! back with the `--thickness-*` param of each record's part type. Version 3
+//! is the last with the old brain row, whose `d_token x n_types` sprout head
+//! the growth head replaced (`docs/organism.md`, *Growth*, item 4): such a row
+//! is longer than this build's, so it is *reshaped* rather than refused — the
+//! weights on either side of the head come across as they stand and the growth
+//! head itself lands at zero, which is exactly the allocation the run it was
+//! written by made (the head was read by nothing). The four shape words in the
+//! header are checked against what the file's own version implies before a
+//! byte of it is used.
 //!
 //! **What a load restores, and what it does not.** The genomes, the lineage
 //! fields, the energies, the latent state and the anchors come back exactly as
@@ -60,11 +66,12 @@ use glam::Vec2;
 
 use crate::bodies::{self, BodyState};
 use crate::genome::population::{STAGE_PLANT, STAGE_SEED};
+use crate::genome::shape::{BrainShape, N_TYPES};
 use crate::genome::{LimbHost, OrganismHost, Population};
 use crate::sim::Sim;
 
 pub const MAGIC: &[u8; 8] = b"ALIFEPOP";
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// Limb SoA fields a file of version `v` carries: version 1 stopped before
 /// `growth_bias`, version 2 before `target_thickness`.
@@ -74,6 +81,50 @@ fn limb_fields(version: u32) -> usize {
     2 => LimbHost::FIELD_COUNT - 1,
     _ => LimbHost::FIELD_COUNT,
   }
+}
+
+/// Floats in one brain row of a file of version `v`.
+///
+/// Up to version 3 the heads were a `d_token x n_types` sprout head and its
+/// bias where this build has a `d_token x 1` growth head and its bias; every
+/// other slice is unchanged, and the sprout head sat exactly where the growth
+/// head sits now.
+fn brain_row(version: u32, shape: &BrainShape) -> usize {
+  if version >= 4 {
+    return shape.param_count();
+  }
+  let head = shape.head_growth().len() + shape.growth_b().len();
+  let sprout = (shape.d_token + 1) * N_TYPES;
+  shape.param_count() - head + sprout
+}
+
+/// Bring a file's brain rows into this build's layout.
+///
+/// A row of version 3 or older loses its sprout head — the types it chose
+/// between are not a thing the brain decides (`docs/organism.md`, decisions,
+/// 2026-09-19) — and gains a growth head of zeros. Zero is not a placeholder
+/// here: the run that wrote the file read no head at all, so its allocation
+/// was `softmax(growth_bias)`, which is what a zero logit gives back.
+fn reshape_brain(version: u32, shape: &BrainShape, brain: &[f32], organisms: usize) -> Vec<f32> {
+  if version >= 4 {
+    return brain.to_vec();
+  }
+  let new_row = shape.param_count();
+  let old_row = brain_row(version, shape);
+  // The head block is the only thing that moved, so everything before it and
+  // everything after it copies across verbatim.
+  let head = shape.head_growth().start;
+  let new_head = shape.head_growth().len() + shape.growth_b().len();
+  let old_head = (shape.d_token + 1) * N_TYPES;
+
+  let mut out = vec![0.0f32; organisms * new_row];
+  for o in 0..organisms {
+    let (src, dst) = (o * old_row, o * new_row);
+    out[dst..dst + head].copy_from_slice(&brain[src..src + head]);
+    out[dst + head + new_head..dst + new_row]
+      .copy_from_slice(&brain[src + head + old_head..src + old_row]);
+  }
+  out
 }
 
 /// Bytes before the first field array.
@@ -259,7 +310,7 @@ pub fn restore<R: Runtime>(
       (
         "brain parameters",
         snapshot.param_count,
-        pop.shape.param_count(),
+        brain_row(snapshot.version, &pop.shape),
       ),
       (
         "latent state floats",
@@ -285,6 +336,7 @@ pub fn restore<R: Runtime>(
   let params = *sim.params();
   {
     let access = sim.body_access();
+    let shape = access.pop.shape;
     access.pop.organisms = snapshot.organisms.clone();
     access.pop.limbs = snapshot.limbs.clone();
     // A file older than a growth gene predates it, and its records came back
@@ -307,7 +359,12 @@ pub fn restore<R: Runtime>(
         }
       }
     }
-    access.pop.brain = snapshot.brain.clone();
+    access.pop.brain = reshape_brain(
+      snapshot.version,
+      &shape,
+      &snapshot.brain,
+      snapshot.max_organisms,
+    );
     access.pop.latents = snapshot.latents.clone();
     access.bodies.anchors = snapshot.anchors.clone();
 
@@ -481,9 +538,17 @@ mod tests {
     assert_eq!(target.organism_count(), 3);
   }
 
+  /// Value the sprout block of an aged file's brain row is filled with: the
+  /// weights that head held are not in this build's row, so nothing a test
+  /// compares should ever be one of these.
+  fn sprout_filler(i: usize) -> f32 {
+    -100.0 - i as f32
+  }
+
   /// Write a population and age the file down to `version`: rewrite the
-  /// version word and drop the growth-gene arrays that version did not have,
-  /// which are the tail of the limb block.
+  /// version word, widen every brain row back to the sprout head that version
+  /// had, and drop the growth-gene arrays it did not have, which are the tail
+  /// of the limb block.
   fn aged_file(source: &Sim<CpuRuntime>, version: u32, tag: &str) -> PopSnapshot {
     let path = temp_path(tag);
     write(
@@ -495,10 +560,46 @@ mod tests {
     )
     .unwrap();
 
+    let pop = source.population();
+    let shape = pop.shape;
+    let slots = pop.max_organisms;
+    let records = slots * pop.max_limbs;
+    let organisms = slots * OrganismHost::RAW_BYTES;
+
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[8..12].copy_from_slice(&version.to_le_bytes());
-    let records = source.population().max_organisms * source.population().max_limbs;
-    let organisms = source.population().max_organisms * OrganismHost::RAW_BYTES;
+
+    // The brain block first, while the limb block is still whole: every
+    // version below 4 held a `d_token x n_types` sprout head where this build
+    // holds the growth head, so the row is that much longer and the header's
+    // parameter count says so.
+    let new_row = shape.param_count();
+    let old_row = brain_row(version, &shape);
+    let head = shape.head_growth().start;
+    let new_head = shape.head_growth().len() + shape.growth_b().len();
+    let old_head = old_row - new_row + new_head;
+    bytes[20..24].copy_from_slice(&(old_row as u32).to_le_bytes());
+
+    let brain_start = HEADER_BYTES as usize
+      + organisms
+      + records * LimbHost::raw_bytes_prefix(LimbHost::FIELD_COUNT);
+    let brain_end = brain_start + slots * new_row * 4;
+    let current: Vec<f32> = bytemuck::cast_slice(&bytes[brain_start..brain_end]).to_vec();
+    let mut old = vec![0.0f32; slots * old_row];
+    for o in 0..slots {
+      let (src, dst) = (o * new_row, o * old_row);
+      old[dst..dst + head].copy_from_slice(&current[src..src + head]);
+      for (i, slot) in old[dst + head..dst + head + old_head]
+        .iter_mut()
+        .enumerate()
+      {
+        *slot = sprout_filler(i);
+      }
+      old[dst + head + old_head..dst + old_row]
+        .copy_from_slice(&current[src + head + new_head..src + new_row]);
+    }
+    bytes.splice(brain_start..brain_end, bytemuck::cast_slice(&old).to_vec());
+
     // Four one-byte fields, `grow_angle` and `identity`, then one float
     // array per growth gene — the ones the older version lacks are the tail
     // of the limb block, not all of it.
@@ -600,6 +701,49 @@ mod tests {
       limbs.target_thickness,
       source.population().limbs.target_thickness
     );
+  }
+
+  /// A file written before the growth head replaced the sprout head loads:
+  /// every other weight comes across as it stands and the growth head is
+  /// zero, which is the allocation the writing run made.
+  #[test]
+  fn a_version_three_file_loads_with_a_zero_growth_head() {
+    let mut source = world();
+    assert_eq!(spawn_founders(&mut source, 2), 2);
+    let snapshot = aged_file(&source, 3, "v3");
+    assert_eq!(snapshot.version, 3);
+
+    let shape = source.population().shape;
+    assert_eq!(snapshot.param_count, brain_row(3, &shape));
+    assert_ne!(snapshot.param_count, shape.param_count());
+
+    let expected = source.population().brain.clone();
+    let mut target = world();
+    assert_eq!(restore(&mut target, &snapshot).unwrap(), 2);
+
+    let brain = &target.population().brain;
+    assert_eq!(brain.len(), expected.len());
+    let head = shape.head_growth().start;
+    let new_head = shape.head_growth().len() + shape.growth_b().len();
+    for o in 0..source.population().max_organisms {
+      let row = o * shape.param_count();
+      assert_eq!(
+        &brain[row..row + head],
+        &expected[row..row + head],
+        "organism {o}: the weights before the head moved"
+      );
+      assert!(
+        brain[row + head..row + head + new_head]
+          .iter()
+          .all(|v| *v == 0.0),
+        "organism {o}: the growth head did not come back at zero"
+      );
+      assert_eq!(
+        &brain[row + head + new_head..row + shape.param_count()],
+        &expected[row + head + new_head..row + shape.param_count()],
+        "organism {o}: the weights after the head moved"
+      );
+    }
   }
 
   #[test]

@@ -145,7 +145,7 @@ macro_rules! brain_slices {
 
     (@chain $prev:tt,) => {
         impl BrainShape {
-            /// Floats in one organism's brain row. 18,890 at the defaults.
+            /// Floats in one organism's brain row. 18,659 at the defaults.
             pub fn param_count(&self) -> usize {
                 brain_slices!(@start self, $prev)
             }
@@ -185,9 +185,10 @@ brain_slices! {
     out_k = |s| (s.d_latent, s.d_latent), Weight;
     out_v = |s| (s.d_latent, s.d_latent), Weight;
     out_o = |s| (s.d_latent, s.d_token), Weight;
-    /// Logits over the child type to sprout; index 0 is "none".
-    head_sprout = |s| (s.d_token, N_TYPES), Weight;
-    sprout_b = |s| (1, N_TYPES), Bias;
+    /// One logit per limb, added to the record's `growth_bias` before the
+    /// softmax that splits a tick's growth over the growing limbs.
+    head_growth = |s| (s.d_token, 1), Weight;
+    growth_b = |s| (1, 1), Bias;
     /// Target joint angle, plus one reserved output.
     head_actuator = |s| (s.d_token, 2), Weight;
     actuator_b = |s| (1, 2), Bias;
@@ -225,8 +226,8 @@ mod tests {
     ("out_k", 32 * 32),
     ("out_v", 32 * 32),
     ("out_o", 32 * 32),
-    ("head_sprout", 32 * 8),
-    ("sprout_b", 8),
+    ("head_growth", 32),
+    ("growth_b", 1),
     ("head_actuator", 32 * 2),
     ("actuator_b", 2),
     ("latent_init", 8 * 32),
@@ -251,7 +252,7 @@ mod tests {
 
   #[test]
   fn param_count_at_the_defaults() {
-    assert_eq!(BrainShape::default().param_count(), 18_890);
+    assert_eq!(BrainShape::default().param_count(), 18_659);
     assert_eq!(
       BrainShape::default().param_count(),
       EXPECTED.iter().map(|(_, n)| n).sum::<usize>()

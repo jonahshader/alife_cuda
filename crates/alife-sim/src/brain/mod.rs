@@ -22,8 +22,9 @@
 //! probabilities, which is `keys` extra exponentials per unit and saves three
 //! launches.
 //!
-//! Nothing here applies a head. The life-cycle chunk reads the sprout logits
-//! and the actuator targets out of [`BrainDevice::heads`].
+//! Nothing here applies a head. The life tick reads the growth logit out of
+//! [`BrainDevice::heads`] through the packed life buffer, and the constraint
+//! pass reads the actuator's first output out of it directly.
 
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
@@ -39,9 +40,23 @@ pub mod forward;
 pub mod sense;
 pub mod tokens;
 
-/// Outputs per limb: the sprout logits over child types, then the two
-/// actuator outputs (target angle and one reserved).
-pub const HEAD_DIM: usize = N_TYPES + 2;
+/// Outputs of the growth head: one logit per limb, which the life tick adds
+/// to the limb record's `growth_bias` before the softmax that splits a tick's
+/// growth (`docs/organism.md`, *Growth*).
+pub const GROWTH_DIM: usize = 1;
+
+/// Outputs of the actuator head: the base-joint nudge, and one reserved.
+pub const ACTUATOR_DIM: usize = 2;
+
+/// Outputs per limb: the growth logit, then the two actuator outputs.
+pub const HEAD_DIM: usize = GROWTH_DIM + ACTUATOR_DIM;
+
+/// Where the growth logit sits in a limb's head row.
+pub const HEAD_GROWTH: usize = 0;
+
+/// Where the actuator's outputs start in a limb's head row; the first of them
+/// is what the constraint pass nudges the base joint by.
+pub const HEAD_ACTUATOR: usize = GROWTH_DIM;
 
 /// The shapes the brain kernels bake in. Comptime configuration, as
 /// [`crate::bodies::BodyCfg`] is for the body passes.
@@ -179,7 +194,7 @@ pub struct BrainDevice {
   pub out_att: Handle,
   /// The attended token, projected back to `d_token`: what the heads read.
   pub z: Handle,
-  /// `[max_organisms x max_limbs x HEAD_DIM]`: the sprout logits, then the
+  /// `[max_organisms x max_limbs x HEAD_DIM]`: the growth logit, then the
   /// two actuator outputs.
   pub heads: Handle,
   /// Zeros, long enough for any projection's residual term. Read where the
