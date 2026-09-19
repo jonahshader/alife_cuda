@@ -8,11 +8,6 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-- **Brain forward pass.** Perceiver-IO over limb tokens: embeddings
-  (type, spatial, rotation, depth, child slot, identity), persistent gated
-  latents, input and output cross-attention, fixed trunk, sprout head. One
-  batched pass per tick across the population; fp16 weights, fp32
-  accumulate, starting from `alife_cuda_2`'s custom batched GEMV kernel.
 - **Energy and life cycle.** Per-column light occlusion scan, leaf energy
   gain, root water draw from soil saturation, per-particle upkeep, death to
   soil organic matter, seed particle emission with a mutated genome,
@@ -84,6 +79,39 @@ Left open by the metrics chunk:
   gap between two columns counts in `alive` and in no column. That is right
   while plants are anchored; a mobile creature needs binning by where it
   currently is.
+
+Left open by the brain chunk:
+
+- **Nothing applies a head.** `brain::forward` writes
+  `[max_organisms x max_limbs x HEAD_DIM]` — the sprout logits over child
+  types, then the two actuator outputs — and stops. The life-cycle chunk
+  reads them through `Sim::brain_outputs` and decides what a logit means:
+  argmax against index 0 ("none"), a threshold, or a sample.
+- **The `light` and `energy` sensor slots are written as zeros.** The
+  energy chunk owns the per-column occlusion scan and the per-organism
+  budget, and owns filling those two slots in `brain::sense`; the slots
+  exist now so the brain's shape does not change then.
+- **`contact` is the spec's `solid fraction > 0.5`, and pure clay sits
+  exactly on the threshold** (`1 - CLAY_POROSITY` is 0.50, against sand's
+  0.62 and silt's 0.55), so a limb buried in undiluted clay reads no
+  contact. Deciding whether contact should instead come from soil presence
+  — which has no such edge, but cannot tell one soil from another — belongs
+  with whoever first uses the channel.
+- **The `water` sensor carries the soil's solid-density offset**, because
+  `sph.density` does (`kernels::density` adds `solid_density_at_pos`, which
+  is `target_density` in air). The reading therefore sits near 1 in free air
+  rather than near 0. It is a usable signal as it stands; subtracting the
+  offset would mean sampling the soil twice per limb.
+- **22 launches, ~6% of the step, and entirely launch-bound** (`perf.md`).
+  Merging them buys back microseconds against a step the three neighbour
+  kernels dominate, so it is not worth doing until organism counts or brain
+  width grow by an order of magnitude. If they do, the first merges are the
+  scores kernels into their attends, at 11x the arithmetic.
+- **fp16 weight storage is built and off.** `--brain-fp16 1` works on all
+  three runtimes and is within noise of fp32 on CUDA and ~4% slower on wgpu
+  (`perf.md`), because the pass is launch-bound rather than
+  bandwidth-bound; it costs three orders of magnitude of accuracy against
+  the reference. Revisit when the trunk is wide enough to be bandwidth-bound.
 
 ## Inspection & verification
 

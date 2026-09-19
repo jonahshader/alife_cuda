@@ -303,3 +303,111 @@ K=100 it is under 0.1% of the step budget and the difference above is noise.
 Dumps at `--founders 0` and `--founders 16` are byte-identical with and
 without the flag: the sampler only reads.
 
+
+### The brain forward pass (2026-09-19, commit after 0463de4)
+
+One brain tick per step: sense, tokens, and the 22 launches of
+`brain::forward`. Same default world as above, 83,968 particle slots.
+
+```
+cargo +1.98.1 build --release -j16
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
+  ./target/release/alife --headless --seed 42 --runtime cuda \
+  --iterations 501 --founders <N> [--brain-fp16 1]
+./target/release/alife --headless --seed 42 --runtime wgpu \
+  --iterations 501 --founders <N> [--brain-fp16 1]
+```
+
+Per launch, µs, averaged over 500 steps. **Only the wgpu columns are device
+time.** The CUDA columns are wall clock around a synchronise, which carries
+a ~11 µs floor, and every brain launch is under that floor — the CUDA column
+measures the profiler, not the kernel. Nsight is below.
+
+| launch                | CUDA 64 | CUDA 256 | wgpu 64 | wgpu 256 |
+|-----------------------|--------:|---------:|--------:|---------:|
+| `brain_sense`         |    13.6 |     13.8 |     4.2 |      4.3 |
+| `brain_tokens`        |    14.1 |     14.2 |     4.2 |      4.3 |
+| `brain_in_q`          |    12.5 |     13.1 |     8.3 |      8.4 |
+| `brain_in_kv`         |    12.8 |     14.5 |     8.3 |     12.5 |
+| `brain_in_scores`     |    13.1 |     13.0 |     4.1 |      4.3 |
+| `brain_in_attend`     |    12.9 |     13.1 |     4.7 |      5.0 |
+| `brain_in_out`        |    12.1 |     12.9 |     8.3 |      8.4 |
+| `brain_self_q`        |    11.6 |     12.6 |     8.3 |      8.4 |
+| `brain_self_kv`       |    11.6 |     13.2 |     8.3 |      8.4 |
+| `brain_self_scores`   |    12.1 |     12.4 |     4.2 |      4.3 |
+| `brain_self_attend`   |    11.0 |     11.1 |     2.8 |      3.1 |
+| `brain_self_out`      |    11.8 |     12.8 |     8.3 |      8.4 |
+| `brain_mlp1`          |    12.0 |     13.2 |     4.2 |      5.1 |
+| `brain_mlp2`          |    13.1 |     13.3 |    12.6 |     13.0 |
+| `brain_gate`          |    12.7 |     13.1 |     4.2 |      4.3 |
+| `brain_latent_norm`   |    11.0 |     11.2 |     3.0 |      3.4 |
+| `brain_out_q`         |    11.9 |     13.3 |     8.3 |      8.4 |
+| `brain_out_kv`        |    11.8 |     13.2 |     8.3 |      8.4 |
+| `brain_out_scores`    |    12.2 |     12.6 |     4.2 |      4.3 |
+| `brain_out_attend`    |    11.0 |     11.4 |     3.0 |      3.5 |
+| `brain_out_out`       |    11.9 |     13.3 |     8.3 |      8.4 |
+| `brain_heads`         |    12.4 |     12.5 |     4.3 |      4.6 |
+| **brain, all of it**  | **269** |  **284** | **134** |  **143** |
+| **per step (ms)**     |   1.033 |    1.085 |   0.833 |    0.859 |
+
+Nsight over 21 steps is the real CUDA number, and it is an order of
+magnitude below what the event profiler reports:
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 nsys profile -o /tmp/hl \
+  --stats=false --force-overwrite=true \
+  ./target/release/alife --headless --seed 42 --runtime cuda \
+  --iterations 21 --founders 256
+nsys stats --force-export=true --report cuda_gpu_kern_sum /tmp/hl.nsys-rep
+```
+
+Avg ns per launch, and the per-step total for the launches each kernel
+serves:
+
+| kernel              | launches/step | 64 (ns) | 256 (ns) | 256 fp16 (ns) |
+|---------------------|--------------:|--------:|---------:|--------------:|
+| `gemv`              |            11 |   1,595 |    2,409 |         2,339 |
+| `attn_scores`       |             3 |   2,112 |    2,182 |         2,187 |
+| `attn_attend`       |             3 |   1,252 |    1,502 |         1,501 |
+| `write_sensors`     |             1 |   1,855 |    1,902 |         1,873 |
+| `write_tokens`      |             1 |   1,588 |    1,626 |         1,624 |
+| `gate_update`       |             1 |   1,608 |    1,905 |         1,928 |
+| `latent_norm`       |             1 |   1,061 |    1,265 |         1,257 |
+| `write_heads`       |             1 |   1,396 |    1,446 |         1,463 |
+| **brain per step**  |        **22** |**35.1 µs**|**45.7 µs**|  **44.9 µs** |
+
+Against the fluid in the same runs (`calculate_accel` 238/248 µs,
+`calculate_evap_prob` 112/114, `calculate_particle_density` 110/112,
+`project_constraints` 88/124, grid build 29.6, the rest ~5), the step is
+**618 µs at `--founders 64` and 679 µs at 256**, and the brain is **5.7% and
+6.7%** of it. The pass is launch-bound, not arithmetic- or bandwidth-bound:
+at 256 organisms it reads 19 MB of weights per tick, about 13 µs of
+bandwidth on this card, spread over 22 dispatches.
+
+**fp16 weights are not a win at this size.** `--brain-fp16 1` halves the
+weight bytes and changes nothing measurable: in real GPU time on CUDA it is
+44.9 µs against 45.7 µs at `--founders 256`, inside run-to-run spread; on
+wgpu's device timestamps it is 4.3–4.5% *slower* (149 µs against 143 at 256,
+140 against 134 at 64), the f16-to-f32 conversion costing more than the
+halved load saves. Accuracy against the plain-Rust reference goes from 3e-7
+to 3e-4. All three runtimes have f16 buffer storage at this pin, so the path
+works; fp32 is the default and `--brain-fp16` keeps it available for when
+the trunk is wide enough to be bandwidth-bound.
+
+Kernel against `brain::forward::forward_population_ref`, after 30 steps of a
+real run, as a relative deviation against the largest value in the field
+(`cargo test -p alife-sim --test brain`):
+
+| weights | CPU (latents / heads) | CUDA | wgpu |
+|---------|----------------------:|-----:|-----:|
+| fp32    | 0 / 0 (exact) | 2.4e-7 / 1.5e-7 | 2.9e-7 / 2.3e-7 |
+| fp16    | 2.0e-4 / 3.0e-4 | 2.0e-4 / 3.0e-4 | 2.0e-4 / 3.0e-4 |
+
+Byte-for-byte fluid parity at `--founders 0` against the pre-brain build
+(`a8cb8df`), whole dumps compared with `cmp`: CUDA and wgpu at 50 steps, the
+CPU runtime at 20, terrain modes 0 and 1, all six identical.
+
+`--founders 256 --iterations 500` on CUDA: no non-finite latent or head
+anywhere, and the largest latent sits at 4.83 for the whole run. Before
+`latent_norm` existed the same run passed 4e18 by step 40 and overflowed by
+step 45 (`organism.md`, decisions).

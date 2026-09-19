@@ -3,8 +3,9 @@
 The settled design for organisms: one representation for plants and
 creatures, a fixed-shape genome, a brain over body-part tokens, bodies made
 of particles in the fluid's particle system, and selection by ecology rather
-than a fitness function. **Status: the genome and the particle bodies are
-built; the brain, energy and the life cycle are not.** The open work is in
+than a fitness function. **Status: the genome, the particle bodies and the
+brain's forward pass are built; energy and the life cycle are not, and
+nothing applies the brain's outputs yet.** The open work is in
 `TODO.md`; this file is the spec builders build from. When implementation
 diverges from it, update this file in the same commit.
 
@@ -92,7 +93,11 @@ A Perceiver-IO-style network over limb tokens, per organism.
   the per-limb identity vector, and the limb's live sensor readings (light,
   water, soil, contact, energy as applicable).
 - **Latents.** A fixed set of latent vectors that persist across ticks with a
-  gated update. They are the organism's working memory. One pass per tick.
+  gated update, each scaled to unit RMS on its way back into the persistent
+  state. They are the organism's working memory. One pass per tick. The
+  normalization carries no parameters and is not optional: without it the
+  tick's three residual adds compound across ticks and the latents overflow
+  (decisions, 2026-09-19).
 - **Input cross-attention** from latents to tokens, a fixed-size **trunk**
   over the latents, and **output cross-attention** from tokens to latents.
 - **Output heads per limb:** actuator commands (target joint angle, later
@@ -318,9 +323,19 @@ range so both chunks index the same tensor:
 output dim]` so its fan-in is its row count; biases are zero and
 `latent_init` is sigma 1. One tick of the brain: tokens from limb
 geometry and sensors; input cross-attention latents→tokens; latent
-self-attention; MLP; gated update of the persistent latents; output
-cross-attention tokens→latents; heads per limb. Single-head attention,
-fp32 accumulate, one pass per tick.
+self-attention; MLP; gated update of the persistent latents, scaled to unit
+RMS; output cross-attention tokens→latents; heads per limb. Single-head
+attention, fp32 accumulate, one pass per tick. The trunk's activation is
+SiLU. Token features are built inline in the token kernel rather than
+materialized, and the heads are `[max_organisms × max_limbs × (n_types +
+2)]` — sprout logits then actuator outputs — zeroed for an absent limb or a
+free slot.
+
+The pass is **22 launches** (`brain::forward::LAUNCHES`), because kernels
+stay barrier-free and every cross-unit reduction is therefore a launch
+boundary. Measured cost and the fp16-versus-fp32 comparison are in
+`perf.md`; at the defaults it is about 6% of the step and entirely
+launch-bound, so fp32 storage is the default and `--brain-fp16` is a flag.
 
 **Step order** once organisms exist: grid build (all non-`Free`) → density
 → evap probability → accel → evaporate → move liquid → move vapor →
@@ -328,7 +343,8 @@ sense (token features per limb) → brain forward → apply heads (sprout,
 actuator targets) → constraint pass → limb geometry → energy and life
 cycle. The bodies chunk owns the constraint pass and publishes limb
 geometry (root-relative position, segment angle, depth) for the token
-features; the brain chunk owns sense → forward → apply.
+features; the brain chunk owns sense → forward, and the life-cycle chunk
+owns apply — nothing reads a head yet.
 
 ## Decisions & dead ends
 
@@ -422,6 +438,30 @@ features; the brain chunk owns sense → forward → apply.
   before plants can live in it — that is the experiment chunk's to fix, not
   the bodies chunk's, because it changes the terrain every existing parity
   reference was generated from.
+- 2026-09-19 — **The brain's latents need a normalization the slice table
+  does not have.** One tick makes three residual adds onto the latent stream
+  — the input cross-attention, the self-attention and the MLP — and the
+  spec normalizes none of them, so with weights at `1/sqrt(fan_in)` each one
+  multiplies the latent norm by about `sqrt(2)`. Measured on the default
+  world at `--founders 256`: the largest latent grows ~2.6× per step,
+  reaches 4e18 by step 40 and overflows to infinity by step 45, taking every
+  head with it. A Perceiver-IO normalizes each block's *input*; scaling the
+  recurrent state to unit RMS instead bounds the same thing in one launch
+  rather than four, and being parameter-free it leaves the 18,890-parameter
+  slice table alone — a learned LayerNorm per block would have added six
+  slices and changed every genome. With it the largest latent sits at 4.83
+  for all 500 steps. If the brain ever plateaus in a way that looks like a
+  missing pre-norm, the pre-norm variant is the thing to try, and it costs
+  parameters.
+- 2026-09-19 — **fp16 brain weights are built and not the default.** The
+  spec asks for fp16 storage with fp32 accumulate, on the reasoning that the
+  trunk is bandwidth-bound. At the shipped size it is not: 256 organisms ×
+  18,890 parameters is 19 MB per tick, ~13 µs of bandwidth spread over 22
+  launches, so every launch is dominated by its own dispatch. Measured,
+  fp16 is within noise on CUDA (44.9 µs against 45.7 µs of real GPU time)
+  and ~4% *slower* on wgpu, while widening the gap to the plain-Rust
+  reference from 3e-7 to 3e-4. `--brain-fp16` keeps the path alive for when
+  the trunk is wide enough to be bandwidth-bound; `perf.md` has the numbers.
 - 2026-09-19 — **A body's velocity is the integrated one plus the
   projection's displacement**, not the projection's displacement alone.
   `move_particles` has already integrated and possibly bounced the particle
