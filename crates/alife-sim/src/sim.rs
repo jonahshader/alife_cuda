@@ -21,7 +21,7 @@ use crate::life::light::LightGrid;
 use crate::life::pack::LifePack;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
-use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
+use crate::soil::{SoilDevice, SoilGrid, TerrainSpec};
 use crate::timing::{KernelTimings, TimingMethod};
 use crate::world::{Cfg, WorldGeometry};
 
@@ -115,7 +115,7 @@ impl<R: Runtime> Sim<R> {
       geom.soil_width,
       geom.soil_height,
       geom.soil_cell_size,
-      TerrainMode::from_flag(params.terrain_mode),
+      TerrainSpec::from_params(&params),
       seed,
     );
 

@@ -17,7 +17,7 @@ use crate::bodies::{BodyCfg, BodyState};
 use crate::genome::Population;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{threefry4x32_20_ref, u01_ref};
-use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
+use crate::soil::{SoilDevice, SoilGrid, TerrainSpec};
 use crate::world::WorldGeometry;
 
 /// A world small enough to debug by hand but wide enough that the wrap seam,
@@ -67,7 +67,7 @@ impl Harness {
       geom.soil_width,
       geom.soil_height,
       geom.soil_cell_size,
-      TerrainMode::from_flag(params.terrain_mode),
+      TerrainSpec::from_params(&params),
       7,
     );
     let particles = fixture_particles(&geom);
@@ -250,7 +250,7 @@ impl OrganismHarness {
       geom.soil_width,
       geom.soil_height,
       geom.soil_cell_size,
-      TerrainMode::from_flag(params.terrain_mode),
+      TerrainSpec::from_params(&params),
       7,
     );
     let soil_dev = SoilDevice::upload(&client, &soil.cells);

@@ -55,6 +55,16 @@ impl TomlValue for i64 {
   }
 }
 
+impl TomlValue for crate::soil::UniformSoil {
+  fn from_toml(value: &toml::Value) -> Option<Self> {
+    value.as_str()?.parse().ok()
+  }
+
+  fn to_toml_literal(self) -> String {
+    format!("\"{self}\"")
+  }
+}
+
 /// Look a dotted `section.key` path up in a parsed TOML document.
 fn toml_lookup<T: TomlValue>(table: &toml::Table, path: &str) -> Option<T> {
   let value = match path.split_once('.') {
@@ -144,7 +154,14 @@ sim_params! {
     capillary_mult: f32 = 1.0, "fluid.capillary_mult", "capillary-mult",
         "Global multiplier for capillary suction force";
     terrain_mode: i32 = 0, "world.terrain_mode", "terrain-mode",
-        "Terrain mode (0=normal, 1=capillary test)";
+        "Terrain mode (0=normal, 1=capillary test, 2=capillary field)";
+    column_top: f32 = 0.55, "world.column_top", "column-top",
+        "Fraction of the world height the terrain-mode-2 soil columns rise to";
+    soil_permutation: i64 = 0, "world.soil_permutation", "soil-permutation",
+        "Seed permuting which soil sits in which terrain-mode-2 column (0 = identity)";
+    uniform_soil: crate::soil::UniformSoil = crate::soil::UniformSoil::None,
+        "world.uniform_soil", "uniform-soil",
+        "Fill every terrain-mode-2 column with one pure soil (sand|silt|clay|none)";
     evap_rate: f32 = 0.01, "fluid.evap_rate", "evap-rate", "Evaporation rate scaling factor";
     condense_rate: f32 = 0.005, "fluid.condense_rate", "condense-rate",
         "Condensation rate scaling factor";
@@ -295,7 +312,45 @@ impl SimParams {
         self.particles_per_cell, self.max_particles_per_cell
       ));
     }
+    self.validate_terrain()?;
     self.validate_organism()
+  }
+
+  /// The terrain half. `--column-top` and the two soil-specialization controls
+  /// describe terrain mode 2 and nothing else; a run that asks for them on
+  /// another mode is asking for a terrain that does not exist, and mode 1 in
+  /// particular is what every `resources/parity/*.bin` was generated from and
+  /// stays byte for byte as it is.
+  fn validate_terrain(&self) -> Result<(), String> {
+    if !(0.0..=1.0).contains(&self.column_top) || self.column_top <= 0.0 {
+      return Err(format!(
+        "--column-top must be in (0, 1], got {}",
+        self.column_top
+      ));
+    }
+    if self.soil_permutation < 0 {
+      return Err(format!(
+        "--soil-permutation must be >= 0, got {}",
+        self.soil_permutation
+      ));
+    }
+    if self.terrain_mode != 2 {
+      for (name, on) in [
+        ("soil-permutation", self.soil_permutation != 0),
+        (
+          "uniform-soil",
+          self.uniform_soil != crate::soil::UniformSoil::None,
+        ),
+      ] {
+        if on {
+          return Err(format!(
+            "--{name} is a terrain-mode-2 control, but --terrain-mode is {}",
+            self.terrain_mode
+          ));
+        }
+      }
+    }
+    Ok(())
   }
 
   /// The organism half. A limb index, a limb length and a part type are each

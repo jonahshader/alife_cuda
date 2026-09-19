@@ -39,16 +39,126 @@ define_soa! {
 pub enum TerrainMode {
   /// Noise heightmap with a softmax blend of sand/silt/clay.
   Noise,
-  /// Capillary tube test: a shared water pool under separate soil columns.
+  /// Capillary tube test: a shared water pool under separate soil columns,
+  /// each filled to the very top of the world. What every
+  /// `resources/parity/*.bin` was generated from, so it never changes.
   CapillaryTest,
+  /// The same layout with air above the columns, so a plant anchored on a
+  /// column's surface has somewhere to grow: the soil-specialization
+  /// experiment's terrain.
+  CapillaryField,
 }
 
 impl TerrainMode {
   pub fn from_flag(mode: i32) -> Self {
-    // The C++ `switch` treats everything that is not 1 as the noise mode.
+    // The C++ `switch` treats everything that is not 1 as the noise mode, and
+    // mode 2 is this tree's own addition.
     match mode {
       1 => TerrainMode::CapillaryTest,
+      2 => TerrainMode::CapillaryField,
       _ => TerrainMode::Noise,
+    }
+  }
+
+  /// Whether this mode lays soil out as the six capillary columns.
+  pub fn is_capillary(self) -> bool {
+    matches!(
+      self,
+      TerrainMode::CapillaryTest | TerrainMode::CapillaryField
+    )
+  }
+}
+
+/// A pure soil composition, as `--uniform-soil` names one.
+///
+/// [`UniformSoil::None`] is the absence of the control, which is why it is the
+/// default: the columns keep the compositions [`capillary_columns`] gives them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UniformSoil {
+  #[default]
+  None,
+  Sand,
+  Silt,
+  Clay,
+}
+
+impl UniformSoil {
+  /// The mix every column is made of, or `None` when the control is off.
+  pub fn mix(self) -> Option<SoilMix> {
+    match self {
+      UniformSoil::None => None,
+      UniformSoil::Sand => Some(SAND),
+      UniformSoil::Silt => Some(SILT),
+      UniformSoil::Clay => Some(CLAY),
+    }
+  }
+
+  pub fn name(self) -> &'static str {
+    match self {
+      UniformSoil::None => "none",
+      UniformSoil::Sand => "sand",
+      UniformSoil::Silt => "silt",
+      UniformSoil::Clay => "clay",
+    }
+  }
+}
+
+impl std::fmt::Display for UniformSoil {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.name())
+  }
+}
+
+impl std::str::FromStr for UniformSoil {
+  type Err = String;
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "none" => Ok(UniformSoil::None),
+      "sand" => Ok(UniformSoil::Sand),
+      "silt" => Ok(UniformSoil::Silt),
+      "clay" => Ok(UniformSoil::Clay),
+      other => Err(format!("expected sand, silt, clay or none, got {other}")),
+    }
+  }
+}
+
+/// Everything about the soil that is decided before the first step.
+///
+/// The two controls apply to [`TerrainMode::CapillaryField`] only; the
+/// parameter validator rejects them on any other mode, so mode 1 stays the
+/// terrain the parity references were generated from.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerrainSpec {
+  pub mode: TerrainMode,
+  /// Fraction of the world height the mode-2 columns rise to. The pool below
+  /// them and the gaps between them are mode 1's.
+  pub column_top: f32,
+  /// Permutation control: which composition sits in which column position.
+  /// 0 is the identity.
+  pub permutation_seed: u64,
+  /// Isolation control: one pure composition in every column.
+  pub uniform: UniformSoil,
+}
+
+impl TerrainSpec {
+  pub fn from_params(params: &crate::SimParams) -> Self {
+    Self {
+      mode: TerrainMode::from_flag(params.terrain_mode),
+      column_top: params.column_top,
+      permutation_seed: params.soil_permutation.max(0) as u64,
+      uniform: params.uniform_soil,
+    }
+  }
+
+  /// The plain terrain of one mode, both controls off — what every caller that
+  /// is not running the experiment wants.
+  pub fn plain(mode: TerrainMode) -> Self {
+    Self {
+      mode,
+      column_top: crate::SimParams::default().column_top,
+      permutation_seed: 0,
+      uniform: UniformSoil::None,
     }
   }
 }
@@ -85,41 +195,49 @@ pub struct SoilGrid {
   pub width: usize,
   pub height: usize,
   pub cell_size: f32,
-  pub mode: TerrainMode,
+  pub spec: TerrainSpec,
   pub cells: SoilHost,
 }
 
 impl SoilGrid {
-  pub fn new(width: usize, height: usize, cell_size: f32, mode: TerrainMode, seed: u64) -> Self {
-    let cells = match mode {
+  pub fn new(width: usize, height: usize, cell_size: f32, spec: TerrainSpec, seed: u64) -> Self {
+    let cells = match spec.mode {
       TerrainMode::CapillaryTest => capillary_test(width, height),
+      TerrainMode::CapillaryField => capillary_field(width, height, spec),
       TerrainMode::Noise => noise_terrain(width, height, seed),
     };
     Self {
       width,
       height,
       cell_size,
-      mode,
+      spec,
       cells,
     }
   }
 
+  pub fn mode(&self) -> TerrainMode {
+    self.spec.mode
+  }
+
   /// The stretches of world the per-column metrics bin organisms into.
   ///
-  /// The capillary test's six soil columns; for every other terrain, one
-  /// column spanning the world, because there is no soil layout to split it
-  /// by.
+  /// The capillary layout's six soil columns, in ascending x; for every other
+  /// terrain, one column spanning the world, because there is no soil layout
+  /// to split it by. A column's label names the composition standing there,
+  /// not the position, so a permuted run still reports the sand column as
+  /// `sand` wherever the permutation put it.
   pub fn columns(&self) -> Vec<ColumnExtent> {
-    match self.mode {
-      TerrainMode::CapillaryTest => capillary_columns(self.width)
+    if self.spec.mode.is_capillary() {
+      capillary_columns_for(self.width, self.spec)
         .into_iter()
         .map(|column| column.extent)
-        .collect(),
-      TerrainMode::Noise => vec![ColumnExtent {
+        .collect()
+    } else {
+      vec![ColumnExtent {
         x0: 0,
         x1: self.width,
         label: "world",
-      }],
+      }]
     }
   }
 
@@ -252,6 +370,80 @@ pub fn capillary_columns(width: usize) -> [CapillaryColumn; 6] {
   ]
 }
 
+/// The six columns with the experiment's controls applied to them.
+///
+/// The extents are [`capillary_columns`]'s and never move: a control changes
+/// *what stands where*, not where the habitats are. The label travels with the
+/// composition, so the metrics keep calling the sand column `sand`.
+pub fn capillary_columns_for(width: usize, spec: TerrainSpec) -> [CapillaryColumn; 6] {
+  let base = capillary_columns(width);
+  if spec.mode != TerrainMode::CapillaryField {
+    return base;
+  }
+
+  // Isolation control: the same pure soil everywhere, so the only thing left
+  // that separates the columns is the gaps between them. There is no
+  // composition to name a column after any more, so the labels are positions.
+  if let Some(mix) = spec.uniform.mix() {
+    let mut out = base;
+    for (position, column) in out.iter_mut().enumerate() {
+      column.left = mix;
+      column.right = mix;
+      column.extent.label = POSITION_LABELS[position];
+    }
+    return out;
+  }
+
+  // Position control: the compositions are dealt out to the positions by a
+  // permutation of 0..6, and each keeps its own label.
+  let order = soil_permutation(spec.permutation_seed);
+  let mut out = base;
+  for (position, source) in order.into_iter().enumerate() {
+    out[position].left = base[source].left;
+    out[position].right = base[source].right;
+    out[position].extent.label = base[source].extent.label;
+  }
+  out
+}
+
+/// Labels the isolation control uses, where no column has a composition of its
+/// own to be named after.
+const POSITION_LABELS: [&str; 6] = ["col0", "col1", "col2", "col3", "col4", "col5"];
+
+/// Which composition stands in which column position: `order[position]` is the
+/// index into [`capillary_columns`] whose soil and label move there.
+///
+/// Fisher–Yates over a SplitMix64 stream seeded with `seed`, walking the six
+/// slots from the top down and swapping each with a uniform draw from the
+/// slots at or below it. Seed 0 is the identity — it is the *absence* of the
+/// control, not a permutation drawn from it — and every other seed goes
+/// through the shuffle, so the same seed always deals the same layout without
+/// depending on any other part of the run.
+pub fn soil_permutation(seed: u64) -> [usize; 6] {
+  let mut order = [0, 1, 2, 3, 4, 5];
+  if seed == 0 {
+    return order;
+  }
+  let mut state = seed;
+  for i in (1..order.len()).rev() {
+    // Modulo over a 64-bit draw: the bias against an `i + 1` of at most six is
+    // below 2^-61, which no run will ever see.
+    let j = (splitmix64(&mut state) % (i as u64 + 1)) as usize;
+    order.swap(i, j);
+  }
+  order
+}
+
+/// SplitMix64, the reference stream. Self-contained by design: a permutation
+/// has to be reproducible from its seed alone, with no simulation state in it.
+fn splitmix64(state: &mut u64) -> u64 {
+  *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+  let mut z = *state;
+  z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+  z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+  z ^ (z >> 31)
+}
+
 /// Capillary tube test: shared water pool at the bottom, separate soil columns
 /// above. Bottom 20%: empty (no soil) — water pool. Above 20%: soil columns
 /// with air gaps between them. Left half: pure sand | silt | clay. Right half:
@@ -264,7 +456,40 @@ pub fn capillary_test(width: usize, height: usize) -> SoilHost {
 
   // The layout is a function of the width alone; build it once, not per row.
   let columns = capillary_columns(width);
-  for y in pool_h..terrain_h {
+  fill_columns(&mut soil, width, pool_h..terrain_h, &columns);
+  soil
+}
+
+/// The capillary test with a ceiling: the columns stop at `column_top` of the
+/// world height and everything above them is air, so a plant anchored on a
+/// column's surface has somewhere to grow (`docs/organism.md`, decisions).
+///
+/// The pool below and the gaps between are mode 1's, cell for cell — the only
+/// differences are where the soil stops and, when a control is on, which
+/// composition stands in which column.
+pub fn capillary_field(width: usize, height: usize, spec: TerrainSpec) -> SoilHost {
+  let mut soil = SoilHost::new(width * height);
+
+  let pool_h = (height as f32 * 0.2) as usize;
+  // Clamped rather than validated away: a `column_top` under the pool line
+  // leaves the columns empty, which is a world with no soil in it, not a
+  // corrupt buffer.
+  let terrain_h = ((height as f32 * spec.column_top) as usize).clamp(pool_h, height);
+
+  let columns = capillary_columns_for(width, spec);
+  fill_columns(&mut soil, width, pool_h..terrain_h, &columns);
+  soil
+}
+
+/// Write the six columns' compositions into `rows`, the one place the mix
+/// interpolation lives.
+fn fill_columns(
+  soil: &mut SoilHost,
+  width: usize,
+  rows: std::ops::Range<usize>,
+  columns: &[CapillaryColumn; 6],
+) {
+  for y in rows {
     let row = y * width;
     for column in columns {
       let extent = column.extent;
@@ -279,8 +504,6 @@ pub fn capillary_test(width: usize, height: usize) -> SoilHost {
       }
     }
   }
-
-  soil
 }
 
 /// Noise heightmap with a softmax blend of the three soil types.
@@ -516,7 +739,13 @@ mod tests {
   #[test]
   fn the_six_column_extents_tile_the_soil_the_layout_writes() {
     let (width, height) = (320usize, 160usize);
-    let grid = SoilGrid::new(width, height, 0.1, TerrainMode::CapillaryTest, 0);
+    let grid = SoilGrid::new(
+      width,
+      height,
+      0.1,
+      TerrainSpec::plain(TerrainMode::CapillaryTest),
+      0,
+    );
     let columns = grid.columns();
     assert_eq!(columns.len(), 6);
     assert_eq!(
@@ -600,7 +829,7 @@ mod tests {
 
   #[test]
   fn every_other_terrain_is_one_column_spanning_the_world() {
-    let grid = SoilGrid::new(64, 32, 0.1, TerrainMode::Noise, 42);
+    let grid = SoilGrid::new(64, 32, 0.1, TerrainSpec::plain(TerrainMode::Noise), 42);
     let columns = grid.columns();
     assert_eq!(columns.len(), 1);
     assert_eq!(columns[0].x0, 0);
@@ -614,7 +843,13 @@ mod tests {
   fn a_narrow_world_has_no_gaps_between_its_columns() {
     // `gap` is `width / 40`, so a grid under 40 cells wide tiles exactly.
     // The metrics tests lean on that: every organism lands in a column.
-    let grid = SoilGrid::new(30, 20, 0.1, TerrainMode::CapillaryTest, 0);
+    let grid = SoilGrid::new(
+      30,
+      20,
+      0.1,
+      TerrainSpec::plain(TerrainMode::CapillaryTest),
+      0,
+    );
     let columns = grid.columns();
     assert!(
       columns.windows(2).all(|p| p[0].x1 == p[1].x0),
@@ -622,5 +857,173 @@ mod tests {
     );
     assert_eq!(grid.cell_column(0.55), 5);
     assert_eq!(columns.iter().position(|c| c.contains(5)), Some(1));
+  }
+
+  fn field(width: usize, height: usize, spec: TerrainSpec) -> SoilGrid {
+    SoilGrid::new(width, height, 0.1, spec, 0)
+  }
+
+  /// Mode 2 is mode 1 with a ceiling: the same soil below `column_top`, air
+  /// above it, and the same six columns to bin organisms into.
+  #[test]
+  fn mode_two_is_mode_one_below_the_column_top_and_empty_above() {
+    let (width, height) = (320usize, 160usize);
+    let spec = TerrainSpec::plain(TerrainMode::CapillaryField);
+    let grid = field(width, height, spec);
+    let reference = capillary_test(width, height);
+    let top = (height as f32 * spec.column_top) as usize;
+    assert_eq!(top, 88);
+
+    for y in 0..height {
+      for x in 0..width {
+        let i = x + y * width;
+        let cell = (
+          grid.cells.sand_density[i],
+          grid.cells.silt_density[i],
+          grid.cells.clay_density[i],
+        );
+        if y < top {
+          assert_eq!(
+            cell,
+            (
+              reference.sand_density[i],
+              reference.silt_density[i],
+              reference.clay_density[i]
+            ),
+            "cell ({x}, {y}) differs from mode 1"
+          );
+        } else {
+          assert_eq!(cell, (0.0, 0.0, 0.0), "cell ({x}, {y}) is above the top");
+        }
+      }
+    }
+
+    // The columns are unchanged, and there is now soil to stand on with air
+    // over it — which is the whole point of the mode.
+    let columns = grid.columns();
+    assert_eq!(
+      columns.iter().map(|c| c.label).collect::<Vec<_>>(),
+      [
+        "sand",
+        "silt",
+        "clay",
+        "sand_silt",
+        "silt_clay",
+        "sand_clay"
+      ]
+    );
+    assert_eq!(
+      columns,
+      field(
+        width,
+        height,
+        TerrainSpec::plain(TerrainMode::CapillaryTest)
+      )
+      .columns()
+    );
+    assert_eq!(
+      crate::bodies::soil_surface(&grid, 1.0),
+      (top as f32 - 0.5) * 0.1
+    );
+  }
+
+  /// The permutation control moves compositions between positions and takes
+  /// their labels with them, so `columns()` still names the soil.
+  #[test]
+  fn a_permutation_moves_the_soil_and_its_label_together() {
+    let (width, height) = (320usize, 160usize);
+    let identity = TerrainSpec::plain(TerrainMode::CapillaryField);
+    let mut permuted = identity;
+    permuted.permutation_seed = 3;
+    let order = soil_permutation(3);
+    assert_ne!(order, [0, 1, 2, 3, 4, 5], "seed 3 should shuffle something");
+    assert_eq!(soil_permutation(0), [0, 1, 2, 3, 4, 5]);
+    // A permutation is a bijection: every composition is dealt exactly once.
+    let mut seen = order;
+    seen.sort_unstable();
+    assert_eq!(seen, [0, 1, 2, 3, 4, 5]);
+    // And it is a function of the seed alone.
+    assert_eq!(soil_permutation(3), order);
+
+    let base = capillary_columns(width);
+    let moved = capillary_columns_for(width, permuted);
+    let grid = field(width, height, permuted);
+    let row = (height as f32 * 0.2) as usize + 1;
+    for (position, column) in moved.iter().enumerate() {
+      // The extents never move.
+      assert_eq!(column.extent.x0, base[position].extent.x0);
+      assert_eq!(column.extent.x1, base[position].extent.x1);
+      // The soil and the label came from the source column together.
+      let source = order[position];
+      assert_eq!(column.left, base[source].left);
+      assert_eq!(column.extent.label, base[source].extent.label);
+      let i = column.extent.x0 + row * width;
+      assert_eq!(grid.cells.sand_density[i], base[source].left.sand);
+      assert_eq!(grid.cells.clay_density[i], base[source].left.clay);
+    }
+    assert_eq!(
+      grid.columns().iter().map(|c| c.label).collect::<Vec<_>>(),
+      order.map(|s| base[s].extent.label).to_vec()
+    );
+  }
+
+  /// The isolation control: one composition everywhere, so a column has no
+  /// soil identity left to be labelled by and is named for its position.
+  #[test]
+  fn the_uniform_control_fills_every_column_with_one_soil() {
+    let (width, height) = (320usize, 160usize);
+    let mut spec = TerrainSpec::plain(TerrainMode::CapillaryField);
+    spec.uniform = UniformSoil::Silt;
+    let grid = field(width, height, spec);
+    assert_eq!(
+      grid.columns().iter().map(|c| c.label).collect::<Vec<_>>(),
+      ["col0", "col1", "col2", "col3", "col4", "col5"]
+    );
+
+    let row = (height as f32 * 0.2) as usize + 1;
+    let columns = grid.columns();
+    for x in 0..width {
+      let i = x + row * width;
+      let expected = if columns.iter().any(|c| c.contains(x)) {
+        (0.0, 1.0, 0.0)
+      } else {
+        (0.0, 0.0, 0.0)
+      };
+      assert_eq!(
+        (
+          grid.cells.sand_density[i],
+          grid.cells.silt_density[i],
+          grid.cells.clay_density[i]
+        ),
+        expected,
+        "cell {x} of the uniform terrain"
+      );
+    }
+    // The gaps are still there: what the control removes is the soil
+    // difference, not the spatial separation.
+    assert!(columns.windows(2).any(|p| p[0].x1 < p[1].x0));
+  }
+
+  /// The controls are mode 2's; mode 1 ignores them, whatever a caller that
+  /// got past the validator asks for.
+  #[test]
+  fn mode_one_is_untouched_by_the_controls() {
+    let (width, height) = (320usize, 160usize);
+    let mut spec = TerrainSpec::plain(TerrainMode::CapillaryTest);
+    spec.permutation_seed = 7;
+    spec.uniform = UniformSoil::Clay;
+    spec.column_top = 0.3;
+    let grid = field(width, height, spec);
+    let reference = capillary_test(width, height);
+    assert_eq!(grid.cells, reference);
+    assert_eq!(
+      grid.columns(),
+      field(
+        width,
+        height,
+        TerrainSpec::plain(TerrainMode::CapillaryTest)
+      )
+      .columns()
+    );
   }
 }
