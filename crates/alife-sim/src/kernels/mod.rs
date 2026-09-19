@@ -116,6 +116,7 @@ kernel_params! {
     "" P_WATER_GAIN = |p, _g| p.water_gain;
     "" P_UPKEEP_PER_VOLUME = |p, _g| p.upkeep_per_volume;
     "" P_SEED_THRESHOLD = |p, _g| p.seed_threshold;
+    "" P_ACTUATOR_GAIN = |p, _g| p.actuator_gain;
 }
 
 /// The particle SoA as kernel arguments. Field order matches `SphHost`.

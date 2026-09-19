@@ -418,7 +418,7 @@ impl<R: Runtime> Sim<R> {
 
     if organisms > 0 {
       run_timed(client, timing, timings, "project_constraints", &mut || {
-        constraints::launch(client, sph, bodies, pop, params_buf, body_cfg, cfg);
+        constraints::launch(client, sph, bodies, pop, brain, params_buf, body_cfg, cfg);
       });
       run_timed(client, timing, timings, "write_limb_geometry", &mut || {
         limb_geometry::launch(
@@ -432,9 +432,11 @@ impl<R: Runtime> Sim<R> {
         );
       });
 
-      // Sense, then one brain tick. Nothing applies a head yet: the
-      // life-cycle chunk reads the sprout logits and the actuator targets out
-      // of `Sim::brain_outputs`.
+      // Sense, then one brain tick. The heads it writes are read by the life
+      // tick at the end of this step (the growth logit, through the packed
+      // buffer) and by the *next* step's constraint pass, which runs before
+      // the brain and so nudges a base joint by the actuator output this tick
+      // is about to leave behind.
       run_timed(client, timing, timings, "brain_sense", &mut || {
         crate::brain::sense::launch(
           client,

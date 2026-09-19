@@ -8,7 +8,7 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
+Left open by growth (`organism.md`, *Growth*, all four chunks built):
 
 - **A seedling's surplus is whatever is left over `seed_cost`, and nothing
   sets it deliberately.** Growth is funded by `energy − seed_cost`, and a
@@ -23,9 +23,6 @@ Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
   question as the `--column-top` band below and wants answering with it:
   what a root earns, what a seed germinates with, or whether the growth
   reserve is `seed_cost` at all.
-- **Growth 4 — the brain's part.** `head_sprout` → `head_growth`, one
-  logit per limb into the softmax; the actuator's first output nudges the
-  base-joint target. Closes the actuator item below.
 
 Left open by the soil-specialization experiment:
 
@@ -102,12 +99,6 @@ Left open by the life-cycle chunk:
 
 Left open by the brain chunk:
 
-- **Both heads are read by nothing.** `brain::forward` writes the sprout
-  logits and then two actuator outputs, and nothing downstream reads either:
-  the packed life buffer's per-limb slice carried the sprout argmax until
-  breaking took it over. Growth 4 turns the sprout head into the growth
-  logit and needs its own slice back; milestone 2's actuated limb is what
-  consumes the actuator outputs.
 - **`contact` is the spec's `solid fraction > 0.5`, and pure clay sits
   exactly on the threshold** (`1 - CLAY_POROSITY` is 0.50, against sand's
   0.62 and silt's 0.55), so a limb buried in undiluted clay reads no

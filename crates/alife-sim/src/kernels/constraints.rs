@@ -14,8 +14,9 @@
 //!   ([`segment_fraction`]), which is 1 for every segment but a growing
 //!   limb's last;
 //! - **base-joint angle** — a limb's first segment points along its parent's
-//!   last segment rotated by the limb record's `grow_angle` (the root limb
-//!   measures against the world frame, 0 at +x, counter-clockwise). How far
+//!   last segment rotated by [`joint_target_angle`]: the limb record's
+//!   `grow_angle`, plus the brain's actuator nudge (the root limb measures
+//!   against the world frame, 0 at +x, counter-clockwise). How far
 //!   off it was before the sweep pulled it back is kept per `(organism,
 //!   limb)` as a running maximum in `BodyState::bend_max`, which the life
 //!   tick reads and resets: that is what a limb breaks on
@@ -46,10 +47,11 @@ use cubecl_runtime::server::Handle;
 use glam::Vec2;
 
 use super::{
-  Cfg, P_BEND_STIFFNESS, P_BOUNDS_X, P_BOUNDS_Y, P_CONSTRAINT_ITERS, P_DT, P_DT_PREDICT,
-  P_JOINT_STIFFNESS, P_LIMB_SEGMENT_LENGTH, cube_count, whole,
+  Cfg, P_ACTUATOR_GAIN, P_BEND_STIFFNESS, P_BOUNDS_X, P_BOUNDS_Y, P_CONSTRAINT_ITERS, P_DT,
+  P_DT_PREDICT, P_JOINT_STIFFNESS, P_LIMB_SEGMENT_LENGTH, cube_count, whole,
 };
 use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
+use crate::brain::{BrainState, HEAD_ACTUATOR, HEAD_DIM};
 use crate::genome::population::{LimbArgs, Population, limb_args};
 use crate::particles::{SphDevice, SphHost};
 
@@ -224,6 +226,26 @@ pub fn limb_len(map: &[u32], pbase: u32, l: u32, #[comptime] cfg: BodyCfg) -> u3
   n
 }
 
+/// The angle a limb's base joint is held at: the record's `grow_angle`, plus
+/// the brain's nudge.
+///
+/// `docs/organism.md`, *Growth*, item 4: the actuator head's first output `a`
+/// moves the target by `actuator_gain × tanh(a)`, so the genome says what the
+/// limb's rest angle is and the brain says where within `± actuator_gain` of
+/// it this step sits. `tanh` saturates, so no head value can swing the joint
+/// further than the gain — that is the whole reason for the squash, and why a
+/// rational one would do as well if a backend ever lacked this one.
+///
+/// The heads are the *previous* step's: the constraint pass runs before the
+/// brain (*Implementation layout*, step order), and they are zeros until the
+/// first forward pass, which is no nudge at all.
+#[cube]
+pub fn joint_target_angle(limbs: &LimbArgs, heads: &[f32], base: u32, l: u32, gain: f32) -> f32 {
+  let record = (base + l) as usize;
+  let a = heads[record * comptime!(HEAD_DIM) + comptime!(HEAD_ACTUATOR)];
+  limbs.grow_angle[record] + gain * f32::tanh(a)
+}
+
 /// The rest length of the segment ending at particle `k`, as a fraction of
 /// `limb_segment_length`: `clamp(grown - k, 0, 1)`.
 ///
@@ -300,7 +322,11 @@ pub fn limb_axis(
       out.x = d.x;
       out.y = d.y;
     } else if anchor == NO_PARTICLE {
-      // The root limb: its grow angle is read in the world frame.
+      // The root limb: its grow angle is read in the world frame, and the
+      // genome's, not the brain's nudged target — a root of one particle has
+      // no base joint to project, so this axis is not "where the joint put
+      // it" but a direction invented for a child to measure against, and
+      // `layout_limbs` lays that child out along the same one.
       let g = limbs.grow_angle[(base + l) as usize];
       out.x = f32::cos(g);
       out.y = f32::sin(g);
@@ -322,6 +348,7 @@ pub fn project_constraints(
   map: &[u32],
   anchors: &[f32],
   grown: &[f32],
+  heads: &[f32],
   bend_max: &mut [f32],
   alive: &[u32],
   params: &[f32],
@@ -345,6 +372,7 @@ pub fn project_constraints(
   let bend_k = params[P_BEND_STIFFNESS as usize];
   let bounds_x = params[P_BOUNDS_X as usize];
   let bounds_y = params[P_BOUNDS_Y as usize];
+  let gain = params[P_ACTUATOR_GAIN as usize];
   let dt = params[P_DT as usize];
   let dt_predict = params[P_DT_PREDICT as usize];
   let iterations = params[P_CONSTRAINT_ITERS as usize] as u32;
@@ -402,7 +430,7 @@ pub fn project_constraints(
     for l in 0..ml {
       let n = limb_len(map, pbase, l, cfg);
       if n > 0u32 {
-        let g = limbs.grow_angle[(base + l) as usize];
+        let g = joint_target_angle(limbs, heads, base, l, gain);
         let anchor = base_particle(limbs, map, base, pbase, l, cfg);
         let first = particle_at(map, pbase, l, 0u32, cfg);
         if anchor != NO_PARTICLE {
@@ -558,6 +586,7 @@ pub fn launch<R: Runtime>(
   sph: &SphDevice,
   bodies: &BodyState,
   pop: &Population,
+  brain: &BrainState,
   params: &Handle,
   cfg: BodyCfg,
   world: Cfg,
@@ -575,6 +604,7 @@ pub fn launch<R: Runtime>(
     whole(&bodies.device.limb_particles, cfg.particle_map_len()),
     whole(&bodies.device.anchors, cfg.max_organisms as usize * 2),
     whole(&bodies.device.grown, cfg.limb_count()),
+    whole(&brain.device.heads, brain.cfg.heads_len()),
     whole(&bodies.device.bend_max, cfg.limb_count()),
     whole(&pop.device.organisms.alive, cfg.max_organisms as usize),
     whole(params, super::PARAM_COUNT),
@@ -596,6 +626,7 @@ pub fn project_constraints_ref(
   particles: &mut SphHost,
   pop: &Population,
   bodies: &BodyState,
+  heads: &[f32],
   bend_max: &mut [f32],
   params: &crate::SimParams,
   geom: &crate::world::WorldGeometry,
@@ -619,7 +650,8 @@ pub fn project_constraints_ref(
     let len = |l: usize| bodies.limb_len(o, l);
     let grown = |l: usize| bodies.grown[o * ml + l];
     let parent = |l: usize| pop.limbs.parent[o * ml + l] as usize;
-    let grow_angle = |l: usize| pop.limbs.grow_angle[o * ml + l];
+    let joint_angle =
+      |l: usize| joint_target_angle_ref(pop, heads, o * ml + l, params.actuator_gain);
     let base_particle = |l: usize| -> Option<usize> {
       let p = parent(l);
       if p == l {
@@ -663,7 +695,7 @@ pub fn project_constraints_ref(
         if n == 0 {
           continue;
         }
-        let g = grow_angle(l);
+        let g = joint_angle(l);
         let mut record_bend = |err: f32| {
           let slot = &mut bend_max[o * ml + l];
           if err > *slot {
@@ -805,6 +837,12 @@ pub fn limb_axis_ref(
   }
 }
 
+/// Host twin of [`joint_target_angle`], over the flat `(organism, limb)`
+/// record index.
+pub fn joint_target_angle_ref(pop: &Population, heads: &[f32], record: usize, gain: f32) -> f32 {
+  pop.limbs.grow_angle[record] + gain * heads[record * HEAD_DIM + HEAD_ACTUATOR].tanh()
+}
+
 /// Host twin of [`segment_fraction`].
 pub fn segment_fraction_ref(grown: f32, k: usize) -> f32 {
   (grown - k as f32).clamp(0.0, 1.0)
@@ -918,11 +956,18 @@ mod tests {
       &h.sph,
       &h.bodies,
       &h.pop,
+      &h.brain,
       &h.params_buf,
       h.body_cfg,
       h.cfg,
     );
     h.read_particles()
+  }
+
+  /// The heads the pass will read, host side — the actuator outputs among
+  /// them, so the reference nudges the same joints the kernel does.
+  fn heads(h: &OrganismHarness) -> Vec<f32> {
+    h.brain.read_heads(&h.client)
   }
 
   /// The per-limb bend maxima the pass has accumulated on the device.
@@ -934,9 +979,22 @@ mod tests {
     )
   }
 
+  /// One tick of the brain first, so the heads the pass reads are a real
+  /// pass's rather than the zeros the buffer was allocated with: the joint
+  /// targets it projects against are then nudged ones.
   #[test]
   fn matches_reference() {
     let h = OrganismHarness::new();
+    h.run_brain();
+    let heads = heads(&h);
+    assert!(
+      heads
+        .iter()
+        .skip(super::HEAD_ACTUATOR)
+        .step_by(super::HEAD_DIM)
+        .any(|a| *a != 0.0),
+      "no actuator output, so the nudge is untested here"
+    );
     let actual = run_kernel(&h);
 
     let mut expected = h.particles.clone();
@@ -945,6 +1003,7 @@ mod tests {
       &mut expected,
       &h.pop,
       &h.bodies,
+      &heads,
       &mut bend,
       &h.params,
       &h.geom,
@@ -1054,6 +1113,7 @@ mod tests {
   #[test]
   fn the_bend_maximum_spans_the_whole_interval() {
     let mut h = OrganismHarness::new();
+    let heads = heads(&h);
 
     // One step, on the host alone, as the yardstick.
     let mut one_step = h.particles.clone();
@@ -1062,6 +1122,7 @@ mod tests {
       &mut one_step,
       &h.pop,
       &h.bodies,
+      &heads,
       &mut after_one,
       &h.params,
       &h.geom,
@@ -1077,6 +1138,7 @@ mod tests {
         &mut expected,
         &h.pop,
         &h.bodies,
+        &heads,
         &mut bend,
         &h.params,
         &h.geom,
@@ -1093,6 +1155,62 @@ mod tests {
       bend.iter().zip(&after_one).all(|(two, one)| two >= one),
       "a maximum went down over a step that never reset it"
     );
+  }
+
+  /// Where a limb's base joint has settled, signed, against the direction its
+  /// parent's last segment points: the angle the joint constraint is aiming
+  /// at, once enough sweeps have taken it there.
+  fn settled_joint_angle(h: &mut OrganismHarness, limb: usize) -> f32 {
+    for _ in 0..80 {
+      h.particles = run_kernel(h);
+      h.sph = SphDevice::upload(&h.client, &h.particles);
+    }
+    let parent = h.pop.limbs.parent[h.pop.limb_index(0, limb)] as usize;
+    let axis = super::limb_axis_ref(
+      &h.particles.ppos,
+      &h.pop,
+      &h.bodies,
+      0,
+      parent,
+      h.geom.bounds.x,
+    );
+    let n = h.bodies.limb_len(0, parent);
+    let from = h.bodies.particle(0, parent, n - 1) as usize;
+    let to = h.bodies.particle(0, limb, 0) as usize;
+    let seg = (h.particles.ppos[to] - h.particles.ppos[from]).normalize();
+    axis.perp_dot(seg).atan2(axis.dot(seg))
+  }
+
+  /// The actuator's first output moves the base joint's target: the joint
+  /// settles `actuator_gain * tanh(a)` away from where the genome's
+  /// `grow_angle` alone would have put it.
+  #[test]
+  fn the_actuator_output_moves_the_joint_target() {
+    let stem = 1;
+    let mut h = OrganismHarness::new();
+    assert!(heads(&h).iter().all(|v| *v == 0.0));
+    let unnudged = settled_joint_angle(&mut h, stem);
+
+    let mut nudged = OrganismHarness::new();
+    let ml = nudged.body_cfg.max_limbs as usize;
+    let mut out = vec![0.0f32; nudged.brain.cfg.heads_len()];
+    // Saturating, so the nudge is the whole of the gain and the test does not
+    // turn on how `tanh` rounds.
+    out[stem * super::HEAD_DIM + super::HEAD_ACTUATOR] = 10.0;
+    assert!(stem < ml);
+    nudged.brain.device.heads = nudged.client.create_from_slice(bytemuck::cast_slice(&out));
+    let moved = settled_joint_angle(&mut nudged, stem);
+
+    let expected = nudged.params.actuator_gain * 10.0f32.tanh();
+    // Both angles are `atan2` values, so their difference has to come back
+    // into (-pi, pi] before it can be compared with one.
+    let pi = std::f32::consts::PI;
+    let turned = (moved - unnudged + pi).rem_euclid(2.0 * pi) - pi;
+    assert!(
+      (turned - expected).abs() < 0.02,
+      "the joint moved {turned} against {expected}"
+    );
+    assert!(expected > 0.25, "the gain is too small to measure");
   }
 
   /// A dead slot is a no-op, whatever its map says.

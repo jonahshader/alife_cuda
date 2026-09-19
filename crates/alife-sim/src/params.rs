@@ -220,6 +220,8 @@ sim_params! {
         "Stiffness of a limb's base-joint angle constraint, in [0, 1]";
     bend_stiffness: f32 = 0.3, "organism.bend_stiffness", "bend-stiffness",
         "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
+    actuator_gain: f32 = 0.3, "organism.actuator_gain", "actuator-gain",
+        "Radians the brain's actuator output can move a base joint's target angle by";
     species_threshold: f32 = 0.25, "organism.species_threshold", "species-threshold",
         "Genome distance under which the metrics count two organisms as one species";
     life_interval: i32 = 10, "life.interval", "life-interval",
@@ -455,6 +457,7 @@ impl SimParams {
       ("upkeep-per-volume", self.upkeep_per_volume),
       ("growth-rate", self.growth_rate),
       ("break-angle", self.break_angle),
+      ("actuator-gain", self.actuator_gain),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),

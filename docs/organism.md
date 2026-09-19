@@ -80,9 +80,10 @@ Consequences:
 Part types at the first milestone: **root** (pinned in soil, draws water
 from the cell's saturation), **stem** (structure), **leaf** (gains energy
 from light), **seed** (a reproduction particle). Later types are additions,
-not new systems: an **actuated limb** whose base joint takes a target angle
-from the brain, a **digger** that decrements soil density in its cell, a
-**mouth**, and **sensors**. Burrowing, erosion, and deposition all write
+not new systems: an **actuated limb** whose base joint takes its target angle
+from the brain outright, rather than the bounded nudge every limb's joint
+already takes (*Growth*), a **digger** that decrements soil density in its
+cell, a **mouth**, and **sensors**. Burrowing, erosion, and deposition all write
 soil density through one channel.
 
 ## Brain
@@ -269,15 +270,16 @@ resets it, so each tick sees its own interval, and the decision is the
 host's, in slot order, like every other life decision. A limb shed this way
 counts in the `breaks` column of the metrics time series.
 
-**4. The brain's part.** `head_growth` is one logit per limb, added to
-`growth_bias` before the softmax — the sprout head's "when" role, now
-continuous; it rides in the packed life buffer's second per-limb slice.
-Still open: the actuator head's first output, which is to make the
-base-joint target `grow_angle + actuator_gain × tanh(a)`, the brain
-nudging the genome's rest angle. Both are the wire phototropism
-needs: a token carries its limb's light, and a brain that raises the
-logit or bends the joint toward the brighter side grows toward the sun
-with no new mechanism.
+**4. The brain's part.** Built. `head_growth` is one logit per limb, added
+to `growth_bias` before the softmax — the sprout head's "when" role, now
+continuous; it rides in the packed life buffer's second per-limb slice. The
+actuator head's first output `a` is wired too: the base-joint target is
+`grow_angle + actuator_gain × tanh(a)` (default 0.3 rad), the brain nudging
+the genome's rest angle within a band `tanh` keeps it inside, so no head
+value can bend a joint far enough to break the limb. Both are the wire
+phototropism needs: a token carries its limb's light, and a brain that
+raises the logit or bends the joint toward the brighter side grows toward
+the sun with no new mechanism. The second actuator output stays reserved.
 
 ## Evolution operators
 
@@ -389,7 +391,7 @@ transplant and its no-transplant twin — into `runs/soil/`, and
 1. **Plants.** Anchored organisms with root, stem, leaf, and seed types; the
    growth head biases growth; energy, death, reproduction; evolutionary
    metrics; the soil-specialization experiment with its controls. This
-   exercises every piece above except actuators.
+   exercises every piece above except the actuated limb type.
 2. **Mobile creatures.** Add the actuated limb, a mouth, and contact and
    proximity sensors. Locomotion must be evolved, not given. If populations
    never learn to move, the escape hatch is a thrust part type that pushes
@@ -423,8 +425,9 @@ anchor; distance at `limb_segment_length` (default 0.15, validated ≤ the
 grid cell size) times how far the limb has grown into that segment
 (*Growth*), which is 1 for every segment but a growing limb's last;
 the angle at each limb's base joint against the parent
-segment's direction (target from the limb record for plants, from the brain
-for actuated limbs later, stiffness `joint_stiffness`), whose error before
+segment's direction (target `grow_angle + actuator_gain × tanh(a)`, the limb
+record's rest angle nudged by the brain's actuator output, stiffness
+`joint_stiffness`), whose error before
 the projection is kept per limb as a running maximum for the life tick to
 break on (*Growth*); bend, keeping a
 limb's consecutive segments in line (`bend_stiffness`), or a limb is a rope;
@@ -541,8 +544,11 @@ constraint pass → limb geometry → sense (token features per limb) → brain
 forward → the life tick, every `life_interval` steps. The constraint pass
 publishes limb geometry (root-relative position, segment angle, depth) for
 the token features; the life tick runs on the heads the forward pass just
-wrote, so applying a head and deciding the life cycle are one step — though
-until the actuator head is wired, the growth logit is the only one read.
+wrote, so applying a head and deciding the life cycle are one step. The
+constraint pass is the exception, because it runs before the brain: the
+actuator output it nudges a base joint by is the one the *previous* step's
+forward pass wrote, and zeros before the first — a step of latency, like the
+sensors' own.
 
 **The life tick's shape.** Light and energy are kernels; growth, placement,
 freeing and mutation are kernels; the *decisions* between them are a serial
