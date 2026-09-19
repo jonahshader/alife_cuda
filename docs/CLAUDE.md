@@ -53,10 +53,18 @@ failure mode. If an entry describes *what* shipped rather than *why* or
 
 ### Design docs (the "why")
 
-No system design docs exist yet. Today the fluid, soil, and tree models are
-documented in their owning headers (`src/systems/particle_fluid2.cuh`,
-`soil.cuh`, `tree_types.cuh`) and in `git log`. Create `docs/<topic>.md` and
-add it here when a design outgrows header comments: a model with tunables
+- **`organism.md`** — the settled organism design: one representation for
+  plants and creatures, fixed-shape genome, Perceiver-IO brain over limb
+  tokens, particle bodies, ecology as the only selection, evolutionary
+  metrics, the soil-specialization experiment and its controls, milestones.
+  **Specified, not yet implemented**; it is the spec the organism chunks in
+  `TODO.md` are built from. Update it in the same commit as any
+  implementation that diverges.
+
+The fluid, soil, and tree models are still documented in their owning
+headers (`src/systems/particle_fluid2.cuh`, `soil.cuh`, `tree_types.cuh`)
+and in `git log`. Create `docs/<topic>.md` and add it here when a design
+outgrows header comments: a model with tunables
 whose *rationale* matters (why these porosity / capillary constants), a
 cross-system contract (how erosion moves material between fluid and soil),
 or a measured comparison a future session would otherwise redo.

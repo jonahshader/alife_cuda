@@ -3,16 +3,44 @@
 Outstanding work. Completed items get deleted — `git log` is the record of
 what shipped.
 
-## Inspection & verification (gates autonomous optimization work)
+## Organisms (the critical path — spec in `organism.md`)
 
-- **Simulation metrics.** Before any agent-driven fluid optimization, the
-  project needs a numeric answer to "is this aspect good": candidates are
-  mass/volume conservation over N steps, density error vs `target_density`,
-  incompressibility (max velocity divergence), kinetic-energy settling time
-  for a resting column, per-step wall time per particle, and capillary rise
-  height per soil column in `--terrain-mode 1`. Design with Jonah first (one
-  fork at a time); the output should be a headless mode that prints or
-  writes them so a run can be scored without a window.
+Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
+the spec, don't re-derive it.
+
+- **Genome + population tensors.** Discrete limb records and the
+  fixed-shape continuous brain tensor as SoA population buffers; Gaussian
+  and structural mutation operators; species distance over the discrete
+  section.
+- **Particle bodies.** Limbs as particle chains in the fluid's particle
+  system with distance and base-joint angle constraints (rest length capped
+  at the smoothing radius); root pinning in soil; part types root, stem,
+  leaf, seed. Particles need a per-particle organism id and limb index.
+- **Brain forward pass.** Perceiver-IO over limb tokens: embeddings
+  (type, spatial, rotation, depth, child slot, identity), persistent gated
+  latents, input and output cross-attention, fixed trunk, sprout head. One
+  batched pass per tick across the population; fp16 weights, fp32
+  accumulate, starting from `alife_cuda_2`'s custom batched GEMV kernel.
+- **Energy and life cycle.** Per-column light occlusion scan, leaf energy
+  gain, root water draw from soil saturation, per-particle upkeep, death to
+  soil organic matter, seed particle emission with a mutated genome,
+  germination on landing in soil.
+- **Evolutionary metrics.** Headless `--metrics <path>` writes a sampled
+  time series (population, births, deaths, energy flux, lineage count,
+  phylogenetic depth, trait distributions per soil type) plus a summary at
+  exit derived from the same samples. This is the scoring path for every
+  later agent-driven run.
+- **Soil-specialization experiment** in `--terrain-mode 1`, with the three
+  controls in the spec (identical-soil isolation control, soil-position
+  permutation, transplant test). The capillary test reset must publish its
+  column extents so per-column metrics can be computed.
+
+## Inspection & verification
+
+- **Fluid metrics** (density error vs `target_density`, max velocity
+  divergence, kinetic-energy settling, capillary rise per column) are
+  secondary to the evolutionary metrics above and gate only fluid solver
+  work; add them to the same `--metrics` time series when that work starts.
 - **Test harness.** None exists. Pick one (Catch2 is what `mg-rl-rewrite`
   uses) and start with behavior-property tests over headless runs rather than
   goldens pinned to epsilon.
@@ -27,8 +55,8 @@ what shipped.
   RNG is in for the fluid via Random123, fixed-point energy and determinism
   tests are not); `CopyLevel` enum for partial state copies
   (FULL/NORMAL/RENDER).
-- Redesign `World` as a top-level composition of all systems (trees + soil +
-  fluid + creatures).
+- Redesign `World` as a top-level composition of all systems (soil + fluid +
+  organisms).
 - `--extended-lambda` and `--expt-relaxed-constexpr` are set in
   `CMakeLists.txt` but nothing uses device lambdas or device-side
   `constexpr`; drop them.
@@ -45,12 +73,13 @@ what shipped.
 
 ## Fluid simulation
 
-- **Solver choice.** The current solver is SPH. FLIP/PIC or whatever is
-  current SOTA for this scale is the intended direction for the autonomous
-  optimization effort, but it is gated on the metrics above — no solver
-  swap until a run can be scored.
-- **Profile the SPH step.** The three neighbor-gather kernels are 98% of
-  the ~0.45 ms step for 51k particles (`docs/perf.md`). Start with `ncu` on
+- **Solver choice — on hold** (`organism.md`, decisions). FLIP/PIC is not on
+  the path to emergence; revisit only if fluid behavior itself blocks an
+  organism milestone.
+- **Profile the SPH step.** Organism bodies are particles in this system,
+  so the per-particle cost of the three neighbor-gather kernels (98% of the
+  ~0.45 ms step for 51k particles, `docs/perf.md`) is now the cost of
+  bodies too. Start with `ncu` on
   `calculate_accel`: occupancy, achieved bandwidth, and whether
   `-rdc=true` is blocking inlining of the `__device__` helpers in the
   neighbor loop. The `TimingProfiler` synchronizes after every section,
@@ -64,20 +93,22 @@ what shipped.
   density change on pickup/drop; use the smoothed velocity to avoid
   flicker.
 
-## Plant system
+## Organisms, later milestones (`organism.md`)
 
-- Couple trees with terrain + fluid: roots grow downward through soil,
-  branching like the existing L-system; roots anchor plants and absorb
-  water/nutrients; roots impede flow and water feeds root growth.
-
-## Creatures
-
-- Policy network engine (port from `alife_cuda_2`): block-based
-  architecture (Linear, Activation, Add, Mul, OutputAct), JSON-defined archs,
-  per-creature weights with strided batched GEMV (cuBLAS), mutation.
-- Agent system: sensory inputs (eyes, proximity, internal state), motor
-  outputs (movement, eating, reproduction), energy/metabolism, reproduction
-  with mutation.
+- **Milestone 2, mobile creatures.** Actuated limb type (base joint takes a
+  target angle from the brain), mouth, contact and proximity sensors.
+  Locomotion is evolved, not given; the thrust-part escape hatch is built
+  only after a run shows the stall.
+- **Milestone 3, soil as actionable state.** Digger part type writing soil
+  density through the same channel as erosion and deposition.
+- **Adaptive mutation distribution** (lineage momentum or species-level ES,
+  per-species knob, default off) measured against lineage diversity before
+  it is ever on by default.
+- **Reserved brain features**, added only on a plateau that looks like the
+  missing piece: tree-distance attention bias, per-limb memory head.
+- The existing L-system trees (`systems/trees.cu`, `tree_types.cuh`) are
+  superseded by the plant milestone; delete or absorb once particle-body
+  plants render.
 
 ## Tooling
 
