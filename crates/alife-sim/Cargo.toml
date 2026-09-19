@@ -1,0 +1,24 @@
+[package]
+name = "alife-sim"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+cubecl.workspace = true
+cubecl-common = "=0.11.0-pre.3"
+cubecl-cpu.workspace = true
+cubecl-cuda.workspace = true
+cubecl-runtime.workspace = true
+cubecl-wgpu.workspace = true
+wgpu.workspace = true
+
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }
+fastnoise-lite = "1"
+glam = { version = "0.30", features = ["bytemuck"] }
+pollster = "0.4"
+thiserror = "2"
+toml = "0.9"
+tracing = "0.1"
