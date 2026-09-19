@@ -270,7 +270,9 @@ impl eframe::App for SimApp {
           self.camera_centre.y += delta.y * metres_per_point;
         }
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-        if response.hovered() && scroll != 0.0 {
+        // egui zeroes the smoothed delta exactly today; a tolerance keeps a
+        // sub-epsilon residual from zooming every frame if that ever changes
+        if response.hovered() && scroll.abs() > 1.0e-4 {
           self.camera_height = (self.camera_height * (1.0 - scroll * 0.002)).clamp(0.05, 1.0e4);
         }
 

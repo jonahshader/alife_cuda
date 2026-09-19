@@ -56,14 +56,18 @@ pub fn headless_setup(
       })
       .ok_or_else(|| anyhow::anyhow!("no wgpu adapter at all"))?,
   };
-  Ok(setup_from_adapter(instance, adapter))
+  setup_from_adapter(instance, adapter)
 }
 
 /// Request a device from an adapter the same way `cubecl_wgpu`'s own
 /// `request_device` does, so the device we hand CubeCL has everything its own
 /// path would have asked for.
-pub fn setup_from_adapter(instance: wgpu::Instance, adapter: wgpu::Adapter) -> WgpuSetup {
-  let backend = adapter.get_info().backend;
+pub fn setup_from_adapter(
+  instance: wgpu::Instance,
+  adapter: wgpu::Adapter,
+) -> anyhow::Result<WgpuSetup> {
+  let info = adapter.get_info();
+  let backend = info.backend;
   let (device, queue) = pollster::block_on(
     adapter.request_device(&wgpu::DeviceDescriptor {
       label: Some("alife device"),
@@ -76,15 +80,20 @@ pub fn setup_from_adapter(instance: wgpu::Instance, adapter: wgpu::Adapter) -> W
       experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
     }),
   )
-  .expect("request_device");
+  .map_err(|err| {
+    anyhow::anyhow!(
+      "requesting a device from wgpu adapter {:?}: {err}",
+      info.name
+    )
+  })?;
 
-  WgpuSetup {
+  Ok(WgpuSetup {
     instance,
     adapter,
     device,
     queue,
     backend,
-  }
+  })
 }
 
 /// Hand an existing setup to CubeCL and get a client back.

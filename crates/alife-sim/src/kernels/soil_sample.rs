@@ -177,12 +177,17 @@ pub fn properties_at_pos(
   let dty = smoothstep01_derivative(c.dy);
   let inv_soil_size = 1.0f32 / soil_size;
 
-  // solid density value + gradient
-  let sd0 = sd00 * (1.0f32 - tx) + sd01 * tx;
-  let sd1 = sd10 * (1.0f32 - tx) + sd11 * tx;
+  // solid density value + gradient: bilinear in the smoothstepped (tx, ty)
+  let sd0 = sd00 * (1.0f32 - tx) + sd01 * tx; // at y0
+  let sd1 = sd10 * (1.0f32 - tx) + sd11 * tx; // at y1
   let value = sd0 * (1.0f32 - ty) + sd1 * ty;
+  // ∂f/∂tx and ∂f/∂ty of the bilinear form
   let psd_tx = (sd01 - sd00) * (1.0f32 - ty) + (sd11 - sd10) * ty;
   let psd_ty = sd1 - sd0;
+  // Chain rule back to world space: the raw cell coordinate is
+  // (pos - half_soil_size) / soil_size - floor, so its derivative wrt x is
+  // 1/soil_size; tx = smoothstep(raw) contributes dtx. Hence
+  //   grad_x = ∂f/∂tx · dtx · (1/soil_size), and likewise for y.
 
   SoilPropertiesAtPos {
     solid_density: value,

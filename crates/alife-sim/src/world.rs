@@ -45,6 +45,14 @@ pub struct WorldGeometry {
 
 impl WorldGeometry {
   pub fn from_params(params: &SimParams) -> Self {
+    // The CLI validates first; this is the backstop for programmatic callers,
+    // because a non-positive radius or cell size saturates the divisions
+    // below into a grid allocation that hangs rather than fails.
+    assert!(
+      params.validate().is_ok(),
+      "invalid parameters: {}",
+      params.validate().unwrap_err()
+    );
     let bounds = Vec2::new(params.world_width, params.world_height);
 
     let grid_width = ((bounds.x / params.smoothing_radius).floor() as usize).max(1);

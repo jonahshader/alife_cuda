@@ -210,9 +210,48 @@ impl SimParams {
   }
 }
 
+impl SimParams {
+  /// Reject values that would make the world geometry meaningless before any
+  /// buffer is sized from them: a zero or negative radius or cell size turns
+  /// `bounds / radius` into infinity and the grid allocation into a hang.
+  pub fn validate(&self) -> Result<(), String> {
+    let positive = [
+      ("world-width", self.world_width),
+      ("world-height", self.world_height),
+      ("smoothing-radius", self.smoothing_radius),
+      ("soil-cell-size", self.soil_cell_size),
+      ("dt", self.dt),
+    ];
+    for (name, value) in positive {
+      if value.is_nan() || value <= 0.0 || !value.is_finite() {
+        return Err(format!(
+          "--{name} must be a positive finite number, got {value}"
+        ));
+      }
+    }
+    if self.particles_per_cell < 0 || self.max_particles_per_cell < 1 {
+      return Err(format!(
+        "--particles-per-cell must be >= 0 and --max-particles-per-cell >= 1, got {} and {}",
+        self.particles_per_cell, self.max_particles_per_cell
+      ));
+    }
+    Ok(())
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+
+  #[test]
+  fn validate_rejects_a_zero_radius() {
+    let params = SimParams {
+      smoothing_radius: 0.0,
+      ..SimParams::default()
+    };
+    assert!(params.validate().is_err());
+    assert!(SimParams::default().validate().is_ok());
+  }
 
   #[test]
   fn cli_overrides_toml_overrides_default() {

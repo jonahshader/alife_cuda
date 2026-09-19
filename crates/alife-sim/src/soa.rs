@@ -116,6 +116,13 @@ macro_rules! define_soa {
         }
 
         impl $host {
+            /// Bytes one element occupies in a dump: the sum of the fields'
+            /// raw sizes, so a reader can check a file's length against its
+            /// header before allocating anything.
+            pub const RAW_BYTES: usize =
+                ::core::mem::size_of::<<$ty0 as $crate::soa::SoaField>::Raw>()
+                $( + ::core::mem::size_of::<<$ty as $crate::soa::SoaField>::Raw>() )*;
+
             /// `n` elements per field, at the field's declared initial value.
             pub fn new(n: usize) -> Self {
                 Self {

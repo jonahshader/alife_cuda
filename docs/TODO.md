@@ -110,7 +110,10 @@ them.
 
 ## Substrate: Rust + CubeCL (decided 2026-09-18, see `organism.md` decisions)
 
-The fluid and soil are ported and at parity (`perf.md`). What is left:
+The fluid and soil are ported and at parity (`perf.md`) on the CPU and CUDA
+runtimes; on wgpu one field, `evap_prob`, lands at 3.2× the C++ run-to-run
+floor instead of 1× (float contraction in the shader compiler; nothing
+downstream diverges, `REVIEW.md`). What is left:
 
 - **Delete the C++ tree.** It is reference-only now. It still owns the
   L-system trees, which the plant milestone supersedes, so it goes when

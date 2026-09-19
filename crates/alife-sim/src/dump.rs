@@ -35,7 +35,12 @@ pub enum DumpError {
   BadMagic,
   #[error("unsupported dump version {0} (this build writes {VERSION})")]
   BadVersion(u32),
+  #[error("dump is {actual} bytes but its header implies {expected} (truncated or corrupt)")]
+  Truncated { expected: u64, actual: u64 },
 }
+
+/// Bytes before the first field array.
+const HEADER_BYTES: u64 = 8 + 4 + 4 + 4 + 8;
 
 /// Everything a dump carries besides the particle arrays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +86,15 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<(DumpHeader, SphHost), DumpError>
   let mut seed_bytes = [0u8; 8];
   input.read_exact(&mut seed_bytes)?;
 
+  // Check the file can hold what the header promises before `read_fields`
+  // allocates `count` elements per field: a corrupt count would otherwise
+  // request gigabytes and abort instead of failing cleanly.
+  let expected = HEADER_BYTES + count as u64 * SphHost::RAW_BYTES as u64;
+  let actual = input.get_ref().metadata()?.len();
+  if actual < expected {
+    return Err(DumpError::Truncated { expected, actual });
+  }
+
   let particles = SphHost::read_fields(&mut input, count as usize)?;
   Ok((
     DumpHeader {
@@ -121,5 +135,29 @@ mod tests {
     assert_eq!(header.step_count, 7);
     assert_eq!(header.seed, 42);
     assert_eq!(loaded, particles);
+  }
+
+  #[test]
+  fn raw_bytes_matches_the_cpp_layout() {
+    // 4 float2 + 3 float + 2 uint8 + 1 float, as `src/main.cu` documents
+    assert_eq!(SphHost::RAW_BYTES, 50);
+  }
+
+  #[test]
+  fn a_truncated_dump_fails_before_allocating() {
+    let particles = SphHost::new(4);
+    let path = std::env::temp_dir().join("alife_dump_truncated.bin");
+    write(&path, &particles, 0, 1).unwrap();
+    // Rewrite the count as a huge number while leaving the file short.
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    let result = read(&path);
+    std::fs::remove_file(&path).ok();
+    match result {
+      Err(DumpError::Truncated { .. }) => {}
+      Err(other) => panic!("expected Truncated, got {other}"),
+      Ok(_) => panic!("truncated dump must fail"),
+    }
   }
 }

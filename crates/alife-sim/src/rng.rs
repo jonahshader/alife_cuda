@@ -475,11 +475,12 @@ impl RngCounter {
   /// Where the counter stands after `steps` simulation steps. Each step
   /// consumes two values, one per RNG-using kernel.
   pub fn after_steps(steps: u32) -> Self {
-    let mut ctr = Self::default();
-    for _ in 0..(steps as u64 * 2) {
-      ctr.incr();
-    }
-    ctr
+    // The counter is a little-endian 128-bit integer (word 0 least
+    // significant, carries propagate upward in `incr`), so `n` increments
+    // from zero is just the value `n` — resuming a long run must not replay
+    // every increment one at a time.
+    let n = steps as u64 * 2;
+    Self([n as u32, (n >> 32) as u32, 0, 0])
   }
 
   pub fn incr(&mut self) {

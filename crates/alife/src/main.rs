@@ -96,6 +96,9 @@ fn main() -> Result<()> {
     println!("Loaded config from: {}", cli.config.display());
   }
   params.apply_cli(&cli.params);
+  params
+    .validate()
+    .map_err(|msg| anyhow::anyhow!("invalid parameters: {msg}"))?;
 
   let initial = match &cli.load {
     Some(path) => {
