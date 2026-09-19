@@ -1,84 +1,59 @@
-# Handoff — milestone 1 is built and measured; the next move is Jonah's (2026-09-19)
+# Handoff — the growth model is built; the energy balance is the next call (2026-09-19)
 
-The overnight run of 2026-09-18/19 executed the plan in the previous
-`prompt.md` end to end. Read `docs/REVIEW.md` first: it is the queue of
-things only Jonah can judge, and the experiment's result is the top item.
-Then `docs/organism.md` (status line and the dated decisions, which grew a
-lot), `docs/TODO.md` (the left-open lists per chunk), `docs/perf.md`.
+The session of 2026-09-19 (interactive, after the overnight run) fixed the
+GUI (eframe's default device limits), the driver/toolchain workarounds, and
+the light grid (soil is opaque), and then designed and shipped the growth
+model in four delegation cycles. Read `docs/organism.md`'s *Growth* section
+and the decisions entry "Growth is continuous..." first; `docs/TODO.md` has
+what is left; `docs/perf.md` has every run's numbers.
 
-## What shipped (all on `main`, pushed through `ba38080`'s predecessor; the
-## last two commits are local until the next push)
+## What shipped (all on `main`, `8944ec9`; nothing pushed this session)
 
-Seven delegation cycles, each: Opus builder in a worktree → merge →
-claims rerun by the orchestrator → Sonnet find-only review → verified
-fixes → push on green.
+1. **Continuous length** (`grown` per limb, fractional last segment), the
+   genome's `growth_bias` / `growth_rate` per limb, softmax allocation of
+   `energy − seed_cost` over growing limbs, child progress ≤ parent
+   progress. Whole-limb sprouting and `sprout_cost` are gone.
+2. **Thickness and volume**: `target_thickness` per limb, live thickness
+   `target × sqrt(progress)`, growth buys volume, upkeep is per volume
+   (`upkeep_per_volume` replaced `upkeep_per_particle`). Segments draw at
+   thickness.
+3. **Breaking**: the constraint pass keeps each joint's worst bend; a
+   non-root limb past `break_angle × clamp(thickness / break_thickness_ref,
+   0, 1)` sheds itself and its descendants as organic matter and regrows.
+4. **The brain's part**: `head_growth` (one logit per limb, added to
+   `growth_bias`) and the actuator's first output nudging the joint target
+   by `actuator_gain × tanh(a)`. Brain is 18,659 params; population file
+   version 4 reshapes older rows.
 
-1. **Port** of the fluid and soil to Rust + CubeCL at parity with the C++
-   (`resources/parity/`), bit-reproducible per runtime, plus a cleanup
-   pass (one neighbour traversal, no double device init, RNG counter as
-   scalars, GUI bind-group reuse).
-2. **Genome**: `BrainShape` slices (18,890 params), population SoA,
-   founder plant, mutation kernels with references, deterministic slot
-   scan, species distance.
-3. **Bodies**: `Body`/`Free` particle kinds, constraint pass, limb
-   geometry, `--founders`, dump v2. Fluid byte-identical at zero founders.
-4. **Metrics**: `--metrics <path>` CSV, per-column traits, species
-   clustering, column extents from the capillary layout.
-5. **Brain**: 22-launch Perceiver-IO tick with a plain-Rust twin, tolerance
-   1e-5 on all runtimes; fp16 storage built and off. The spec's tick
-   diverged; a parameter-free RMS scaling of the latent state fixed it.
-6. **Life cycle**: light occlusion grid, energy budget, sprouting by the
-   brain's timing, seeds, germination, death to organic matter. A 64-founder
-   run turns over on its own (48 births, 90 deaths, generation 3 by step
-   3000) and is bit-reproducible.
-7. **Experiment**: terrain mode 2 with headroom, permutation and
-   uniform-soil controls, population save/load, transplant, the runner and
-   scorer scripts, and one full run. **Result: no specialization visible**,
-   and the world has a knife-edge (`--column-top` 0.25 lives, 0.30 dies;
-   populations either saturate all slots or go extinct). Habitability does
-   follow the soil: the sand column never holds a plant.
+Each cycle: Opus builder in a worktree → fast-forward merge → claims rerun
+→ Sonnet find-only review → verified fixes committed. 154 tests, clippy
+clean, `--founders 0` byte-identical throughout, ~1.46 ms/step at 64
+founders on CUDA.
 
-133 tests, clippy clean, per step ~1.4 ms at 64 founders on CUDA.
+## Open, and Jonah's to decide (also said in chat)
 
-## Decisions the orchestrator took without Jonah (queued in `REVIEW.md`)
-
-- Brain latents get an RMS normalization outside the parameter table.
-- The sprout head decides *when* a genome's limb records grow, not what
-  they are (keeps the genome heritable; avoids Lamarckian growth).
-- `contact` sensor = solid fraction > 0.5, which puts pure clay on the edge.
-- Mode 1 frozen for parity; the experiment lives in mode 2.
-- Four energy/terrain constants moved on measurement, each with its runs.
-- Pushed at the end of each green cycle (delegation cycle step 6).
+- **The energy balance.** With volume pricing a seedling's first segment
+  is cheap, so nothing starves: the 64-founder run fills all 256 slots by
+  step 3000 and `max_organisms` is the ceiling, not light or space. The
+  knobs are what a root earns, what a seed germinates with, and whether the
+  growth reserve is `seed_cost` (`TODO.md`, first growth bullet, and the
+  `--column-top` bullet, which is the same question).
+- **`--actuator-gain`.** At the shipped 0.3 rad an untrained brain wanders
+  every joint and limb breaking more than doubles (109 → 238 in the
+  reference run); 0.1 gave the tallest, highest-energy bodies of the sweep
+  (`perf.md`). One flag, no code change.
+- **The window.** Plants should now grow visibly, thicken, and snap.
+  Nobody has watched it: `./target/release/alife --founders 64 --seed 42`.
 
 ## What the next session should NOT do on its own
 
-Do not tune the energy balance or start milestone 2. The experiment's
-outcome is a design question — widen the survivable band (depth-dependent
-root return, more valuable light, a wetter world), or accept that plants
-this simple cannot specialize and move to mobile creatures — and it is
-Jonah's call. Everything an agent can do without that call is done.
+Do not tune the energy constants or the actuator gain; both are Jonah's.
 
-## What it CAN do
+## Machine notes
 
-- Close the review queue's small items if Jonah has answered them.
-- The GUI has still never been opened by anyone; Jonah checks it.
-- Known-good follow-ups that need no design decision, all in `TODO.md`:
-  per-column split by lineage of origin in the metrics, `--load-pop`
-  resuming the fluid too, `read_free_slots` prefix read, `narrow_shadow`
-  per row, `pick_sprout` O(limbs²), the CUDA-unusable exit segfault probe.
-
-## Machine and process notes
-
-- Dev box (2026-09-19, after the overnight run): default toolchain is
-  1.98.1 and the driver is 610 (CUDA 13.3), so plain `cargo` and plain
-  `./target/release/alife --runtime cuda` work; no `+1.98.1`, no
-  `LD_LIBRARY_PATH`. `Cargo.lock` is authoritative.
-- The `code-review-find` workflow hung three times out of seven at the
-  post-finder stage with one finder never returning; the candidates are
-  recoverable from `journal.jsonl` under the workflow's transcript dir,
-  which is how those reviews were closed. Stop the hung task with
-  `TaskStop` afterwards.
-- The session hit the usage limit once around 02:50; two builders died at
-  startup and were relaunched with the same briefs after the reset.
-- Scratch dumps used for byte-for-byte checks live in the session
-  scratchpad, not the repo.
+- Driver 610 (CUDA 13.3), default toolchain 1.98.1: plain `cargo` and plain
+  `./target/release/alife --runtime cuda` work. No `+1.98.1`, no
+  `LD_LIBRARY_PATH` (builders' reports that mention it were setting a path
+  that no longer matters).
+- The `code-review-find` workflow ran four for four this session with a
+  target string (no staged diff); ~5 minutes and ~0.9M tokens each.
