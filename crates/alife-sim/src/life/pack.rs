@@ -101,7 +101,7 @@ pub fn pack_life(
   let base_limb = o * ml;
   let pbase = o * ml * mp;
   for l in 0..ml {
-    let n = limb_len(limbs, base_limb + l, body);
+    let n = limb_len(map, pbase, l, body);
     let part_type = limbs.part_type[(base_limb + l) as usize];
     if part_type == TYPE_STEM || part_type == TYPE_LEAF {
       for i in 0..n {
@@ -199,10 +199,7 @@ pub fn pack_life_ref(
   n_types: usize,
 ) -> Vec<f32> {
   let body = bodies.cfg;
-  let (ml, mp) = (
-    body.max_limbs as usize,
-    body.max_particles_per_limb as usize,
-  );
+  let ml = body.max_limbs as usize;
   let width = stride(body);
   let mut out = vec![0.0f32; body.max_organisms as usize * width];
 
@@ -231,7 +228,7 @@ pub fn pack_life_ref(
       if !matches!(part_type, PartType::Stem | PartType::Leaf) {
         continue;
       }
-      let n = (pop.limbs.length[record] as usize).min(mp);
+      let n = bodies.limb_len(o, l);
       for i in 0..n {
         let id = bodies.particle(o, l, i);
         if id == NO_PARTICLE {

@@ -9,7 +9,8 @@
 //! 2. credit and charge every organism ([`energy`]);
 //! 3. one packed readback ([`pack`]) — energies, seed positions and speeds,
 //!    body tops, and one sprout choice per limb;
-//! 4. decide, on the host: who dies, who germinates, who sprouts, who seeds;
+//! 4. decide, on the host: who dies, who germinates, how much every limb
+//!    grows, who seeds;
 //! 5. free the dead, place the seeds, run the growth and mutation kernels.
 //!
 //! **What crosses the bus, per tick.** One `read` of
@@ -54,7 +55,11 @@ struct Decisions {
   expired: Vec<usize>,
   /// Seeds that landed: `(slot, where its particle came to rest)`.
   germinating: Vec<(usize, Vec2)>,
-  /// Limbs to grow — germination roots first, then sprouts.
+  /// What every limb that grew this tick has grown to, in segments:
+  /// `(flat (organism, limb) index, length)`.
+  lengthened: Vec<(usize, f32)>,
+  /// Limbs whose `ceil(grown)` rose, so the map owes them a particle —
+  /// germination roots first, then the tick's growth.
   growth: Vec<GrowRequest>,
   /// `(parent, child, where the seed particle starts)`.
   seeds: Vec<(usize, usize, Vec2)>,
@@ -131,6 +136,7 @@ impl<R: Runtime> Sim<R> {
     let p = self.params;
     let body = self.body_cfg;
     let width = pack::stride(body);
+    let mp = body.max_particles_per_limb as usize;
     let max_organisms = body.max_organisms as usize;
     let step = self.step_count;
     let soil_cell = self.geom.soil_cell_size;
@@ -144,7 +150,9 @@ impl<R: Runtime> Sim<R> {
     let mut free_slots = free_slots_ref(&self.pop.organisms.alive);
     free_slots.reverse(); // pop() takes the lowest id
 
-    let mut sprouts: Vec<GrowRequest> = Vec::new();
+    // The tick's growth, held back so germination roots go into the batch
+    // first and the wave order stays one pass.
+    let mut grew: Vec<GrowRequest> = Vec::new();
     for o in 0..max_organisms {
       if self.pop.organisms.alive[o] == 0 {
         continue;
@@ -179,30 +187,28 @@ impl<R: Runtime> Sim<R> {
         continue;
       }
 
-      // A plant. Energy below zero is death, and a dead plant neither
-      // sprouts nor seeds.
+      // A plant. Energy below zero is death, and a dead plant neither grows
+      // nor seeds.
       if energy < 0.0 {
         out.dying.push(o);
         continue;
       }
 
-      if energy >= p.sprout_cost
-        && let Some(limb) = pick_sprout(
-          &self.pop,
-          &self.bodies,
-          o,
-          &packed[base + pack::LIFE_FIXED..base + width],
-        )
-      {
-        // Charged here rather than after the growth batch: `grow_limbs`
-        // drops whole limbs off the end of a batch when the particle
-        // capacity is short, and this pays for one that was dropped. The
-        // capacity is `max_organisms x max_limbs x max_particles_per_limb`,
-        // so it is only short when every slot already holds a full body —
-        // at which point an over-charged sprout is the least of it.
-        sprouts.push(GrowRequest { organism: o, limb });
-        energy -= p.sprout_cost;
-      }
+      // Charged whole, before the batch: `grow_limbs` drops a limb off the
+      // end of a batch when the particle capacity is short, and this pays
+      // for one that was dropped. The capacity is
+      // `max_organisms x max_limbs x max_particles_per_limb`, so it is only
+      // short when every slot already holds a full body — at which point an
+      // over-charged tick is the least of it.
+      energy -= allocate_growth(
+        &self.pop,
+        &self.bodies,
+        &p,
+        o,
+        energy,
+        &mut out.lengthened,
+        &mut grew,
+      );
 
       if energy >= p.seed_threshold
         && let Some(child) = free_slots.pop()
@@ -218,14 +224,24 @@ impl<R: Runtime> Sim<R> {
       self.pop.organisms.energy[o] = energy;
     }
 
-    // Germination roots before sprouts, so a seedling's root is in the same
-    // batch as everything else and the wave order stays one pass.
+    // Germination is a root one segment long: the seedling stands on its
+    // anchor with one particle in the soil, and the rest of it is growth.
     for (o, _) in &out.germinating {
       if let Some(limb) = root_limb(&self.pop, *o) {
-        out.growth.push(GrowRequest { organism: *o, limb });
+        let record = self.pop.limb_index(*o, limb);
+        let full = (self.pop.limbs.length[record] as usize).min(mp) as f32;
+        let grown = full.min(1.0);
+        if grown > 0.0 {
+          out.lengthened.push((body.limb_index(*o, limb), grown));
+          out.growth.push(GrowRequest {
+            organism: *o,
+            limb,
+            target: 1,
+          });
+        }
       }
     }
-    out.growth.extend(sprouts);
+    out.growth.extend(grew);
     out
   }
 
@@ -349,9 +365,18 @@ impl<R: Runtime> Sim<R> {
       self.bodies.upload(&self.client);
     }
 
-    // --- Growth: germination roots and sprouts, one batch ---
+    // --- Growth: every limb's new length, and the particles the ones that
+    // crossed a whole segment now owe. `grow_limbs` reconciles the two when
+    // the particle capacity is short. ---
+    for (record, grown) in &decisions.lengthened {
+      self.bodies.grown[*record] = *grown;
+    }
     if !decisions.growth.is_empty() {
       bodies::grow_limbs(self, &decisions.growth);
+    } else if !decisions.lengthened.is_empty() {
+      // A tick where every limb grew inside the segment it was already in:
+      // no particle to claim, but the constraint pass reads `grown`.
+      self.bodies.upload(&self.client);
     }
 
     // --- Mutation, and the rest of what a birth is ---
@@ -388,51 +413,138 @@ impl<R: Runtime> Sim<R> {
   }
 }
 
-/// Which limb this organism should sprout, if any.
+/// Grow one organism's limbs by one tick's worth of energy, and say what it
+/// cost.
 ///
-/// The genome is the heritable body plan and the sprout head decides *when*
-/// its records grow, not what they are (`docs/organism.md`, decisions,
-/// 2026-09-19). So: the first grown limb whose head does not say "none" and
-/// which still has an ungrown child record, and that record — lowest child
-/// slot first — is what grows. At most one per organism per tick.
-#[allow(clippy::needless_range_loop)]
-fn pick_sprout(
+/// `docs/organism.md`, *Growth*. A limb is **growing** when it is present,
+/// short of its record's length, and — unless it is the root — less far along
+/// than its parent; that one rule is the whole of parents-before-children,
+/// and it needs no ordering because every limb's progress is read as it stood
+/// at the start of the tick. The organism spends `energy - seed_cost`, capped
+/// at what its growing limbs can absorb between them, so growth never starves
+/// reproduction, and the split is a softmax over the limbs' growth biases —
+/// a bias slows a limb relative to its siblings rather than deleting it. A
+/// share above a limb's own `growth_rate` is capped there and redistributed
+/// once over the limbs that were not capped.
+///
+/// Writes nothing: the new lengths go to `lengthened` and the limbs that
+/// crossed a whole segment — so the map owes them a particle — to `growth`.
+fn allocate_growth(
   pop: &crate::genome::Population,
   bodies: &crate::bodies::BodyState,
+  params: &crate::SimParams,
   organism: usize,
-  choices: &[f32],
-) -> Option<usize> {
+  energy: f32,
+  lengthened: &mut Vec<(usize, f32)>,
+  growth: &mut Vec<GrowRequest>,
+) -> f32 {
+  let cfg = bodies.cfg;
+  let mp = cfg.max_particles_per_limb as usize;
   let max_limbs = pop.max_limbs;
-  for limb in 0..max_limbs {
-    if bodies.particle(organism, limb, 0) == NO_PARTICLE {
-      continue;
+
+  // Progress as it stands, per limb: 0 where there is nothing to grow.
+  let full = |limb: usize| -> f32 {
+    let record = pop.limb_index(organism, limb);
+    if pop.limbs.part_type[record].is_present() {
+      (pop.limbs.length[record] as usize).min(mp) as f32
+    } else {
+      0.0
     }
-    // Index 0 of the sprout logits is "none".
-    if choices[limb] == 0.0 {
-      continue;
+  };
+  let grown = |limb: usize| bodies.grown[cfg.limb_index(organism, limb)];
+  let progress = |limb: usize| {
+    let target = full(limb);
+    if target > 0.0 {
+      grown(limb) / target
+    } else {
+      1.0
     }
-    let mut best: Option<(u8, usize)> = None;
-    for child in 0..max_limbs {
-      if child == limb {
-        continue;
+  };
+
+  let growing: Vec<usize> = (0..max_limbs)
+    .filter(|limb| {
+      if full(*limb) == 0.0 || progress(*limb) >= 1.0 {
+        return false;
       }
-      let record = pop.limb_index(organism, child);
-      if !pop.limbs.part_type[record].is_present()
-        || pop.limbs.parent[record] as usize != limb
-        || bodies.particle(organism, child, 0) != NO_PARTICLE
-      {
-        continue;
-      }
-      let slot = pop.limbs.child_slot[record];
-      if best.is_none_or(|(b, _)| slot < b) {
-        best = Some((slot, child));
-      }
-    }
-    if let Some((_, child)) = best {
-      return Some(child);
+      let parent = pop.limbs.parent[pop.limb_index(organism, *limb)] as usize;
+      parent == *limb || (parent < max_limbs && progress(*limb) < progress(parent))
+    })
+    .collect();
+  if growing.is_empty() {
+    return 0.0;
+  }
+
+  let rate = |limb: usize| pop.limbs.growth_rate[pop.limb_index(organism, limb)].max(0.0);
+  let capacity: f32 = growing.iter().map(|limb| rate(*limb)).sum();
+  let spend = (energy - params.seed_cost).clamp(0.0, capacity);
+  if spend <= 0.0 {
+    return 0.0;
+  }
+
+  // Softmax over the biases, shifted by the largest so a big bias cannot
+  // overflow the exponential.
+  let bias = |limb: usize| pop.limbs.growth_bias[pop.limb_index(organism, limb)];
+  let top = growing
+    .iter()
+    .map(|limb| bias(*limb))
+    .fold(f32::NEG_INFINITY, f32::max);
+  let weight: Vec<f32> = growing
+    .iter()
+    .map(|limb| (bias(*limb) - top).exp())
+    .collect();
+  let total: f32 = weight.iter().sum();
+  if total <= 0.0 || !total.is_finite() {
+    // Only a bias that is not a number gets here, and a body with one grows
+    // nothing rather than dividing by it.
+    return 0.0;
+  }
+  let mut share: Vec<f32> = weight.iter().map(|w| spend * w / total).collect();
+
+  // Cap at each limb's own rate and redistribute the excess once, by the same
+  // softmax over the limbs that had room.
+  let mut excess = 0.0f32;
+  let mut room = 0.0f32;
+  for (i, limb) in growing.iter().enumerate() {
+    if share[i] > rate(*limb) {
+      excess += share[i] - rate(*limb);
+      share[i] = rate(*limb);
+    } else {
+      room += weight[i];
     }
   }
-  None
+  if excess > 0.0 && room > 0.0 {
+    for (i, limb) in growing.iter().enumerate() {
+      if share[i] < rate(*limb) {
+        share[i] = (share[i] + excess * weight[i] / room).min(rate(*limb));
+      }
+    }
+  }
+
+  for (i, limb) in growing.iter().enumerate() {
+    let target = full(*limb);
+    let mut length = grown(*limb) + share[i] * params.length_per_energy;
+    let parent = pop.limbs.parent[pop.limb_index(organism, *limb)] as usize;
+    if parent != *limb {
+      // A child ends the tick no further along than its parent stood at the
+      // start of it.
+      length = length.min(progress(parent) * target);
+    }
+    length = length.clamp(0.0, target);
+    if length <= grown(*limb) {
+      continue;
+    }
+    lengthened.push((cfg.limb_index(organism, *limb), length));
+    let held = bodies.limb_len(organism, *limb);
+    let wants = length.ceil() as usize;
+    if wants > held {
+      growth.push(GrowRequest {
+        organism,
+        limb: *limb,
+        target: wants,
+      });
+    }
+  }
+  spend
 }
 
 /// The limb that is its own parent. Mutation never removes or retypes the
@@ -443,4 +555,156 @@ fn root_limb(pop: &crate::genome::Population, organism: usize) -> Option<usize> 
     let record = pop.limb_index(organism, *limb);
     pop.limbs.part_type[record].is_present() && pop.limbs.parent[record] as usize == *limb
   })
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::SimParams;
+  use crate::bodies::BodyState;
+  use crate::genome::{BrainShape, Genome, Population};
+  use crate::world::WorldGeometry;
+  use cubecl::prelude::Runtime;
+  use cubecl_cpu::{CpuDevice, CpuRuntime};
+
+  fn params() -> SimParams {
+    SimParams {
+      world_width: 4.0,
+      world_height: 3.0,
+      smoothing_radius: 0.5,
+      soil_cell_size: 0.25,
+      particles_per_cell: 1,
+      max_organisms: 2,
+      max_limbs: 4,
+      max_particles_per_limb: 4,
+      seed_cost: 1.0,
+      length_per_energy: 1.0,
+      growth_rate: 0.1,
+      ..SimParams::default()
+    }
+  }
+
+  /// The founder plant — a 2-particle root, a 3-particle stem, a 1-particle
+  /// leaf — in slot 0, with nothing grown yet.
+  fn seedling(params: &SimParams) -> (Population, BodyState) {
+    let client = CpuRuntime::client(&CpuDevice);
+    let shape = BrainShape::from_params(params);
+    let mut pop = Population::new(&client, params, shape);
+    let genome = Genome::seed_plant(&shape, pop.max_limbs, 0, 1, params.growth_rate);
+    pop.write_genome(0, &genome);
+    pop.organisms.alive[0] = 1;
+    let geom = WorldGeometry::from_params(params);
+    let bodies = BodyState::new(&client, params, &geom);
+    (pop, bodies)
+  }
+
+  /// Everything one call decides, as `(spend, lengths, requests)`.
+  fn allocate(
+    pop: &Population,
+    bodies: &BodyState,
+    params: &SimParams,
+    energy: f32,
+  ) -> (f32, Vec<(usize, f32)>, Vec<GrowRequest>) {
+    let (mut lengths, mut requests) = (Vec::new(), Vec::new());
+    let spend = allocate_growth(pop, bodies, params, 0, energy, &mut lengths, &mut requests);
+    (spend, lengths, requests)
+  }
+
+  /// Growth is funded by what is left over `seed_cost` and capped by what the
+  /// growing limbs can absorb, so it can neither starve reproduction nor run
+  /// away.
+  #[test]
+  fn the_spend_sits_between_the_seed_reserve_and_the_limbs_rates() {
+    let params = params();
+    let (pop, mut bodies) = seedling(&params);
+    bodies.grown[0] = 1.0; // the root, half its length
+
+    // Below the reserve: nothing grows at all.
+    assert_eq!(allocate(&pop, &bodies, &params, 0.9).0, 0.0);
+    assert!(allocate(&pop, &bodies, &params, 1.0).1.is_empty());
+
+    // Just above it: the whole surplus is spent. The root and the stem are
+    // growing (the stem is behind the root), the leaf is not (it is level
+    // with the stem).
+    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 1.05);
+    assert!((spend - 0.05).abs() < 1e-6, "{spend}");
+    assert_eq!(lengths.len(), 2);
+
+    // Far above it: capped at the two growing limbs' rates.
+    let (spend, _, _) = allocate(&pop, &bodies, &params, 99.0);
+    assert!((spend - 2.0 * params.growth_rate).abs() < 1e-6, "{spend}");
+  }
+
+  /// The split is a softmax over the biases, and a limb that cannot take its
+  /// share hands the excess back to the others.
+  #[test]
+  fn a_capped_share_is_redistributed_over_the_limbs_with_room() {
+    let mut params = params();
+    params.length_per_energy = 1.0;
+    let (mut pop, mut bodies) = seedling(&params);
+    bodies.grown[0] = 1.0;
+    // The root is capped low and biased high: its share overflows and the
+    // stem takes the remainder.
+    pop.limbs.growth_rate[0] = 0.01;
+    pop.limbs.growth_bias[0] = 3.0;
+    pop.limbs.growth_rate[1] = 1.0;
+
+    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 1.5);
+    assert!((spend - 0.5).abs() < 1e-6, "{spend}");
+    let root = lengths.iter().find(|(r, _)| *r == 0).unwrap().1 - 1.0;
+    let stem = lengths.iter().find(|(r, _)| *r == 1).unwrap().1;
+    assert!((root - 0.01).abs() < 1e-6, "the root took {root}");
+    assert!((stem - 0.49).abs() < 1e-5, "the stem took {stem}");
+  }
+
+  /// A child ends the tick no further along than its parent, whatever it was
+  /// allocated — the whole of parents-before-children.
+  #[test]
+  fn a_child_never_outgrows_its_parent() {
+    let mut params = params();
+    params.length_per_energy = 100.0;
+    let (mut pop, mut bodies) = seedling(&params);
+    // The root a quarter of the way along, the stem behind it, and the stem
+    // biased hard enough to take almost everything.
+    bodies.grown[0] = 0.5;
+    pop.limbs.growth_bias[1] = 5.0;
+
+    let (_, lengths, _) = allocate(&pop, &bodies, &params, 2.0);
+    let stem = lengths.iter().find(|(r, _)| *r == 1).unwrap().1;
+    // The root's progress is 0.25, so the stem stops at a quarter of its own
+    // three segments.
+    assert!((stem - 0.75).abs() < 1e-5, "the stem reached {stem}");
+  }
+
+  /// A particle is owed only when the limb crosses a whole segment; inside
+  /// one, growth is the rest length lengthening and nothing else.
+  #[test]
+  fn a_particle_is_claimed_when_the_length_crosses_a_segment() {
+    let mut params = params();
+    params.length_per_energy = 1.0;
+    let (mut pop, mut bodies) = seedling(&params);
+    // The root alone, so the whole spend lands on one limb.
+    pop.limbs.part_type[1] = crate::genome::PartType::Absent;
+    pop.limbs.part_type[2] = crate::genome::PartType::Absent;
+    bodies.grown[0] = 0.5;
+    bodies.limb_particles[0] = 7; // the root holds its first particle
+
+    // 0.5 -> 0.55: still inside the first segment.
+    let (_, lengths, requests) = allocate(&pop, &bodies, &params, 1.05);
+    assert_eq!(lengths.len(), 1);
+    assert!((lengths[0].1 - 0.55).abs() < 1e-6, "{:?}", lengths[0]);
+    assert!(requests.is_empty());
+
+    // Past 1: the second particle is owed.
+    bodies.grown[0] = 0.95;
+    let (_, _, requests) = allocate(&pop, &bodies, &params, 1.1);
+    assert_eq!(
+      requests,
+      vec![GrowRequest {
+        organism: 0,
+        limb: 0,
+        target: 2,
+      }]
+    );
+  }
 }

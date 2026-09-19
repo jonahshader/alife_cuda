@@ -151,9 +151,7 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
 - **Growth.** Continuous, every limb at once, the organism's growth spend
   split across its growing limbs by a softmax over per-limb biases; a child
   never outgrows its parent in progress. The whole model is the next
-  section, *Growth*. (Until it lands, the shipped rule is the milestone-1
-  one: a plant with `energy ≥ sprout_cost` whose sprout head does not say
-  "none" grows one ungrown child record whole, lowest child slot first.)
+  section, *Growth*.
 - **Reproduction.** Energy above `seed_threshold` is spent on a seed
   particle carrying a mutated copy of the genome. The seed is a particle
   with no limb, so no constraint holds it: it falls, water carries it, and
@@ -170,9 +168,10 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
 Settled 2026-09-19 (decisions). Limbs grow continuously in length and
 thickness, the way the C++ trees did, instead of appearing whole; the
 genome still says what the body is, and the brain only biases how fast
-each part gets there. Four chunks, in build order; `TODO.md` carries them.
+each part gets there. Four chunks, in build order; `TODO.md` carries the
+ones still open.
 
-**1. Continuous length and allocation.**
+**1. Continuous length and allocation.** Built.
 
 - *State per `(organism, limb)`:* `grown: f32`, the limb's current length
   in segments, `0 ≤ grown ≤ length` (the record's `length` is now the
@@ -182,11 +181,18 @@ each part gets there. Four chunks, in build order; `TODO.md` carries them.
   `k = 0` — is `limb_segment_length × clamp(grown − k, 0, 1)`, so the
   last segment lengthens between particle claims and growth is visible
   frame to frame. The root's `k = 0` has no predecessor and stays pinned to
-  the anchor. Germination sets the root's `grown` to 1.
+  the anchor. Germination sets the root's `grown` to 1; a founder, which is
+  an initial condition rather than something the life cycle produced, starts
+  at its records' full lengths, and so does a body re-grown by `--load-pop`.
+  `grown` lives in `bodies::BodyState` beside the particle map, because it
+  is state rather than genome, and the two are one fact: a limb holds
+  `ceil(grown)` particles, so the map's leading run is what every kernel
+  reads as the limb's length rather than the record's.
 - *Genome per limb record*, both mutable: `growth_bias: f32` (softmax
   logit, founders 0) and `growth_rate: f32` (energy the limb can absorb
   per life tick, founders and structural adds at the `growth_rate` param).
-  Both get the small Gaussian that `grow_angle` gets; the population file
+  Both get a small Gaussian of their own, `growth_sigma`, as `grow_angle`
+  gets `angle_sigma`, and the rate is floored at zero; the population file
   format bumps its version and reads the old one with the founder values.
 - *Growing:* a present limb with `f < 1`, and — unless it is the root —
   `f < f_parent`. A child's increment is clamped so it ends the tick at
@@ -201,8 +207,10 @@ each part gets there. Four chunks, in build order; `TODO.md` carries them.
   volume. The spend is charged; `sprout_cost` is gone.
 - *Particles* are claimed when `ceil(grown)` rises, placed at the
   predecessor plus the rest offset along the limb's direction, by the
-  existing growth kernel over a list of `(organism, limb, index)` rather
-  than of whole limbs. The sprout head is read by nothing until chunk 4.
+  existing growth kernel over a list of `(organism, limb, first index,
+  count)` — a *suffix* of a limb's chain rather than a whole limb, which is
+  one particle in an ordinary tick and a whole limb for a founder. The
+  sprout head is read by nothing until chunk 4.
 
 **2. Thickness and volume.** Genome per limb record: `target_thickness:
 f32` (mutable; founders from the `thickness` params per part type). A
@@ -375,7 +383,9 @@ pass** projects them (`kernels::constraints`), one unit per organism, serial
 over that organism's particles, `constraint_iterations` Gauss-Seidel sweeps
 (default 4). Per sweep, in order: the root's first particle pinned to its
 anchor; distance at `limb_segment_length` (default 0.15, validated ≤ the
-grid cell size); the angle at each limb's base joint against the parent
+grid cell size) times how far the limb has grown into that segment
+(*Growth*), which is 1 for every segment but a growing limb's last;
+the angle at each limb's base joint against the parent
 segment's direction (target from the limb record for plants, from the brain
 for actuated limbs later, stiffness `joint_stiffness`); bend, keeping a
 limb's consecutive segments in line (`bend_stiffness`), or a limb is a rope;
@@ -409,7 +419,10 @@ geometry the brain will read — beside the population tensors.
   (u8), `grow_angle` (f32, the rest angle at the base joint, measured
   against the parent segment's direction — the root, being its own parent,
   measures against the world frame instead, 0 at +x and counter-clockwise),
-  `identity` (`[f32; 4]`).
+  `identity` (`[f32; 4]`), `growth_bias` and `growth_rate` (f32, the
+  softmax logit and the per-tick energy cap of *Growth*). A field appended
+  here appends an array to the population file, which is what lets an older
+  one still load (`popdump.rs`).
 - Continuous, `[max_organisms × BrainShape::param_count()]` f32 on the
   host as the master copy, uploaded per organism on birth; the fp16 device
   shadow is the brain chunk's concern.
@@ -487,8 +500,9 @@ launch-bound, so fp32 storage is the default and `--brain-fp16` is a flag.
 constraint pass → limb geometry → sense (token features per limb) → brain
 forward → the life tick, every `life_interval` steps. The constraint pass
 publishes limb geometry (root-relative position, segment angle, depth) for
-the token features; the life tick reads the sprout head the forward pass
-just wrote, so applying a head and deciding the life cycle are one step.
+the token features; the life tick runs on the heads the forward pass just
+wrote, so applying a head and deciding the life cycle are one step — though
+until chunk 4 of *Growth* wires `head_growth`, nothing reads one.
 
 **The life tick's shape.** Light and energy are kernels; growth, placement,
 freeing and mutation are kernels; the *decisions* between them are a serial
@@ -501,7 +515,12 @@ something is claimed and one limb-record download when something was born.
 The organism SoA is host-mastered except `energy`, which the energy kernel
 writes; the brain tensor and the limb records are device-mastered for a
 newborn, because that is where the mutation kernels wrote them, so a birth
-never uploads the whole population.
+never uploads the whole population. The growth decision is part of that
+walk: per organism it reads the limbs' progress, splits the tick's spend
+(*Growth*), writes the new `grown` values and asks `bodies::grow_limbs` for
+the particles the limbs that crossed a whole segment now owe. `grown` and
+the map go up together, so a tick where a limb only lengthened still
+uploads them.
 
 ## Decisions & dead ends
 
@@ -729,3 +748,29 @@ never uploads the whole population.
   pulled out, which is a different mechanism for later. One energy pool per
   organism stays; the old per-node give-take diffusion is not coming back,
   the softmax does that job.
+- 2026-09-19 — **Continuous growth makes the energy balance the binding
+  constraint, and at the shipped constants a seedling has no surplus to grow
+  on.** Growth spends `energy − seed_cost`, so a plant grows only above its
+  reproduction reserve, and a germinated seedling starts at `seed_energy`
+  0.5 against a `seed_cost` of 1.0 — below the floor, with one root particle
+  earning about what it costs in upkeep. Measured, `--founders 64 --seed 42`,
+  3000 steps on CUDA: the founders (which start fully grown) carry the run to
+  step ~800, after which the population is their offspring and the mean body
+  drifts to root-only — `root_frac` 0.33 → 0.76, `leaf_count` 1.0 → 0.33,
+  height 0.45 m → 0.12 m — while alive, births and deaths stay in the old
+  range (71 alive, 52 births, 64 deaths, 18 lineages; 154 alive and
+  generation 6 at `--seed-energy 1.5`). `--length-per-energy` 2 through 16
+  changes none of it, which is what proves the conversion rate is not what
+  binds: the surplus is. So the thing to change when seedlings should reach a
+  leaf is the energy balance — what a root earns, what a seed germinates
+  with, or whether the reserve is `seed_cost` — not the growth constants.
+  `TODO.md` carries it next to the `--column-top` band it is the other half
+  of.
+- 2026-09-19 — **A founder starts fully grown; a seedling starts as one root
+  segment.** `--founders N` is the run's initial condition rather than
+  something the life cycle produced, so a founder is its genome laid out
+  whole, as it always was, and `--load-pop` re-grows a saved body the same
+  way; germination is the spec's `grown = 1` on the root. Founders as
+  one-segment roots too would starve the run at the shipped constants (the
+  entry above) and would make `--founders` a different experiment from the
+  one every measurement in `perf.md` was taken with.

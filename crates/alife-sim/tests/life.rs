@@ -131,6 +131,32 @@ fn check_consistent(sim: &AnySim, name: &str) {
     );
   }
 
+  // A limb's length and the particles it holds are the same fact: the map
+  // holds `ceil(grown)` of them, and a limb never outgrows the record it is
+  // growing towards.
+  let mp = cfg.max_particles_per_limb as usize;
+  for o in 0..cfg.max_organisms as usize {
+    for l in 0..cfg.max_limbs as usize {
+      let grown = bodies.grown[cfg.limb_index(o, l)];
+      assert_eq!(
+        bodies.limb_len(o, l),
+        grown.ceil() as usize,
+        "{name}: organism {o} limb {l} has grown {grown} and holds {} particles",
+        bodies.limb_len(o, l)
+      );
+      let record = pop.limb_index(o, l);
+      let full = if pop.limbs.part_type[record].is_present() {
+        (pop.limbs.length[record] as usize).min(mp)
+      } else {
+        0
+      };
+      assert!(
+        grown <= full as f32,
+        "{name}: organism {o} limb {l} grew to {grown} past a length of {full}"
+      );
+    }
+  }
+
   // A seed is one particle of type Seed and nothing else; a plant has a root.
   for o in 0..pop.max_organisms {
     if pop.organisms.alive[o] == 0 {
@@ -190,6 +216,18 @@ fn a_population_turns_over_on_its_own() {
         .any(|(g, a)| *a == 1 && *g >= 1),
       "{name}: no child is alive, so nothing descended from a founder"
     );
+    // Growth is continuous: something in the population is part way into a
+    // segment rather than standing at a whole number of them.
+    let bodies = sim.bodies();
+    let cfg = bodies.cfg;
+    assert!(
+      (0..cfg.limb_count()).any(|i| {
+        let grown = bodies.grown[i];
+        grown > 0.0 && grown.fract() != 0.0
+      }),
+      "{name}: every limb is a whole number of segments long, so nothing grew"
+    );
+
     // A child's lineage is its parent's, and a founder's is its own slot.
     for o in 0..pop.max_organisms {
       if pop.organisms.alive[o] == 0 {

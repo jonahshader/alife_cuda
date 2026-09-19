@@ -71,6 +71,11 @@ impl BodyCfg {
     (self.max_organisms * self.max_limbs) as usize
   }
 
+  /// Flat index of one `(organism, limb)` entry.
+  pub fn limb_index(&self, organism: usize, limb: usize) -> usize {
+    organism * self.max_limbs as usize + limb
+  }
+
   /// Flat index of one limb's particle slice.
   pub fn limb_slice(&self, organism: usize, limb: usize) -> std::ops::Range<usize> {
     let mp = self.max_particles_per_limb as usize;
@@ -89,6 +94,9 @@ pub struct BodyDevice {
   /// `[max_organisms]` particle ids: the one particle a seed organism is,
   /// or [`NO_PARTICLE`] once it has germinated (or never was a seed).
   pub seed_particles: Handle,
+  /// `[max_organisms x max_limbs]` lengths in segments; see
+  /// [`BodyState::grown`].
+  pub grown: Handle,
   /// Where the integrator left each particle, before the projection moved it.
   /// `[num_particles]` interleaved x,y; only body particles are written.
   pub ppos_prev: Handle,
@@ -112,6 +120,17 @@ pub struct BodyState {
   /// not in [`Self::limb_particles`], which is why the constraint pass leaves
   /// it alone: it has no limbs to hold it, so it falls and drifts.
   pub seed_particles: Vec<u32>,
+  /// How long each `(organism, limb)` has grown, in segments, `0 ..= length`
+  /// (`docs/organism.md`, *Growth*). Particle `k` of a limb exists while
+  /// `grown > k`, so the map holds `ceil(grown)` of them and the last
+  /// segment's rest length is the fractional remainder — a limb lengthens
+  /// between particle claims rather than jumping a whole segment.
+  ///
+  /// State, not genome: the life tick is its master and a kernel only reads
+  /// it. The particle map is the other half of the same fact, and the two
+  /// are kept consistent by [`grow_limbs`], which is the only thing that
+  /// claims a particle.
+  pub grown: Vec<f32>,
   pub geometry: LimbGeometryHost,
   pub device: BodyDevice,
 }
@@ -126,11 +145,13 @@ impl BodyState {
     let limb_particles = vec![NO_PARTICLE; cfg.particle_map_len()];
     let anchors = vec![Vec2::ZERO; cfg.max_organisms as usize];
     let seed_particles = vec![NO_PARTICLE; cfg.max_organisms as usize];
+    let grown = vec![0.0f32; cfg.limb_count()];
     let geometry = LimbGeometryHost::new(cfg.limb_count());
     let device = BodyDevice {
       limb_particles: client.create_from_slice(bytemuck::cast_slice(&limb_particles)),
       anchors: client.create_from_slice(bytemuck::cast_slice(&flatten(&anchors))),
       seed_particles: client.create_from_slice(bytemuck::cast_slice(&seed_particles)),
+      grown: client.create_from_slice(bytemuck::cast_slice(&grown)),
       ppos_prev: client.empty(geom.num_particles * 2 * size_of::<f32>()),
       geometry: LimbGeometryDevice::upload(client, &geometry),
     };
@@ -140,6 +161,7 @@ impl BodyState {
       limb_particles,
       anchors,
       seed_particles,
+      grown,
       geometry,
       device,
     }
@@ -162,13 +184,29 @@ impl BodyState {
     out
   }
 
-  /// Forget every particle `organism` held, and the seed slot with it.
+  /// Forget every particle `organism` held, and the seed slot with it. Its
+  /// limbs are unlengthened too: the next organism in this slot starts from
+  /// nothing.
   pub fn release(&mut self, organism: usize) {
     let cfg = self.cfg;
     let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
     let start = organism * per_organism;
     self.limb_particles[start..start + per_organism].fill(NO_PARTICLE);
     self.seed_particles[organism] = NO_PARTICLE;
+    let limbs = cfg.max_limbs as usize;
+    self.grown[organism * limbs..(organism + 1) * limbs].fill(0.0);
+  }
+
+  /// Particles `(organism, limb)` actually holds: the leading run of the
+  /// map's entries, which is `ceil(grown)` — particles are claimed in index
+  /// order and a limb gives them all back at once, so the map's prefix is
+  /// the whole of what a limb has grown.
+  pub fn limb_len(&self, organism: usize, limb: usize) -> usize {
+    let slice = self.cfg.limb_slice(organism, limb);
+    self.limb_particles[slice]
+      .iter()
+      .take_while(|id| **id != NO_PARTICLE)
+      .count()
   }
 
   /// One past the highest claimed particle slot, recomputed from the map.
@@ -198,6 +236,7 @@ impl BodyState {
     self.device.anchors = client.create_from_slice(bytemuck::cast_slice(&flatten(&self.anchors)));
     self.device.seed_particles =
       client.create_from_slice(bytemuck::cast_slice(&self.seed_particles));
+    self.device.grown = client.create_from_slice(bytemuck::cast_slice(&self.grown));
   }
 }
 
@@ -235,12 +274,18 @@ pub enum SpawnError {
   ParentNotGrown,
 }
 
-/// One limb to grow: the sprout head's unit of work, and the unit a whole
-/// body is laid out in.
+/// One limb's next particles: grow `(organism, limb)` until it holds `target`
+/// of them.
+///
+/// A limb grows a particle at a time as `ceil(grown)` rises, so a request is a
+/// *suffix* of a limb's chain rather than the whole of it; the first index it
+/// covers is whatever the map already holds. A request whose target the limb
+/// has already reached places nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrowRequest {
   pub organism: usize,
   pub limb: usize,
+  pub target: usize,
 }
 
 /// Write one organism's genome, anchor and `alive` flag into the host
@@ -270,10 +315,37 @@ fn install<R: Runtime>(
 /// places nothing.
 pub fn grow_bodies<R: Runtime>(sim: &mut crate::sim::Sim<R>, organisms: &[usize]) -> usize {
   let max_limbs = sim.population().max_limbs;
+  let mp = sim.body_cfg().max_particles_per_limb as usize;
+  // A whole body: every present record at its full target length, which is
+  // what a founder starts at and what a loaded population comes back as.
   let requests: Vec<GrowRequest> = organisms
     .iter()
-    .flat_map(|o| (0..max_limbs).map(move |limb| GrowRequest { organism: *o, limb }))
+    .flat_map(|o| {
+      (0..max_limbs).map(move |limb| GrowRequest {
+        organism: *o,
+        limb,
+        target: mp,
+      })
+    })
     .collect();
+  {
+    // A whole body is grown, so every present limb is at its full length.
+    // `grow_limbs` only ever clamps this down, to what the particle capacity
+    // actually had room for.
+    let access = sim.body_access();
+    let cfg = access.bodies.cfg;
+    for o in organisms {
+      for limb in 0..max_limbs {
+        let record = access.pop.limb_index(*o, limb);
+        if !access.pop.limbs.part_type[record].is_present() {
+          continue;
+        }
+        let n = (access.pop.limbs.length[record] as usize).min(mp);
+        access.bodies.grown[cfg.limb_index(*o, limb)] = n as f32;
+      }
+    }
+  }
+
   let mut placed = 0;
   for _ in 0..max_limbs {
     let n = grow_limbs(sim, &requests);
@@ -285,12 +357,15 @@ pub fn grow_bodies<R: Runtime>(sim: &mut crate::sim::Sim<R>, organisms: &[usize]
   placed
 }
 
-/// Grow one batch of limbs: claim their particle slots, lay them out on the
-/// device, and write the particles.
+/// Grow one batch of limbs: claim the particle slots their next segments
+/// need, lay them out on the device, and write the particles.
 ///
-/// Requests that cannot be grown *yet* — an ungrown parent — are skipped
-/// silently, which is what makes [`grow_bodies`]'s repeated passes work.
-/// Returns the particles placed.
+/// The caller has already moved `grown` — it is the length the limb is
+/// growing *to*, and the request's target is `ceil` of it. Requests that
+/// cannot be grown *yet* — an ungrown parent — are skipped silently, which is
+/// what makes [`grow_bodies`]'s repeated passes work, and a limb that gets
+/// fewer particles than it asked for has its `grown` clamped back to what it
+/// actually holds. Returns the particles placed.
 pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequest]) -> usize {
   use crate::kernels::spawn::{GrowBatchEntry, Placement, launch_layout, launch_place};
 
@@ -302,9 +377,13 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
 
   let mut batch: Vec<GrowBatchEntry> = Vec::new();
   let mut placement = Placement::default();
+  // Every limb this batch admitted, whether or not its particles survived the
+  // capacity truncation below: each one's `grown` is reconciled with the map
+  // once the placement has happened.
+  let mut touched: Vec<(usize, usize)> = Vec::new();
   let mut total = 0usize;
   for request in requests {
-    let Ok(count) = growable(&access, request.organism, request.limb) else {
+    let Ok((first_index, count)) = growable(&access, request) else {
       continue;
     };
     let record = access.pop.limb_index(request.organism, request.limb);
@@ -312,15 +391,17 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
     batch.push(GrowBatchEntry {
       organism: request.organism as u32,
       limb: request.limb as u32,
+      first_index: first_index as u32,
       first: total as u32,
       count: count as u32,
     });
     for i in 0..count {
       placement.organism.push(request.organism as u32);
       placement.limb.push(request.limb as u32);
-      placement.index_in_limb.push(i as u32);
+      placement.index_in_limb.push((first_index + i) as u32);
       placement.part_type.push(part_type);
     }
+    touched.push((request.organism, request.limb));
     total += count;
   }
   if total == 0 {
@@ -359,6 +440,7 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
     &access.pop.device.limbs,
     &access.bodies.device.limb_particles,
     &access.bodies.device.anchors,
+    &access.bodies.device.grown,
     &batch,
     total,
     access.params_buf,
@@ -371,50 +453,58 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
   // slots and send the map back up, so the constraint pass sees the new limb
   // on the very next step.
   for entry in &batch {
-    let slice = cfg.limb_slice(entry.organism as usize, entry.limb as usize);
+    let (o, l) = (entry.organism as usize, entry.limb as usize);
+    let slice = cfg.limb_slice(o, l);
+    let first_index = entry.first_index as usize;
     for i in 0..entry.count as usize {
       let id = ids[entry.first as usize + i];
-      access.bodies.limb_particles[slice.start + i] = id;
+      access.bodies.limb_particles[slice.start + first_index + i] = id;
       access.bodies.high_water = access.bodies.high_water.max(id as usize + 1);
     }
+  }
+  // What a limb holds is what it has grown. The two only disagree when a
+  // request was dropped for want of particle slots, and then the map is the
+  // truth and `grown` comes back down to it.
+  for (o, l) in touched {
+    let held = access.bodies.limb_len(o, l) as f32;
+    let grown = &mut access.bodies.grown[cfg.limb_index(o, l)];
+    *grown = grown.min(held);
   }
   access.bodies.upload(access.client);
   total
 }
 
-/// Particles a limb would take, or why it cannot be grown now.
+/// `(first index, how many)` this request would place, or why it cannot be
+/// grown now.
+///
+/// The first index is what the limb already holds: growth appends to a chain
+/// rather than laying a whole one out, and a request that asks for no more
+/// than is already there places nothing.
 fn growable<R: Runtime>(
   access: &SimBodies<'_, R>,
-  organism: usize,
-  limb: usize,
-) -> Result<usize, SpawnError> {
-  let cfg = access.bodies.cfg;
-  let mp = cfg.max_particles_per_limb as usize;
+  request: &GrowRequest,
+) -> Result<(usize, usize), SpawnError> {
+  let (organism, limb) = (request.organism, request.limb);
+  let mp = access.bodies.cfg.max_particles_per_limb as usize;
   let record = access.pop.limb_index(organism, limb);
-  let count = (access.pop.limbs.length[record] as usize).min(mp);
-  if !access.pop.limbs.part_type[record].is_present() || count == 0 {
+  let full = (access.pop.limbs.length[record] as usize).min(mp);
+  if !access.pop.limbs.part_type[record].is_present() || full == 0 {
     return Err(SpawnError::NothingToGrow);
   }
-  let slice = cfg.limb_slice(organism, limb);
-  if access.bodies.limb_particles[slice]
-    .iter()
-    .any(|id| *id != NO_PARTICLE)
-  {
+  let target = request.target.min(full);
+  let have = access.bodies.limb_len(organism, limb);
+  if target <= have {
     return Err(SpawnError::NothingToGrow);
   }
-  let parent = access.pop.limbs.parent[record] as usize;
-  if parent == limb {
-    return Ok(count);
+  // Only the first particle hangs off the parent; the rest hang off this
+  // limb's own chain, which is already standing.
+  if have == 0 {
+    let parent = access.pop.limbs.parent[record] as usize;
+    if parent != limb && access.bodies.limb_len(organism, parent) == 0 {
+      return Err(SpawnError::ParentNotGrown);
+    }
   }
-  let precord = access.pop.limb_index(organism, parent);
-  let pcount = (access.pop.limbs.length[precord] as usize).min(mp);
-  if !access.pop.limbs.part_type[precord].is_present() || pcount == 0 {
-    return Err(SpawnError::ParentNotGrown);
-  }
-  if access.bodies.particle(organism, parent, pcount - 1) == NO_PARTICLE {
-    return Err(SpawnError::ParentNotGrown);
-  }
-  Ok(count)
+  Ok((have, target - have))
 }
 
 /// The first `n` claimable particle slots, ascending, or as many as there are.

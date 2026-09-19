@@ -224,8 +224,8 @@ sim_params! {
         "Energy a root particle gains per step per unit of wetness";
     upkeep_per_particle: f32 = 0.003, "life.upkeep_per_particle", "upkeep-per-particle",
         "Energy a body particle costs its organism per step";
-    sprout_cost: f32 = 0.5, "life.sprout_cost", "sprout-cost",
-        "Energy a sprouted limb costs, and the energy a sprout needs";
+    length_per_energy: f32 = 2.0, "life.length_per_energy", "length-per-energy",
+        "Segments of limb one unit of growth energy buys";
     seed_threshold: f32 = 2.0, "life.seed_threshold", "seed-threshold",
         "Energy above which an organism emits a seed";
     seed_cost: f32 = 1.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
@@ -441,7 +441,7 @@ impl SimParams {
       ("water-gain", self.water_gain),
       ("upkeep-per-particle", self.upkeep_per_particle),
       ("growth-rate", self.growth_rate),
-      ("sprout-cost", self.sprout_cost),
+      ("length-per-energy", self.length_per_energy),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),

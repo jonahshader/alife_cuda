@@ -226,6 +226,8 @@ impl OrganismHarness {
         continue;
       }
       let count = (pop.limbs.length[record] as usize).min(body_cfg.max_particles_per_limb as usize);
+      // Fully grown, which is what a founder's body is.
+      bodies.grown[body_cfg.limb_index(0, limb)] = count as f32;
       for i in 0..count {
         let id = next as usize;
         next += 1;

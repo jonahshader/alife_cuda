@@ -15,7 +15,7 @@ use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 use glam::Vec2;
 
-use super::constraints::{seg_dir, wrap_delta, wrap_delta_ref};
+use super::constraints::{limb_len, seg_dir, wrap_delta, wrap_delta_ref};
 use super::{P_BOUNDS_X, cube_count, whole};
 use crate::bodies::{BodyCfg, BodyState, LimbGeometryHost, NO_PARTICLE};
 use crate::genome::population::{LimbArgs, Population, limb_args};
@@ -74,23 +74,14 @@ pub fn write_limb_geometry(
   let mut u = NO_PARTICLE.runtime();
   let mut v = NO_PARTICLE.runtime();
   if parent != l {
-    let mut n = limbs.length[(o * ml + parent) as usize];
-    if n > mp {
-      n = mp;
-    }
-    if limbs.part_type[(o * ml + parent) as usize] != 0u32 && n > 0u32 {
+    let n = limb_len(map, pbase, parent, cfg);
+    if n > 0u32 {
       u = map[(pbase + parent * mp + n - 1u32) as usize];
       v = first;
     }
-  } else {
-    let mut n = limbs.length[t as usize];
-    if n > mp {
-      n = mp;
-    }
-    if n > 1u32 {
-      u = first;
-      v = map[(pbase + l * mp + 1u32) as usize];
-    }
+  } else if limb_len(map, pbase, l, cfg) > 1u32 {
+    u = first;
+    v = map[(pbase + l * mp + 1u32) as usize];
   }
 
   let mut a = limbs.grow_angle[t as usize];
@@ -150,7 +141,7 @@ pub fn write_limb_geometry_ref(
   geom: &crate::world::WorldGeometry,
 ) -> LimbGeometryHost {
   let cfg = bodies.cfg;
-  let (ml, mp) = (cfg.max_limbs as usize, cfg.max_particles_per_limb as usize);
+  let ml = cfg.max_limbs as usize;
   let mut out = LimbGeometryHost::new(cfg.limb_count());
   let bounds_x = geom.bounds.x;
 
@@ -176,13 +167,10 @@ pub fn write_limb_geometry_ref(
 
       let parent = pop.limbs.parent[t] as usize;
       let segment = if parent != l {
-        let precord = o * ml + parent;
-        let n = (pop.limbs.length[precord] as usize).min(mp);
-        (pop.limbs.part_type[precord].is_present() && n > 0)
-          .then(|| (bodies.particle(o, parent, n - 1), first as u32))
+        let n = bodies.limb_len(o, parent);
+        (n > 0).then(|| (bodies.particle(o, parent, n - 1), first as u32))
       } else {
-        let n = (pop.limbs.length[t] as usize).min(mp);
-        (n > 1).then(|| (first as u32, bodies.particle(o, l, 1)))
+        (bodies.limb_len(o, l) > 1).then(|| (first as u32, bodies.particle(o, l, 1)))
       };
 
       out.angle[t] = pop.limbs.grow_angle[t];

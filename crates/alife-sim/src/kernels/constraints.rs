@@ -9,7 +9,10 @@
 //! - **pin** — the root limb's first particle sits on the organism's anchor,
 //!   the soil cell it germinated in;
 //! - **distance** — consecutive particles within a limb, and a limb's first
-//!   particle against its parent limb's last, at `limb_segment_length`;
+//!   particle against its parent limb's last, at `limb_segment_length` times
+//!   how much of that segment the limb has grown into
+//!   ([`segment_fraction`]), which is 1 for every segment but a growing
+//!   limb's last;
 //! - **base-joint angle** — a limb's first segment points along its parent's
 //!   last segment rotated by the limb record's `grow_angle` (the root limb
 //!   measures against the world frame, 0 at +x, counter-clockwise);
@@ -154,18 +157,40 @@ pub fn project_angle(
   }
 }
 
-/// Particles limb `l` of organism `o` actually holds: its record's `length`,
-/// capped by the map's width, and zero for an absent record.
+/// Particles limb `l` of organism `o` actually holds: the leading run of its
+/// slice of the map, which is `ceil(grown)`.
+///
+/// Not the record's `length`, which is the *target* a limb grows towards: a
+/// limb part way there holds fewer, and everything that walks a body — this
+/// pass, the energy budget, the geometry, the renderer — has to stop where
+/// the particles do rather than where the genome is aiming. Particles are
+/// claimed in index order and a limb gives them all back at once, so the
+/// prefix is the whole of it.
 #[cube]
-pub fn limb_len(limbs: &LimbArgs, record: u32, #[comptime] cfg: BodyCfg) -> u32 {
+pub fn limb_len(map: &[u32], pbase: u32, l: u32, #[comptime] cfg: BodyCfg) -> u32 {
+  let mp = comptime!(cfg.max_particles_per_limb);
   let mut n = 0u32;
-  if limbs.part_type[record as usize] != 0u32 {
-    n = limbs.length[record as usize];
-    if n > comptime!(cfg.max_particles_per_limb) {
-      n = comptime!(cfg.max_particles_per_limb);
+  let mut counting = true;
+  for i in 0..mp {
+    if counting && particle_at(map, pbase, l, i, cfg) == NO_PARTICLE {
+      counting = false;
+    }
+    if counting {
+      n += 1u32;
     }
   }
   n
+}
+
+/// The rest length of the segment ending at particle `k`, as a fraction of
+/// `limb_segment_length`: `clamp(grown - k, 0, 1)`.
+///
+/// The last segment of a growing limb is the one that lengthens between
+/// particle claims, so a limb grows smoothly rather than a whole segment at a
+/// time (`docs/organism.md`, *Growth*).
+#[cube]
+pub fn segment_fraction(grown: f32, k: u32) -> f32 {
+  f32::clamp(grown - k as f32, 0.0f32, 1.0f32)
 }
 
 /// The particle holding `(organism, limb, index)`.
@@ -188,7 +213,7 @@ pub fn base_particle(
   let parent = limbs.parent[(base + l) as usize];
   let mut out = NO_PARTICLE.runtime();
   if parent != l {
-    let n = limb_len(limbs, base + parent, cfg);
+    let n = limb_len(map, pbase, parent, cfg);
     if n > 0u32 {
       out = particle_at(map, pbase, parent, n - 1u32, cfg);
     }
@@ -212,7 +237,7 @@ pub fn limb_axis(
   bounds_x: f32,
   #[comptime] cfg: BodyCfg,
 ) -> Dir {
-  let n = limb_len(limbs, base + l, cfg);
+  let n = limb_len(map, pbase, l, cfg);
   let mut out = Dir {
     x: 0.0f32,
     y: 0.0f32,
@@ -254,6 +279,7 @@ pub fn project_constraints(
   limbs: &LimbArgs,
   map: &[u32],
   anchors: &[f32],
+  grown: &[f32],
   alive: &[u32],
   params: &[f32],
   #[comptime] cfg: BodyCfg,
@@ -302,21 +328,27 @@ pub fn project_constraints(
       ppos[2 * root_first as usize + 1] = anchors[2 * o as usize + 1];
     }
 
-    // (b) distance, along each limb and across each base joint
+    // (b) distance, along each limb and across each base joint. The segment
+    // ending at particle `k` is at its full rest length once the limb has
+    // grown past `k + 1`, and shorter while it is growing into it, so a
+    // limb lengthens between particle claims.
     for l in 0..ml {
-      let n = limb_len(limbs, base + l, cfg);
+      let n = limb_len(map, pbase, l, cfg);
       if n > 0u32 {
+        let g = grown[(base + l) as usize];
         let anchor = base_particle(limbs, map, base, pbase, l, cfg);
         let first = particle_at(map, pbase, l, 0u32, cfg);
         if anchor != NO_PARTICLE && first != NO_PARTICLE {
-          project_distance(ppos, anchor as usize, first as usize, rest, bounds_x);
+          let r = rest * segment_fraction(g, 0u32);
+          project_distance(ppos, anchor as usize, first as usize, r, bounds_x);
         }
         if n > 1u32 {
           for i in 1..n {
             let a = particle_at(map, pbase, l, i - 1u32, cfg);
             let b = particle_at(map, pbase, l, i, cfg);
             if a != NO_PARTICLE && b != NO_PARTICLE {
-              project_distance(ppos, a as usize, b as usize, rest, bounds_x);
+              let r = rest * segment_fraction(g, i);
+              project_distance(ppos, a as usize, b as usize, r, bounds_x);
             }
           }
         }
@@ -325,7 +357,7 @@ pub fn project_constraints(
 
     // (c) base-joint angle
     for l in 0..ml {
-      let n = limb_len(limbs, base + l, cfg);
+      let n = limb_len(map, pbase, l, cfg);
       if n > 0u32 {
         let g = limbs.grow_angle[(base + l) as usize];
         let anchor = base_particle(limbs, map, base, pbase, l, cfg);
@@ -368,7 +400,7 @@ pub fn project_constraints(
 
     // (d) bend: consecutive segments of a limb's chain stay in line
     for l in 0..ml {
-      let n = limb_len(limbs, base + l, cfg);
+      let n = limb_len(map, pbase, l, cfg);
       if n > 1u32 {
         let anchor = base_particle(limbs, map, base, pbase, l, cfg);
         let first = particle_at(map, pbase, l, 0u32, cfg);
@@ -476,6 +508,7 @@ pub fn launch<R: Runtime>(
     limb_args(&pop.device.limbs),
     whole(&bodies.device.limb_particles, cfg.particle_map_len()),
     whole(&bodies.device.anchors, cfg.max_organisms as usize * 2),
+    whole(&bodies.device.grown, cfg.limb_count()),
     whole(&pop.device.organisms.alive, cfg.max_organisms as usize),
     whole(params, super::PARAM_COUNT),
     cfg,
@@ -511,14 +544,8 @@ pub fn project_constraints_ref(
       })
       .collect();
     let at = |l: usize, i: usize| ids[l * mp + i];
-    let len = |l: usize| -> usize {
-      let record = o * ml + l;
-      if pop.limbs.part_type[record].is_present() {
-        (pop.limbs.length[record] as usize).min(mp)
-      } else {
-        0
-      }
-    };
+    let len = |l: usize| bodies.limb_len(o, l);
+    let grown = |l: usize| bodies.grown[o * ml + l];
     let parent = |l: usize| pop.limbs.parent[o * ml + l] as usize;
     let grow_angle = |l: usize| pop.limbs.grow_angle[o * ml + l];
     let base_particle = |l: usize| -> Option<usize> {
@@ -548,12 +575,13 @@ pub fn project_constraints_ref(
         if n == 0 {
           continue;
         }
+        let g = grown(l);
         if let (Some(a), Some(b)) = (base_particle(l), at(l, 0)) {
-          project_distance_ref(particles, a, b, rest, bounds.x);
+          project_distance_ref(particles, a, b, rest * segment_fraction_ref(g, 0), bounds.x);
         }
         for i in 1..n {
           if let (Some(a), Some(b)) = (at(l, i - 1), at(l, i)) {
-            project_distance_ref(particles, a, b, rest, bounds.x);
+            project_distance_ref(particles, a, b, rest * segment_fraction_ref(g, i), bounds.x);
           }
         }
       }
@@ -652,12 +680,8 @@ pub fn limb_axis_ref(
   bounds_x: f32,
 ) -> Vec2 {
   let cfg = bodies.cfg;
-  let mp = cfg.max_particles_per_limb as usize;
   let record = organism * cfg.max_limbs as usize + limb;
-  if !pop.limbs.part_type[record].is_present() {
-    return Vec2::ZERO;
-  }
-  let n = (pop.limbs.length[record] as usize).min(mp);
+  let n = bodies.limb_len(organism, limb);
   let at = |l: usize, i: usize| {
     let id = bodies.particle(organism, l, i);
     (id != NO_PARTICLE).then_some(id as usize)
@@ -691,15 +715,19 @@ pub fn limb_axis_ref(
     let g = pop.limbs.grow_angle[record];
     return Vec2::new(g.cos(), g.sin());
   }
-  let precord = organism * cfg.max_limbs as usize + parent;
-  let pn = (pop.limbs.length[precord] as usize).min(mp);
-  if !pop.limbs.part_type[precord].is_present() || pn == 0 {
+  let pn = bodies.limb_len(organism, parent);
+  if pn == 0 {
     return Vec2::ZERO;
   }
   match (at(parent, pn - 1), at(limb, 0)) {
     (Some(a), Some(b)) => dir(a, b),
     _ => Vec2::ZERO,
   }
+}
+
+/// Host twin of [`segment_fraction`].
+pub fn segment_fraction_ref(grown: f32, k: usize) -> f32 {
+  (grown - k as f32).clamp(0.0, 1.0)
 }
 
 pub fn wrap_delta_ref(d: f32, bounds_x: f32) -> f32 {
@@ -869,6 +897,36 @@ mod tests {
         );
       }
     }
+  }
+
+  /// A limb part way into its last segment is held at that fraction of the
+  /// rest length, which is what makes growth visible between particle claims.
+  #[test]
+  fn a_growing_limb_settles_at_its_fractional_rest_length() {
+    let mut h = OrganismHarness::new();
+    // The stem two thirds of the way into its second segment; the first is
+    // full length either way.
+    let stem = h.body_cfg.limb_index(0, 1);
+    h.bodies.grown[stem] = 1.65;
+    // The third particle of a stem that has not grown that far is not there.
+    let slice = h.body_cfg.limb_slice(0, 1);
+    h.bodies.limb_particles[slice.start + 2] = NO_PARTICLE;
+    h.bodies.upload(&h.client);
+
+    for _ in 0..60 {
+      h.particles = run_kernel(&h);
+      h.sph = SphDevice::upload(&h.client, &h.particles);
+    }
+
+    let rest = h.params.limb_segment_length;
+    let a = h.bodies.particle(0, 1, 0) as usize;
+    let b = h.bodies.particle(0, 1, 1) as usize;
+    let len = (h.particles.ppos[b] - h.particles.ppos[a]).length();
+    let expected = rest * 0.65;
+    assert!(
+      (len / expected - 1.0).abs() < 0.05,
+      "the growing segment is {len} against {expected}"
+    );
   }
 
   /// A dead slot is a no-op, whatever its map says.

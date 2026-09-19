@@ -18,7 +18,7 @@
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
-use super::constraints::{limb_axis, limb_len, particle_at, rotate, wrap_x};
+use super::constraints::{limb_axis, limb_len, particle_at, rotate, segment_fraction, wrap_x};
 use super::{
   BodyArgs, Cfg, KIND_BODY, KIND_FREE, P_BOUNDS_X, P_BOUNDS_Y, P_LIMB_SEGMENT_LENGTH, PARAM_COUNT,
   body_args, cube_count, whole,
@@ -56,16 +56,25 @@ pub fn mark_body_occupancy_ref(state: &[ParticleKind]) -> Vec<u32> {
     .collect()
 }
 
-/// Where one limb's particles go: one unit per growth request.
+/// Where one limb's next particles go: one unit per growth request.
 ///
-/// The chain starts on the organism's anchor for the root limb, where the
-/// pin holds it, and one rest length off its parent's last particle for a
-/// child — along the parent's axis rotated by the record's `grow_angle`,
-/// which is the rest shape the base-joint constraint asks for.
+/// A request grows a *suffix* of a limb's chain, from `first_index` on, so
+/// this is where growth lands a particle as `ceil(grown)` rises as well as
+/// where a whole founder limb is laid out. Each new particle sits one
+/// segment along from its predecessor, the segment being
+/// `limb_segment_length` times how far the limb has grown into it
+/// ([`segment_fraction`]) — which is the rest length the constraint pass
+/// will hold it at, so a claimed particle starts where it belongs.
 ///
-/// The map is only read — for the parent's last particle. The host is its
-/// master and uploads it on both sides of this launch, so the claimed ids
-/// themselves never have to reach this kernel.
+/// What "along" means: for a limb continuing its own chain, its last
+/// segment's direction; for its first particle, its parent's axis rotated by
+/// the record's `grow_angle`, which is the rest shape the base-joint
+/// constraint asks for. The root's first particle sits on the anchor, where
+/// the pin holds it.
+///
+/// The map is only read — for the predecessor. The host is its master and
+/// uploads it on both sides of this launch, so the claimed ids themselves
+/// never have to reach this kernel.
 ///
 /// `ppos` is taken mutably although it is only read: a CubeCL expand type has
 /// no reborrow, so `limb_axis` cannot be handed a `&[f32]`.
@@ -76,8 +85,10 @@ pub fn layout_limbs(
   limbs: &LimbArgs,
   map: &[u32],
   anchors: &[f32],
+  grown: &[f32],
   req_organism: &[u32],
   req_limb: &[u32],
+  req_first_index: &[u32],
   req_first: &[u32],
   req_count: &[u32],
   positions: &mut [f32],
@@ -91,6 +102,7 @@ pub fn layout_limbs(
   }
   let o = req_organism[r as usize];
   let l = req_limb[r as usize];
+  let first_index = req_first_index[r as usize];
   let first = req_first[r as usize];
   let count = req_count[r as usize];
 
@@ -103,18 +115,31 @@ pub fn layout_limbs(
   let rest = params[P_LIMB_SEGMENT_LENGTH as usize];
   let angle = limbs.grow_angle[(base + l) as usize];
   let parent = limbs.parent[(base + l) as usize];
+  let g = grown[(base + l) as usize];
 
   let mut base_x = anchors[2 * o as usize];
   let mut base_y = anchors[2 * o as usize + 1];
   let mut dir_x = f32::cos(angle);
   let mut dir_y = f32::sin(angle);
-  // The root's first particle sits *on* the anchor; a child's starts one rest
-  // length off its parent's last particle.
-  let mut first_step = 0.0f32;
+  // The root limb's particle 0 is the only one with no predecessor: it sits
+  // on the anchor rather than a segment away from anything.
+  let root_first = parent == l;
 
-  if parent != l {
-    first_step = 1.0f32;
-    let n = limb_len(limbs, base + parent, cfg);
+  if first_index > 0u32 {
+    // Continuing this limb's own chain, along the direction it already
+    // points in.
+    let prev = particle_at(map, pbase, l, first_index - 1u32, cfg);
+    base_x = ppos[2 * prev as usize];
+    base_y = ppos[2 * prev as usize + 1];
+    let mut axis = limb_axis(ppos, limbs, map, base, pbase, l, bounds_x, cfg);
+    if axis.x == 0.0f32 && axis.y == 0.0f32 {
+      axis.x = 1.0f32;
+      axis.y = 0.0f32;
+    }
+    dir_x = axis.x;
+    dir_y = axis.y;
+  } else if parent != l {
+    let n = limb_len(map, pbase, parent, cfg);
     let last = particle_at(map, pbase, parent, n - 1u32, cfg);
     base_x = ppos[2 * last as usize];
     base_y = ppos[2 * last as usize + 1];
@@ -130,18 +155,27 @@ pub fn layout_limbs(
     dir_y = d.y;
   }
 
+  // Unwrapped as it walks the chain, wrapped on the way out: a chain that
+  // crosses the seam is still one straight line.
+  let mut x = base_x;
+  let mut y = base_y;
   for i in 0..count {
-    let k = (first + i) as usize;
-    let t = rest * (i as f32 + first_step);
-    let x = wrap_x(base_x + dir_x * t, bounds_x);
-    let mut y = base_y + dir_y * t;
-    if y < 0.0f32 {
-      y = 0.0f32;
-    } else if y > bounds_y {
-      y = bounds_y;
+    let k = first_index + i;
+    let mut t = rest * segment_fraction(g, k);
+    if root_first && k == 0u32 {
+      t = 0.0f32;
     }
-    positions[2 * k] = x;
-    positions[2 * k + 1] = y;
+    x += dir_x * t;
+    y += dir_y * t;
+    let at = (first + i) as usize;
+    positions[2 * at] = wrap_x(x, bounds_x);
+    let mut out_y = y;
+    if out_y < 0.0f32 {
+      out_y = 0.0f32;
+    } else if out_y > bounds_y {
+      out_y = bounds_y;
+    }
+    positions[2 * at + 1] = out_y;
   }
 }
 
@@ -311,12 +345,14 @@ impl Placement {
   }
 }
 
-/// One limb to grow, as [`layout_limbs`] takes it: `first` indexes the
-/// claimed-id list, which is also the [`Placement`] entry order.
+/// One limb's next particles, as [`layout_limbs`] takes them:
+/// `first_index` is where in the limb's own chain they start, and `first`
+/// indexes the claimed-id list, which is also the [`Placement`] entry order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GrowBatchEntry {
   pub organism: u32,
   pub limb: u32,
+  pub first_index: u32,
   pub first: u32,
   pub count: u32,
 }
@@ -330,6 +366,7 @@ pub fn launch_layout<R: Runtime>(
   limbs: &crate::genome::LimbDevice,
   map: &Handle,
   anchors: &Handle,
+  grown: &Handle,
   batch: &[GrowBatchEntry],
   particles: usize,
   params: &Handle,
@@ -340,6 +377,7 @@ pub fn launch_layout<R: Runtime>(
   let upload = |v: Vec<u32>| client.create_from_slice(bytemuck::cast_slice(&v));
   let organism = upload(batch.iter().map(|e| e.organism).collect());
   let limb = upload(batch.iter().map(|e| e.limb).collect());
+  let first_index = upload(batch.iter().map(|e| e.first_index).collect());
   let first = upload(batch.iter().map(|e| e.first).collect());
   let count = upload(batch.iter().map(|e| e.count).collect());
 
@@ -351,8 +389,10 @@ pub fn launch_layout<R: Runtime>(
     limb_args(limbs),
     whole(map, cfg.particle_map_len()),
     whole(anchors, cfg.max_organisms as usize * 2),
+    whole(grown, cfg.limb_count()),
     whole(&organism, batch.len()),
     whole(&limb, batch.len()),
+    whole(&first_index, batch.len()),
     whole(&first, batch.len()),
     whole(&count, batch.len()),
     whole(&positions, particles * 2),
@@ -416,11 +456,10 @@ pub fn layout_limbs_ref(
   params: &crate::SimParams,
   geom: &crate::world::WorldGeometry,
 ) -> Vec<f32> {
-  use super::constraints::{limb_axis_ref, rotate_ref, wrap_x_ref};
+  use super::constraints::{limb_axis_ref, rotate_ref, segment_fraction_ref, wrap_x_ref};
   use glam::Vec2;
 
   let cfg = bodies.cfg;
-  let mp = cfg.max_particles_per_limb as usize;
   let bounds = geom.bounds;
   let rest = params.limb_segment_length;
   let particle_count = batch
@@ -432,27 +471,39 @@ pub fn layout_limbs_ref(
 
   for entry in batch {
     let (o, l) = (entry.organism as usize, entry.limb as usize);
+    let first_index = entry.first_index as usize;
     let record = pop.limb_index(o, l);
     let angle = pop.limbs.grow_angle[record];
     let parent = pop.limbs.parent[record] as usize;
+    let grown = bodies.grown[cfg.limb_index(o, l)];
 
-    let (base, direction, first_step) = if parent == l {
-      (bodies.anchors[o], Vec2::from_angle(angle), 0.0)
+    let root_first = parent == l;
+    let (mut at, direction) = if first_index > 0 {
+      let prev = bodies.particle(o, l, first_index - 1) as usize;
+      let axis = limb_axis_ref(&particles.ppos, pop, bodies, o, l, bounds.x);
+      let axis = if axis == Vec2::ZERO { Vec2::X } else { axis };
+      (particles.ppos[prev], axis)
+    } else if root_first {
+      (bodies.anchors[o], Vec2::from_angle(angle))
     } else {
-      let pcount = (pop.limbs.length[pop.limb_index(o, parent)] as usize).min(mp);
+      let pcount = bodies.limb_len(o, parent);
       let last = bodies.particle(o, parent, pcount - 1) as usize;
       let axis = limb_axis_ref(&particles.ppos, pop, bodies, o, parent, bounds.x);
       let axis = if axis == Vec2::ZERO { Vec2::X } else { axis };
-      (particles.ppos[last], rotate_ref(axis, angle), 1.0)
+      (particles.ppos[last], rotate_ref(axis, angle))
     };
 
     for i in 0..entry.count as usize {
-      let k = entry.first as usize + i;
-      let mut p = base + direction * (rest * (i as f32 + first_step));
-      p.x = wrap_x_ref(p.x, bounds.x);
-      p.y = p.y.clamp(0.0, bounds.y);
-      positions[2 * k] = p.x;
-      positions[2 * k + 1] = p.y;
+      let k = first_index + i;
+      let step = if root_first && k == 0 {
+        0.0
+      } else {
+        rest * segment_fraction_ref(grown, k)
+      };
+      at += direction * step;
+      let out = entry.first as usize + i;
+      positions[2 * out] = wrap_x_ref(at.x, bounds.x);
+      positions[2 * out + 1] = at.y.clamp(0.0, bounds.y);
     }
   }
   positions
@@ -540,10 +591,13 @@ mod tests {
     h.pop.limbs.child_slot[record] = 1;
     h.pop.limbs.grow_angle[record] = 0.5;
     h.pop.upload(&h.client);
-    // Ungrow limb 1, which record 3 is now the sibling of.
+    // Ungrow limb 1, which record 3 is now the sibling of; both grow from
+    // nothing to their full length in this batch.
     for i in cfg.limb_slice(0, 1) {
       h.bodies.limb_particles[i] = NO_PARTICLE;
     }
+    h.bodies.grown[cfg.limb_index(0, 1)] = 3.0;
+    h.bodies.grown[cfg.limb_index(0, 3)] = 2.0;
     h.bodies.upload(&h.client);
 
     let free_start = (h.geom.num_particles - 8) as u32;
@@ -552,12 +606,14 @@ mod tests {
       GrowBatchEntry {
         organism: 0,
         limb: 1,
+        first_index: 0,
         first: 0,
         count: 3,
       },
       GrowBatchEntry {
         organism: 0,
         limb: 3,
+        first_index: 0,
         first: 3,
         count: 2,
       },
@@ -568,6 +624,7 @@ mod tests {
       &h.pop.device.limbs,
       &h.bodies.device.limb_particles,
       &h.bodies.device.anchors,
+      &h.bodies.device.grown,
       &batch,
       ids.len(),
       &h.params_buf,
@@ -600,5 +657,56 @@ mod tests {
     let mut expected = h.particles.clone();
     place_body_particles_ref(&mut expected, &placement, &expected_pos);
     assert_eq!(actual, expected);
+  }
+
+  /// The ordinary case once a body is standing: one more particle on the end
+  /// of a limb that already has some, a partial segment along the direction
+  /// the limb points in.
+  #[test]
+  fn a_limb_grows_its_next_particle_onto_its_own_chain() {
+    let mut h = OrganismHarness::new();
+    let cfg = h.body_cfg;
+    // The stem holds two of its three particles and is a third of the way
+    // into the third.
+    let slice = cfg.limb_slice(0, 1);
+    let dropped = h.bodies.limb_particles[slice.start + 2];
+    h.bodies.limb_particles[slice.start + 2] = NO_PARTICLE;
+    h.bodies.grown[cfg.limb_index(0, 1)] = 2.25;
+    h.bodies.upload(&h.client);
+
+    let batch = vec![GrowBatchEntry {
+      organism: 0,
+      limb: 1,
+      first_index: 2,
+      first: 0,
+      count: 1,
+    }];
+    let positions = launch_layout(
+      &h.client,
+      &h.sph,
+      &h.pop.device.limbs,
+      &h.bodies.device.limb_particles,
+      &h.bodies.device.anchors,
+      &h.bodies.device.grown,
+      &batch,
+      1,
+      &h.params_buf,
+      cfg,
+      h.cfg,
+    );
+    let expected = layout_limbs_ref(&h.particles, &h.pop, &h.bodies, &batch, &h.params, &h.geom);
+    let actual: Vec<f32> = download_field(&h.client, &positions, 2);
+    for (a, e) in actual.iter().zip(&expected) {
+      assert!((a - e).abs() < 1e-6, "{a} against {e}");
+    }
+
+    // A quarter of a rest length off the particle before it, and nowhere
+    // near where the whole third segment would have put it.
+    let previous = h.particles.ppos[h.bodies.particle(0, 1, 1) as usize];
+    let placed = glam::Vec2::new(expected[0], expected[1]);
+    let step = (placed - previous).length();
+    let rest = h.params.limb_segment_length;
+    assert!((step - 0.25 * rest).abs() < 1e-5, "{step} against {rest}");
+    assert_ne!(dropped, crate::bodies::NO_PARTICLE);
   }
 }

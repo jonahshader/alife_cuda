@@ -107,7 +107,7 @@ L-system trees still live in. New sim work goes in the Rust tree.
   C++ `--dump` format, and it still reads version 1
   (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
   soil surface and the life cycle takes it from there — they gain energy,
-  sprout, seed and die on their own; the default 0 leaves the world exactly
+  grow, seed and die on their own; the default 0 leaves the world exactly
   as it was before organisms existed, life cycle included.
   `--metrics <path>` writes the evolutionary time series
   as CSV every `--metrics-every K` steps (default 100) and prints a summary

@@ -466,8 +466,8 @@ impl<R: Runtime> Sim<R> {
 
     self.step_count += 1;
 
-    // The life cycle runs on its own cadence, after the brain: the sprout
-    // head it reads was written by the tick that just finished. Skipped
+    // The life cycle runs on its own cadence, after the brain: the heads it
+    // packs were written by the tick that just finished. Skipped
     // outright when nothing is alive, so a run without organisms costs
     // exactly what it did before they existed.
     if organisms > 0

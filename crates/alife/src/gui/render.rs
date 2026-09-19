@@ -78,9 +78,7 @@ struct View {
 @group(0) @binding(7) var<storage, read> part_type: array<u32>;
 // The body map and the limb records it is indexed by.
 @group(0) @binding(8) var<storage, read> limb_particles: array<u32>;
-@group(0) @binding(9) var<storage, read> limb_part_type: array<u32>;
-@group(0) @binding(10) var<storage, read> limb_length: array<u32>;
-@group(0) @binding(11) var<storage, read> limb_parent: array<u32>;
+@group(0) @binding(9) var<storage, read> limb_parent: array<u32>;
 
 const NO_PARTICLE: u32 = 0xffffffffu;
 
@@ -209,14 +207,19 @@ fn particle_fs(in: ParticleOut) -> @location(0) vec4<f32> {
   return in.color;
 }
 
-// Particles limb record `record` actually holds: its length, capped by the
-// map's width, and zero for an absent record — the constraint pass's
-// `limb_len`.
-fn limb_len(record: u32) -> u32 {
-  if (limb_part_type[record] == 0u) {
-    return 0u;
+// Particles limb `l` of organism `o` actually holds: the leading run of its
+// slice of the map — the constraint pass's `limb_len`. Not the record's
+// length, which is what the limb is growing towards.
+fn limb_len(o: u32, l: u32) -> u32 {
+  let start = o * view.max_limbs * view.per_limb + l * view.per_limb;
+  var n = 0u;
+  loop {
+    if (n >= view.per_limb || limb_particles[start + n] == NO_PARTICLE) {
+      break;
+    }
+    n = n + 1u;
   }
-  return min(limb_length[record], view.per_limb);
+  return n;
 }
 
 // Minimum-image difference in x across the wrapping world.
@@ -256,7 +259,7 @@ fn segment_vs(@builtin(vertex_index) vi: u32) -> SegmentOut {
     // own parent and has no base segment.
     let parent = limb_parent[record];
     if (parent != l) {
-      let n = limb_len(o * view.max_limbs + parent);
+      let n = limb_len(o, parent);
       if (n > 0u) {
         b = limb_particles[o * per_organism + parent * view.per_limb + n - 1u];
       }
@@ -329,7 +332,7 @@ impl Pipelines {
       },
       count: None,
     }];
-    entries.extend((1..=11).map(storage));
+    entries.extend((1..=9).map(storage));
 
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
       label: Some("alife sim bindings"),
@@ -437,8 +440,6 @@ impl CallbackTrait for SimCallback {
       &self.sph.evap_prob,
       &self.sph.part_type,
       &self.bodies.limb_particles,
-      &self.limbs.part_type,
-      &self.limbs.length,
       &self.limbs.parent,
     ]
     .into_iter()

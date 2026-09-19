@@ -486,6 +486,25 @@ The energy constants are `organism.md`'s decision entry; the run that
 chose them is the 0.001-versus-0.003 pair of `upkeep_per_particle`, 3
 deaths and every slot full against 78 deaths and 93 of 256 slots.
 
+### The same run once growth became continuous (2026-09-19, commit after dd2340f)
+
+Same command, CUDA, 3000 steps: **71 alive, 52 births, 64 deaths, 18
+lineages, generation 3, 2 species**, 1.43 ms a step against the 1.61 ms of
+the whole-limb build on the same box — fewer and smaller bodies, because a
+seedling now germinates as one root segment and grows out of its surplus
+(`organism.md`, decisions, for why that surplus is usually nothing). Its
+mean body at step 3000 is `root_frac` 0.76 and 0.12 m tall against 0.33 and
+0.45 m at step 100, when the founders were the whole population.
+
+`project_constraints` costs **0.128 ms against 0.099**, the one measured
+price of the chunk: a limb's particle count is now the leading run of its
+slice of the map rather than a field read, and the pass scans it several
+times a sweep. 2% of the step, and hoisting the counts once per unit is
+what to try if it ever matters.
+
+`--founders 0` stays byte-identical: 300 CUDA steps against the previous
+binary's dump, `cmp` clean.
+
 ### The soil-specialization experiment (2026-09-19, commit after 4b19bcb)
 
 ```

@@ -35,10 +35,12 @@
 //! of 256 slots, and 45 of the 64 founder lineages are already extinct
 //! (`docs/perf.md`).
 //!
-//! A seedling that has germinated but not yet sprouted a leaf is pure upkeep
+//! A seedling that has germinated but not yet grown a leaf is pure upkeep
 //! plus whatever its root drinks, so it lives about as long as its
-//! `seed_energy` lasts unless its brain sprouts one. That is the selection
-//! pressure the sprout head is under.
+//! `seed_energy` lasts unless it grows one. Growth is funded by what is
+//! left over `seed_cost`, and at these constants a seedling's root barely
+//! covers its own upkeep, so it mostly does not: `docs/organism.md`,
+//! decisions, and the `TODO.md` item it is the other half of.
 //!
 //! One unit per organism and a serial walk over its particles: no float
 //! atomic, so the sum order is the slot order and the result is the same on
@@ -98,7 +100,7 @@ pub fn organism_energy(
   let mut gain = 0.0f32;
   let mut particles = 0u32;
   for l in 0..ml {
-    let n = limb_len(limbs, base + l, body);
+    let n = limb_len(map, pbase, l, body);
     let part_type = limbs.part_type[(base + l) as usize];
     for i in 0..n {
       let id = particle_at(map, pbase, l, i, body);
@@ -181,7 +183,7 @@ pub fn organism_energy_ref(
       if !part_type.is_present() {
         continue;
       }
-      let n = (pop.limbs.length[record] as usize).min(cfg.max_particles_per_limb as usize);
+      let n = bodies.limb_len(o, l);
       for i in 0..n {
         let id = bodies.particle(o, l, i);
         if id == NO_PARTICLE {

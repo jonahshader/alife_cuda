@@ -8,14 +8,19 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-Growth, the four chunks of `organism.md`'s *Growth* section, in order:
+Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
 
-- **Growth 1 — continuous length and allocation.** Per-limb `grown`
-  state, `growth_bias` and `growth_rate` in the genome (mutation, founder,
-  population file version bump), the partial last segment in the
-  constraint pass, the parent-before-child rule, the softmax spend, and the
-  growth kernel over `(organism, limb, index)` requests. Replaces whole-limb
-  sprouting and `sprout_cost`; the sprout head goes unread until chunk 4.
+- **A seedling cannot afford to grow, so the population drifts to
+  root-only bodies.** The first thing the continuous growth chunk measured
+  (`organism.md`, decisions): growth is funded by `energy − seed_cost`, a
+  seedling germinates on `seed_energy` 0.5 against a `seed_cost` of 1.0,
+  and one root particle earns about what it costs, so it never gets a
+  surplus and never reaches the leaf that would pay for it. It is the same
+  energy-balance question as the `--column-top` band below and wants
+  answering with it: what a root earns, what a seed germinates with, or
+  whether the growth reserve is `seed_cost` at all. Changing the growth
+  constants does not touch it — `--length-per-energy` 2 through 16 is the
+  same run.
 - **Growth 2 — thickness and volume.** `target_thickness` per record,
   thickness from progress, volume-priced growth and upkeep
   (`upkeep_per_volume` replaces `upkeep_per_particle`), segments drawn at
@@ -103,10 +108,11 @@ Left open by the life-cycle chunk:
 
 Left open by the brain chunk:
 
-- **The actuator head is still read by nothing.** `brain::forward` writes
-  the sprout logits and then two actuator outputs; the life tick reads the
-  sprout logits' argmax and ignores the rest, because no part type takes a
-  target angle yet. Milestone 2's actuated limb is what consumes them.
+- **Both heads are read by nothing.** `brain::forward` writes the sprout
+  logits and then two actuator outputs; the packed life buffer still
+  carries the sprout argmax per limb, and nothing looks at it since growth
+  became continuous. Growth 4 turns it into the growth logit; milestone
+  2's actuated limb is what consumes the actuator outputs.
 - **`contact` is the spec's `solid fraction > 0.5`, and pure clay sits
   exactly on the threshold** (`1 - CLAY_POROSITY` is 0.50, against sand's
   0.62 and silt's 0.55), so a limb buried in undiluted clay reads no
