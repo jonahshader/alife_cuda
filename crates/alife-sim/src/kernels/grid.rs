@@ -10,6 +10,9 @@
 //! are bit-reproducible on a given runtime. The result is the stable order a
 //! sequential build would produce — ascending particle id within a cell.
 //!
+//! The prefix scan the counting sort needs is [`super::scan`], which the
+//! organism slot allocator shares.
+//!
 //! Layout: cell `c` owns `sorted_ids[cell_start[c] .. cell_start[c] +
 //! cell_counts[c]]`. Unlike the C++ fixed stride, nothing is dropped when a
 //! cell is crowded; the neighbour kernels still read at most
@@ -19,6 +22,7 @@
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
+use super::scan;
 use super::{
   Cfg, P_CELL_SIZE, SCAN_THREADS, SphArgs, cube_count, particle_to_cid, sph_args, whole,
 };
@@ -90,86 +94,6 @@ pub fn count_cells(
   );
   particle_cell[i] = cid;
   cell_counts[cid as usize].fetch_add(1u32);
-}
-
-/// Exclusive prefix sum over the cell histogram, in three launches.
-///
-/// Each of the `SCAN_THREADS` units owns a contiguous block of cells: it sums
-/// its block, one unit scans the per-block totals, then every unit walks its
-/// block again writing the running offsets. Three launches rather than one
-/// kernel with two `sync_cube()` barriers, because a cube-wide barrier costs
-/// the CPU runtime ~140 ms per barrier at this cube size — it turned a 25 us
-/// scan into 280 ms. Nothing here uses shared memory or a barrier, so this is
-/// also the portable shape.
-///
-/// `cell_cursor` starts as a copy of `cell_start`; `scatter_ids` consumes it.
-#[cube(launch)]
-#[allow(clippy::needless_range_loop)]
-pub fn scan_block_sums(cell_counts: &[u32], partials: &mut [u32], #[comptime] cfg: Cfg) {
-  let t = ABSOLUTE_POS;
-  if t >= comptime!(SCAN_THREADS as usize) {
-    terminate!();
-  }
-  let block = comptime!(cfg.num_cells.div_ceil(SCAN_THREADS) as usize);
-  let cells = comptime!(cfg.num_cells as usize);
-  let begin = t * block;
-  let mut sum = 0u32;
-  if begin < cells {
-    let mut end = begin + block;
-    if end > cells {
-      end = cells;
-    }
-    for c in begin..end {
-      sum += cell_counts[c];
-    }
-  }
-  partials[t] = sum;
-}
-
-/// Exclusive scan of the per-block totals, on one unit. `SCAN_THREADS` serial
-/// adds, which is the price of not needing a barrier.
-#[cube(launch)]
-#[allow(clippy::needless_range_loop)]
-pub fn scan_partials(partials: &mut [u32]) {
-  if ABSOLUTE_POS != 0 {
-    terminate!();
-  }
-  let mut running = 0u32;
-  for k in 0..comptime!(SCAN_THREADS as usize) {
-    let value = partials[k];
-    partials[k] = running;
-    running += value;
-  }
-}
-
-#[cube(launch)]
-#[allow(clippy::needless_range_loop)]
-pub fn scan_write_starts(
-  cell_counts: &[u32],
-  partials: &[u32],
-  cell_start: &mut [u32],
-  cell_cursor: &mut [u32],
-  #[comptime] cfg: Cfg,
-) {
-  let t = ABSOLUTE_POS;
-  if t >= comptime!(SCAN_THREADS as usize) {
-    terminate!();
-  }
-  let block = comptime!(cfg.num_cells.div_ceil(SCAN_THREADS) as usize);
-  let cells = comptime!(cfg.num_cells as usize);
-  let begin = t * block;
-  if begin < cells {
-    let mut end = begin + block;
-    if end > cells {
-      end = cells;
-    }
-    let mut running = partials[t];
-    for c in begin..end {
-      cell_start[c] = running;
-      cell_cursor[c] = running;
-      running += cell_counts[c];
-    }
-  }
 }
 
 /// Place every liquid particle into its cell's slice. The slot a particle wins
@@ -265,31 +189,16 @@ pub fn build<R: Runtime>(
     );
   });
 
+  // `cell_cursor` comes out as a copy of `cell_start`; `scatter_ids`
+  // consumes it.
   timed("scan_cell_starts", &mut || {
-    let threads = SCAN_THREADS as usize;
-    scan_block_sums::launch::<R>(
+    scan::exclusive_scan(
       client,
-      cube_count(threads),
-      CubeDim::new_1d(super::CUBE_DIM),
-      whole(&grid.cell_counts, cells),
-      whole(&grid.partials, threads),
-      cfg,
-    );
-    scan_partials::launch::<R>(
-      client,
-      CubeCount::Static(1, 1, 1),
-      CubeDim::new_1d(1),
-      whole(&grid.partials, threads),
-    );
-    scan_write_starts::launch::<R>(
-      client,
-      cube_count(threads),
-      CubeDim::new_1d(super::CUBE_DIM),
-      whole(&grid.cell_counts, cells),
-      whole(&grid.partials, threads),
-      whole(&grid.cell_start, cells),
-      whole(&grid.cell_cursor, cells),
-      cfg,
+      &grid.cell_counts,
+      &grid.partials,
+      &grid.cell_start,
+      &grid.cell_cursor,
+      scan::ScanCfg { n: cfg.num_cells },
     );
   });
 

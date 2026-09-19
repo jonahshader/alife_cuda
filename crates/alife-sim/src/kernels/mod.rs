@@ -16,6 +16,7 @@ pub mod density;
 pub mod evap;
 pub mod grid;
 pub mod motion;
+pub mod scan;
 pub mod soil_sample;
 
 #[cfg(test)]
