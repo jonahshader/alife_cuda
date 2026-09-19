@@ -19,15 +19,21 @@ use std::sync::Arc;
 
 use render::{Pipelines, SimCallback, ViewUniform};
 
-pub fn run(params: SimParams, initial: Option<InitialState>, requested: RuntimeKind) -> Result<()> {
-  if requested != RuntimeKind::Wgpu {
+pub fn run(
+  params: SimParams,
+  initial: Option<InitialState>,
+  requested: Option<RuntimeKind>,
+) -> Result<()> {
+  // Only an explicit `--runtime` is worth a warning; without one there is no
+  // choice being overridden, and the GUI never asked what this box can run.
+  if let Some(kind) = requested.filter(|kind| *kind != RuntimeKind::Wgpu) {
     // Nothing stops the sim from running on another backend, but then the
     // renderer would have to copy every buffer through the host every frame,
     // which is exactly what this port set out to remove.
     tracing::warn!(
       "the GUI runs the sim on the wgpu runtime so the renderer can read its buffers directly; \
        ignoring --runtime {}",
-      requested.name()
+      kind.name()
     );
   }
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use alife_sim::runtime::{AnySim, RuntimeKind, WgpuOptions, default_runtime};
+use alife_sim::runtime::{AnySim, RuntimeKind, WgpuOptions};
 use alife_sim::{SimParams, SimParamsCli, dump};
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -119,18 +119,23 @@ fn main() -> Result<()> {
     None => None,
   };
 
-  let kind = cli.runtime.unwrap_or_else(default_runtime);
   let wgpu_options = WgpuOptions {
     adapter: cli.adapter.clone(),
   };
   let seed = params.resolve_seed();
 
   if !cli.headless {
-    // The GUI builds its own sim on the device the window gives it.
-    return gui::run(params, initial, kind);
+    // The GUI builds its own sim on the device the window gives it, so
+    // nothing here starts a backend it would then throw away.
+    return gui::run(params, initial, cli.runtime);
   }
 
-  let sim = AnySim::new(kind, params, seed, initial, &wgpu_options)?;
+  // Auto-selection builds the sim on the first backend that starts, rather
+  // than probing for one and then starting it a second time.
+  let sim = match cli.runtime {
+    Some(kind) => AnySim::new(kind, params, seed, initial, &wgpu_options)?,
+    None => AnySim::new_auto(params, seed, initial, &wgpu_options)?,
+  };
   run_headless(sim, &cli)
 }
 

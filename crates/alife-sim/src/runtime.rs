@@ -92,6 +92,47 @@ impl AnySim {
     })
   }
 
+  /// CUDA if this box can run it, else wgpu, else the CPU runtime — keeping
+  /// the client the winning backend handed back. Which one that was is
+  /// [`AnySim::kind`].
+  ///
+  /// Creating a client initializes the whole backend, so asking
+  /// [`available`] first and then building the same backend again paid that
+  /// cost twice. Call [`AnySim::new`] instead when the user named a runtime.
+  pub fn new_auto(
+    params: SimParams,
+    seed: u64,
+    initial: Option<InitialState>,
+    wgpu_options: &WgpuOptions,
+  ) -> anyhow::Result<Self> {
+    if let Some(client) = probe(|| CudaRuntime::client(&CudaDevice::new(0))) {
+      return Ok(AnySim::Cuda(Sim::new(client, params, seed, initial)));
+    }
+
+    // A named adapter is the one case where wgpu not working is an error
+    // rather than a reason to try the next backend: the user asked for that
+    // device, so running on the CPU instead would be answering a different
+    // question.
+    match probe(|| {
+      crate::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, wgpu_options.adapter.as_deref())
+    }) {
+      Some(Ok(setup)) => {
+        let (_device, client) = crate::wgpu_backend::client_on(&setup);
+        return Ok(AnySim::Wgpu(Sim::new(client, params, seed, initial)));
+      }
+      Some(Err(err)) if wgpu_options.adapter.is_some() => return Err(err),
+      Some(Err(err)) => tracing::debug!("no wgpu backend ({err:#}); falling back"),
+      None => tracing::debug!("the wgpu backend panicked while starting; falling back"),
+    }
+
+    Ok(AnySim::Cpu(Sim::new(
+      CpuRuntime::client(&CpuDevice),
+      params,
+      seed,
+      initial,
+    )))
+  }
+
   pub fn kind(&self) -> RuntimeKind {
     match self {
       AnySim::Cpu(_) => RuntimeKind::Cpu,
@@ -147,35 +188,30 @@ impl AnySim {
 
 /// Whether this box can run a given backend.
 ///
-/// CubeCL's `Runtime::client` is infallible and panics when the backend is not
-/// there, so probing means catching that panic; nothing is kept from a failed
-/// probe.
+/// This throws the initialized backend away, so it is for tests and for
+/// answering the question on its own; the startup path uses
+/// [`AnySim::new_auto`], which keeps what it starts.
 pub fn available(kind: RuntimeKind) -> bool {
   match kind {
     RuntimeKind::Cpu => true,
-    RuntimeKind::Cuda => probe(|| {
-      let _ = CudaRuntime::client(&CudaDevice::new(0));
-    }),
-    RuntimeKind::Wgpu => probe(|| {
-      let _ = crate::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, None).unwrap();
-    }),
-  }
-}
-
-/// CUDA if this box can run it, else wgpu, else the CPU runtime.
-pub fn default_runtime() -> RuntimeKind {
-  for kind in [RuntimeKind::Cuda, RuntimeKind::Wgpu] {
-    if available(kind) {
-      return kind;
+    RuntimeKind::Cuda => probe(|| CudaRuntime::client(&CudaDevice::new(0))).is_some(),
+    RuntimeKind::Wgpu => {
+      probe(|| crate::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, None).is_ok())
+        .unwrap_or(false)
     }
   }
-  RuntimeKind::Cpu
 }
 
-fn probe(f: impl FnOnce()) -> bool {
+/// Run something that may panic because a backend is not on this box.
+///
+/// CubeCL's `Runtime::client` is infallible and panics when the backend is not
+/// there, so probing means catching that panic. `None` is that panic; anything
+/// the closure returns comes back intact, which is what lets the startup path
+/// keep the client it just built.
+fn probe<T>(f: impl FnOnce() -> T) -> Option<T> {
   let previous = std::panic::take_hook();
   std::panic::set_hook(Box::new(|_| {}));
-  let ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).is_ok();
+  let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok();
   std::panic::set_hook(previous);
-  ok
+  out
 }
