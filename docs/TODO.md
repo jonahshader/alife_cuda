@@ -60,6 +60,15 @@ the spec, don't re-derive it.
 - The fluid file carries a soil-free duplicate of the density, accel, and
   evap kernels and step function, reachable only from the commented-out
   FluidTest2 screen. Port only the soil-coupled path.
+- `particle_to_cid` clamps x but not y (it is not given the grid height), so
+  any `pos.y >= bounds.y` indexes one row past the grid. The known producer
+  (`move_vapor_particles`) is fixed; the port's cell-id function takes both
+  dims and clamps both axes.
+- The ImGui smoothing-radius slider calls `init_fluid_grid`, which resizes
+  only the host grid; the device grid is never re-sized or re-copied while
+  kernels launch with the new dims (`fluid_render.cu`). GUI-only; the port's
+  grid has one owner.
+- `calculate_soil_saturation` is defined and never launched.
 - `--extended-lambda` and `--expt-relaxed-constexpr` are set in
   `CMakeLists.txt` but nothing uses device lambdas or device-side
   `constexpr`; drop them.

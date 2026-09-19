@@ -1042,14 +1042,21 @@ __global__ void move_vapor_particles(SPHPtrs sph, float dt, size_t num_particles
 
   if (condense_roll < condense_prob) {
     sph.state[i] = 0;
-    sph.vel[i] = make_float2(vel.x * 0.1f, -0.5f);
+    vel = make_float2(vel.x * 0.1f, -0.5f);
     sph.evap_prob[i] = 0.0f;
-  } else {
-    sph.vel[i] = vel;
   }
+  sph.vel[i] = vel;
+
+  // predict from the velocity actually stored (a condensed particle now falls)
+  // and keep the prediction inside the world like move_particles does: a
+  // condensed particle at the ceiling is read by the next grid build as a
+  // liquid, and pos.y >= bounds.y would index one row past the grid
+  float2 predicted = new_pos + vel * dt;
+  predicted.x = fmodf(predicted.x + bounds.x, bounds.x);
+  predicted.y = fmaxf(0.0f, fminf(bounds.y - 1e-4f, predicted.y));
 
   sph.ppos[i] = new_pos;
-  sph.pos[i] = new_pos + vel * dt;
+  sph.pos[i] = predicted;
 }
 
 void update_fluid(ParticleFluidState &state) {
