@@ -20,7 +20,6 @@ use crate::define_soa;
 use crate::genome::population::NO_PARENT;
 use crate::genome::slots::{SlotScan, claim_free_slots, read_free_slots};
 use crate::genome::{Genome, Population};
-use crate::kernels::spawn::Placement;
 use crate::particles::SphDevice;
 use crate::soil::SoilGrid;
 use crate::world::{Cfg, WorldGeometry};
@@ -153,12 +152,13 @@ fn flatten(v: &[Vec2]) -> Vec<f32> {
   v.iter().flat_map(|p| [p.x, p.y]).collect()
 }
 
-// --- Spawning, on the host ---
+// --- Spawning ---
 //
-// Births belong to the life-cycle chunk and will run on the device; until
-// then a body is laid out here. The cost is honest about that: each call
-// reads `ppos` back to find where the parent limb ended, and claims its slots
-// with a scan and two small reads.
+// The host decides *which* limbs to grow and claims their particle slots; the
+// device lays them out, because where a limb starts depends on where the
+// constraint pass actually left its parent's last particle. `docs/organism.md`
+// asks for growth to be a kernel over a list of requests, and
+// `kernels::spawn` is that kernel pair.
 
 /// Everything a spawn touches, borrowed from one [`Sim`] at once.
 pub struct SimBodies<'a, R: Runtime> {
@@ -167,6 +167,8 @@ pub struct SimBodies<'a, R: Runtime> {
   pub geom: &'a WorldGeometry,
   pub cfg: Cfg,
   pub sph: &'a SphDevice,
+  /// The kernels' runtime parameter buffer, which the layout kernel reads.
+  pub params_buf: &'a Handle,
   pub pop: &'a mut Population,
   pub bodies: &'a mut BodyState,
 }
@@ -178,174 +180,230 @@ pub enum SpawnError {
   NothingToGrow,
   /// The parent limb has not been grown, so there is nothing to grow from.
   ParentNotGrown,
-  /// Fewer free particle slots than the limb needs.
-  OutOfParticles,
+}
+
+/// One limb to grow: the sprout head's unit of work, and the unit a whole
+/// body is laid out in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrowRequest {
+  pub organism: usize,
+  pub limb: usize,
 }
 
 /// Install a genome in an organism slot and lay its whole body out from the
-/// anchor, parents before children.
+/// anchor.
 ///
 /// Returns the particles placed. The lineage fields (`parent_id`,
-/// `birth_step`, `lineage_id`) are the life-cycle chunk's; this sets only
-/// what a body needs: the genome, the anchor and `alive`.
+/// `birth_step`, `lineage_id`) are the life cycle's; this sets only what a
+/// body needs: the genome, the anchor and `alive`.
 pub fn spawn<R: Runtime>(
   sim: &mut crate::sim::Sim<R>,
   organism: usize,
   genome: &Genome,
   anchor: Vec2,
 ) -> usize {
+  install(sim, organism, genome, anchor);
   {
     let access = sim.body_access();
-    access.pop.write_genome(organism, genome);
-    access.pop.organisms.alive[organism] = 1;
     access.pop.upload(access.client);
-    access.bodies.anchors[organism] = anchor;
-    let cfg = access.bodies.cfg;
-    let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
-    let start = organism * per_organism;
-    access.bodies.limb_particles[start..start + per_organism].fill(NO_PARTICLE);
   }
+  grow_bodies(sim, &[organism])
+}
 
-  // Parents before children: a limb record's parent may sit at a higher
-  // index than the limb itself, because a structural add takes the first
-  // absent record rather than the next one.
+/// Write one organism's genome, anchor and `alive` flag into the host
+/// mirrors. The caller uploads, so a batch of founders pays for one upload.
+fn install<R: Runtime>(
+  sim: &mut crate::sim::Sim<R>,
+  organism: usize,
+  genome: &Genome,
+  anchor: Vec2,
+) {
+  let access = sim.body_access();
+  access.pop.write_genome(organism, genome);
+  access.pop.organisms.alive[organism] = 1;
+  access.bodies.anchors[organism] = anchor;
+  let cfg = access.bodies.cfg;
+  let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
+  let start = organism * per_organism;
+  access.bodies.limb_particles[start..start + per_organism].fill(NO_PARTICLE);
+}
+
+/// Grow every ungrown limb of these organisms, parents before children.
+///
+/// A limb record's parent may sit at a *higher* index than the limb itself,
+/// because a structural add takes the first absent record rather than the
+/// next one, so one pass is not enough. Each pass is one batch — one layout
+/// launch and one placement launch — and the loop stops as soon as a pass
+/// places nothing.
+pub fn grow_bodies<R: Runtime>(sim: &mut crate::sim::Sim<R>, organisms: &[usize]) -> usize {
   let max_limbs = sim.population().max_limbs;
+  let requests: Vec<GrowRequest> = organisms
+    .iter()
+    .flat_map(|o| (0..max_limbs).map(move |limb| GrowRequest { organism: *o, limb }))
+    .collect();
   let mut placed = 0;
-  let mut done = vec![false; max_limbs];
-  #[allow(clippy::needless_range_loop)]
   for _ in 0..max_limbs {
-    let mut progress = false;
-    for limb in 0..max_limbs {
-      if done[limb] {
-        continue;
-      }
-      // `grow_limb` needs `sim` mutably, so this cannot hold a borrow of
-      // `done` across the call; the index loop is the point.
-      match grow_limb(sim, organism, limb) {
-        Ok(n) => {
-          placed += n;
-          done[limb] = true;
-          progress = true;
-        }
-        Err(SpawnError::ParentNotGrown) => {}
-        Err(_) => done[limb] = true,
-      }
-    }
-    if !progress {
+    let n = grow_limbs(sim, &requests);
+    if n == 0 {
       break;
     }
+    placed += n;
   }
   placed
 }
 
-/// Grow one limb: claim its particle slots and lay them out from its parent's
-/// last particle along its rest direction, at rest spacing.
+/// Grow one batch of limbs: claim their particle slots, lay them out on the
+/// device, and write the particles.
 ///
-/// This is what the brain's sprout head will call once it exists.
-pub fn grow_limb<R: Runtime>(
-  sim: &mut crate::sim::Sim<R>,
+/// Requests that cannot be grown *yet* — an ungrown parent — are skipped
+/// silently, which is what makes [`grow_bodies`]'s repeated passes work.
+/// Returns the particles placed.
+pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequest]) -> usize {
+  use crate::kernels::spawn::{GrowBatchEntry, Placement, launch_layout, launch_place};
+
+  if requests.is_empty() {
+    return 0;
+  }
+  let access = sim.body_access();
+  let cfg = access.bodies.cfg;
+
+  let mut batch: Vec<GrowBatchEntry> = Vec::new();
+  let mut placement = Placement::default();
+  let mut total = 0usize;
+  for request in requests {
+    let Ok(count) = growable(&access, request.organism, request.limb) else {
+      continue;
+    };
+    let record = access.pop.limb_index(request.organism, request.limb);
+    let part_type = access.pop.limbs.part_type[record] as u32;
+    batch.push(GrowBatchEntry {
+      organism: request.organism as u32,
+      limb: request.limb as u32,
+      first: total as u32,
+      count: count as u32,
+    });
+    for i in 0..count {
+      placement.organism.push(request.organism as u32);
+      placement.limb.push(request.limb as u32);
+      placement.index_in_limb.push(i as u32);
+      placement.part_type.push(part_type);
+    }
+    total += count;
+  }
+  if total == 0 {
+    return 0;
+  }
+
+  // Fewer free slots than the batch wants: drop whole limbs off the end
+  // rather than growing a half limb. Deterministic, because the request
+  // order is.
+  let mut ids = claim_particles(&access, total);
+  if ids.len() < total {
+    while batch
+      .last()
+      .is_some_and(|e| (e.first + e.count) as usize > ids.len())
+    {
+      batch.pop();
+    }
+    total = batch.last().map_or(0, |e| (e.first + e.count) as usize);
+    if total == 0 {
+      return 0;
+    }
+    ids.truncate(total);
+    placement.organism.truncate(total);
+    placement.limb.truncate(total);
+    placement.index_in_limb.truncate(total);
+    placement.part_type.truncate(total);
+  }
+  placement.ids = ids.clone();
+
+  // The device map and anchors are what the layout kernel reads, and the host
+  // is the master of both, so they go up before the launch.
+  access.bodies.upload(access.client);
+  let positions = launch_layout(
+    access.client,
+    access.sph,
+    &access.pop.device.limbs,
+    &access.bodies.device.limb_particles,
+    &access.bodies.device.anchors,
+    &batch,
+    total,
+    access.params_buf,
+    cfg,
+    access.cfg,
+  );
+  launch_place(access.client, access.sph, &placement, Some(&positions));
+
+  // The host map is the master; the kernel only read it. Record the claimed
+  // slots and send the map back up, so the constraint pass sees the new limb
+  // on the very next step.
+  for entry in &batch {
+    let slice = cfg.limb_slice(entry.organism as usize, entry.limb as usize);
+    for i in 0..entry.count as usize {
+      let id = ids[entry.first as usize + i];
+      access.bodies.limb_particles[slice.start + i] = id;
+      access.bodies.high_water = access.bodies.high_water.max(id as usize + 1);
+    }
+  }
+  access.bodies.upload(access.client);
+  total
+}
+
+/// Particles a limb would take, or why it cannot be grown now.
+fn growable<R: Runtime>(
+  access: &SimBodies<'_, R>,
   organism: usize,
   limb: usize,
 ) -> Result<usize, SpawnError> {
-  let access = sim.body_access();
   let cfg = access.bodies.cfg;
+  let mp = cfg.max_particles_per_limb as usize;
   let record = access.pop.limb_index(organism, limb);
-  let part_type = access.pop.limbs.part_type[record];
-  let count = (access.pop.limbs.length[record] as usize).min(cfg.max_particles_per_limb as usize);
-  if !part_type.is_present() || count == 0 {
+  let count = (access.pop.limbs.length[record] as usize).min(mp);
+  if !access.pop.limbs.part_type[record].is_present() || count == 0 {
     return Err(SpawnError::NothingToGrow);
   }
   let slice = cfg.limb_slice(organism, limb);
-  if access.bodies.limb_particles[slice.clone()]
+  if access.bodies.limb_particles[slice]
     .iter()
     .any(|id| *id != NO_PARTICLE)
   {
     return Err(SpawnError::NothingToGrow);
   }
-
-  let ppos: Vec<Vec2> =
-    crate::soa::download_field(access.client, &access.sph.ppos, access.geom.num_particles);
-  let bounds = access.geom.bounds;
-  let rest = access.params.limb_segment_length;
-  let grow_angle = access.pop.limbs.grow_angle[record];
   let parent = access.pop.limbs.parent[record] as usize;
-
-  // Where the chain starts and which way it goes. The root starts on the
-  // anchor, where the pin holds it; a child starts one rest length off its
-  // parent's last particle, along its parent's axis rotated by its grow
-  // angle — the rest shape the base-joint constraint asks for.
-  let (base, direction) = if parent == limb {
-    (
-      access.bodies.anchors[organism],
-      Vec2::from_angle(grow_angle),
-    )
-  } else {
-    let precord = access.pop.limb_index(organism, parent);
-    let pcount =
-      (access.pop.limbs.length[precord] as usize).min(cfg.max_particles_per_limb as usize);
-    if !access.pop.limbs.part_type[precord].is_present() || pcount == 0 {
-      return Err(SpawnError::ParentNotGrown);
-    }
-    let last = access.bodies.particle(organism, parent, pcount - 1);
-    if last == NO_PARTICLE {
-      return Err(SpawnError::ParentNotGrown);
-    }
-    let axis = crate::kernels::constraints::limb_axis_ref(
-      &ppos,
-      access.pop,
-      access.bodies,
-      organism,
-      parent,
-      bounds.x,
-    );
-    let axis = if axis == Vec2::ZERO { Vec2::X } else { axis };
-    (ppos[last as usize], rotate_ref(axis, grow_angle))
-  };
-  let first_step = if parent == limb { 0.0 } else { 1.0 };
-
-  let ids = claim_particles(&access, count)?;
-  let mut placement = Placement {
-    ids: ids.clone(),
-    positions: Vec::with_capacity(count * 2),
-    limb: vec![limb as u32; count],
-    index_in_limb: (0..count as u32).collect(),
-    part_type: vec![part_type as u32; count],
-  };
-  for i in 0..count {
-    let mut p = base + direction * (rest * (i as f32 + first_step));
-    p.x = crate::kernels::constraints::wrap_x_ref(p.x, bounds.x);
-    p.y = p.y.clamp(0.0, bounds.y);
-    placement.positions.push(p.x);
-    placement.positions.push(p.y);
+  if parent == limb {
+    return Ok(count);
   }
-
-  crate::kernels::spawn::launch_place(access.client, access.sph, organism as u32, &placement);
-  for (i, id) in ids.iter().enumerate() {
-    access.bodies.limb_particles[slice.start + i] = *id;
-    access.bodies.high_water = access.bodies.high_water.max(*id as usize + 1);
+  let precord = access.pop.limb_index(organism, parent);
+  let pcount = (access.pop.limbs.length[precord] as usize).min(mp);
+  if !access.pop.limbs.part_type[precord].is_present() || pcount == 0 {
+    return Err(SpawnError::ParentNotGrown);
   }
-  access.bodies.upload(access.client);
+  if access.bodies.particle(organism, parent, pcount - 1) == NO_PARTICLE {
+    return Err(SpawnError::ParentNotGrown);
+  }
   Ok(count)
 }
 
-/// The first `n` claimable particle slots, ascending.
-fn claim_particles<R: Runtime>(
-  access: &SimBodies<'_, R>,
-  n: usize,
-) -> Result<Vec<u32>, SpawnError> {
+/// Whether a limb record could be grown right now — what the sprout head
+/// asks before it spends anything.
+pub fn can_grow<R: Runtime>(sim: &mut crate::sim::Sim<R>, organism: usize, limb: usize) -> bool {
+  growable(&sim.body_access(), organism, limb).is_ok()
+}
+
+/// The first `n` claimable particle slots, ascending, or as many as there are.
+///
+/// The scan is the spec's allocator: an atomic claim would hand ids out in
+/// arrival order and the run would stop being reproducible.
+pub fn claim_particles<R: Runtime>(access: &SimBodies<'_, R>, n: usize) -> Vec<u32> {
   let total = access.geom.num_particles;
   let occupancy = access.client.empty(total * size_of::<u32>());
   crate::kernels::spawn::launch_mark_occupancy(access.client, access.sph, &occupancy, access.cfg);
   let scan = SlotScan::alloc(access.client, total);
   claim_free_slots(access.client, &occupancy, &scan);
-  let free = read_free_slots(access.client, &scan);
-  if free.len() < n {
-    return Err(SpawnError::OutOfParticles);
-  }
-  Ok(free[..n].to_vec())
+  let mut free = read_free_slots(access.client, &scan);
+  free.truncate(n);
+  free
 }
-
-use crate::kernels::constraints::rotate_ref;
 
 /// Seed `count` founders: one [`Genome::seed_plant`] each, at evenly spaced
 /// x, anchored on the soil surface of its own column.
@@ -371,21 +429,32 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
 
   for (slot, anchor) in anchors.into_iter().enumerate() {
     let genome = Genome::seed_plant(&shape, max_limbs, slot as u32, seed);
-    spawn(sim, slot, &genome, anchor);
+    install(sim, slot, &genome, anchor);
   }
 
   // A founder is the root ancestor of its own lineage and generation 0, which
-  // is what the evolutionary metrics count from. Offspring lineage fields are
-  // the life-cycle chunk's, which is why `spawn` does not set any of this.
+  // is what the evolutionary metrics count from. It starts with a seed's worth
+  // of energy so that its first interval is not spent dying; an offspring's
+  // lineage fields are the life cycle's.
   let step = sim.step_count();
-  let access = sim.body_access();
-  for slot in 0..count {
-    access.pop.organisms.lineage_id[slot] = slot as u32;
-    access.pop.organisms.parent_id[slot] = NO_PARENT;
-    access.pop.organisms.birth_step[slot] = step;
-    access.pop.organisms.generation[slot] = 0;
+  let seed_energy = sim.params().seed_energy;
+  {
+    let access = sim.body_access();
+    for slot in 0..count {
+      access.pop.organisms.lineage_id[slot] = slot as u32;
+      access.pop.organisms.parent_id[slot] = NO_PARENT;
+      access.pop.organisms.birth_step[slot] = step;
+      access.pop.organisms.generation[slot] = 0;
+      access.pop.organisms.energy[slot] = seed_energy;
+    }
+    access.pop.upload(access.client);
   }
-  access.pop.upload(access.client);
+
+  // One batch per wave over every founder at once, rather than a whole
+  // layout per organism: the founders' roots go down together, then their
+  // stems, then their leaves.
+  let slots: Vec<usize> = (0..count).collect();
+  grow_bodies(sim, &slots);
   count
 }
 

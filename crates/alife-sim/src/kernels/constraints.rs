@@ -177,7 +177,7 @@ pub fn particle_at(map: &[u32], pbase: u32, l: u32, i: u32, #[comptime] cfg: Bod
 /// The parent limb's last particle: where a limb's base joint sits. Returns
 /// [`NO_PARTICLE`] for the root, whose joint is the world frame instead.
 #[cube]
-fn base_particle(
+pub fn base_particle(
   limbs: &LimbArgs,
   map: &[u32],
   base: u32,
@@ -202,7 +202,7 @@ fn base_particle(
 /// grow angle in the world frame, which is exactly what the pin and the base
 /// joint would have given it.
 #[cube]
-fn limb_axis(
+pub fn limb_axis(
   ppos: &mut [f32],
   limbs: &LimbArgs,
   map: &[u32],
@@ -641,8 +641,8 @@ pub fn project_constraints_ref(
 }
 
 /// Host twin of [`limb_axis`]: the direction a child limb's base joint is
-/// measured against. Shared with `bodies::grow_limb`, which lays a new limb
-/// out along it.
+/// measured against. Shared with `kernels::spawn::layout_limbs_ref`, which
+/// lays a new limb out along it.
 pub fn limb_axis_ref(
   ppos: &[Vec2],
   pop: &Population,

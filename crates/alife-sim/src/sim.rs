@@ -283,7 +283,7 @@ impl<R: Runtime> Sim<R> {
   }
 
   /// Everything a body spawn touches, borrowed at once — `bodies::spawn` and
-  /// `bodies::grow_limb` need several of these fields together, and they are
+  /// `bodies::grow_limbs` need several of these fields together, and they are
   /// disjoint.
   pub fn body_access(&mut self) -> SimBodies<'_, R> {
     SimBodies {
@@ -292,6 +292,7 @@ impl<R: Runtime> Sim<R> {
       geom: &self.geom,
       cfg: self.cfg,
       sph: &self.sph,
+      params_buf: &self.params_buf,
       pop: &mut self.pop,
       bodies: &mut self.bodies,
     }
