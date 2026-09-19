@@ -519,6 +519,74 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
   count
 }
 
+/// Move every organism standing in one soil column to another.
+///
+/// The transplant test of `docs/organism.md`'s *The first experiment*: take a
+/// lineage from one column, put it in another, and watch what its energy does
+/// against the residents'. An organism keeps its *relative* x within the
+/// column, so a plant a third of the way across the sand column lands a third
+/// of the way across the clay one however differently wide the two are, and it
+/// re-anchors on the destination's own soil surface.
+///
+/// Every move's membership is read from the anchors as they stand *before* any
+/// of them is applied, so `sand:clay` and `clay:sand` given together swap the
+/// two columns rather than piling both into one. Returns the slots each move
+/// took, in the order the moves were given.
+///
+/// Seeds in flight are not moved: they have no anchor to move (`crate::life`).
+pub fn transplant_anchors(
+  soil: &SoilGrid,
+  organisms: &crate::genome::OrganismHost,
+  anchors: &mut [Vec2],
+  moves: &[(&str, &str)],
+) -> Result<Vec<Vec<usize>>, String> {
+  use crate::genome::population::STAGE_PLANT;
+
+  let columns = soil.columns();
+  let find = |label: &str| -> Result<crate::soil::ColumnExtent, String> {
+    columns
+      .iter()
+      .find(|c| c.label == label)
+      .copied()
+      .ok_or_else(|| {
+        let known: Vec<&str> = columns.iter().map(|c| c.label).collect();
+        format!("no soil column is labelled `{label}`; this terrain has {known:?}")
+      })
+  };
+
+  let mut plan = Vec::with_capacity(moves.len());
+  for (from, to) in moves {
+    let (source, destination) = (find(from)?, find(to)?);
+    let slots: Vec<usize> = (0..anchors.len())
+      .filter(|o| {
+        organisms.alive[*o] == 1
+          && organisms.stage[*o] == STAGE_PLANT
+          && source.contains(soil.cell_column(anchors[*o].x))
+      })
+      .collect();
+    plan.push((source, destination, slots));
+  }
+
+  let cell = soil.cell_size;
+  let mut moved = Vec::with_capacity(plan.len());
+  for (source, destination, slots) in plan {
+    for o in &slots {
+      let span = (source.width() as f32 * cell).max(f32::MIN_POSITIVE);
+      let relative = ((anchors[*o].x - source.x0 as f32 * cell) / span).clamp(0.0, 1.0);
+      let x0 = destination.x0 as f32 * cell;
+      // Half a cell short of the right edge, so a plant at the far end of a
+      // wider source column still lands inside the destination rather than in
+      // the gap past it.
+      let x = (x0 + relative * destination.width() as f32 * cell)
+        .min(destination.x1 as f32 * cell - cell * 0.5)
+        .max(x0);
+      anchors[*o] = Vec2::new(x, soil_surface(soil, x));
+    }
+    moved.push(slots);
+  }
+  Ok(moved)
+}
+
 /// Where founder `i` of `count` stands: the point `(i + 0.5) / count` of the
 /// way along the soil, measured across the columns in order.
 fn founder_x(soil: &SoilGrid, i: usize, count: usize) -> f32 {
@@ -683,6 +751,26 @@ mod tests {
     assert_eq!(spawn_founders(&mut sim, 99), 4);
     assert_eq!(sim.organism_count(), 4);
   }
+
+  /// A mode-2 world narrow enough that the `width / 40` gap is zero, so its
+  /// six columns tile the soil and six founders land one per column.
+  fn six_columns() -> Sim<CpuRuntime> {
+    let params = SimParams {
+      world_width: 3.0,
+      world_height: 2.0,
+      smoothing_radius: 0.5,
+      soil_cell_size: 0.1,
+      particles_per_cell: 1,
+      terrain_mode: 2,
+      max_organisms: 8,
+      max_limbs: 4,
+      max_particles_per_limb: 3,
+      life_interval: 100_000,
+      ..SimParams::default()
+    };
+    Sim::new(CpuRuntime::client(&CpuDevice), params, 42, None)
+  }
+
   /// The gaps between the capillary columns get no founders: every one stands
   /// on soil, and the columns share them out by width.
   #[test]
@@ -722,6 +810,71 @@ mod tests {
     assert!(
       per_column.iter().all(|n| (9..=11).contains(n)),
       "{per_column:?}"
+    );
+  }
+
+  #[test]
+  fn a_transplant_moves_exactly_the_organisms_of_one_column() {
+    let mut sim = six_columns();
+    assert_eq!(spawn_founders(&mut sim, 6), 6);
+    let columns = sim.soil().columns();
+    let before = sim.bodies().anchors.clone();
+    // One founder per column, in order, which is what makes the assertions
+    // below about *which* slots moved mean anything.
+    for (o, column) in columns.iter().enumerate() {
+      assert!(column.contains(sim.soil().cell_column(before[o].x)), "{o}");
+    }
+
+    let mut anchors = before.clone();
+    let moved = transplant_anchors(
+      sim.soil(),
+      &sim.population().organisms,
+      &mut anchors,
+      &[("sand", "clay"), ("clay", "sand")],
+    )
+    .unwrap();
+
+    // Exactly the one organism of each named column, and nobody else.
+    assert_eq!(moved, vec![vec![0usize], vec![2usize]]);
+    for o in 0..8usize {
+      if o == 0 || o == 2 {
+        continue;
+      }
+      assert_eq!(anchors[o], before[o], "slot {o} moved and should not have");
+    }
+
+    // Each lands at the same relative x in the other column, on its surface.
+    let sand = columns[0];
+    let clay = columns[2];
+    let cell = sim.soil().cell_size;
+    let relative =
+      |x: f32, c: crate::soil::ColumnExtent| (x - c.x0 as f32 * cell) / (c.width() as f32 * cell);
+    assert!((relative(anchors[0].x, clay) - relative(before[0].x, sand)).abs() < 1e-5);
+    assert!((relative(anchors[2].x, sand) - relative(before[2].x, clay)).abs() < 1e-5);
+    assert!(clay.contains(sim.soil().cell_column(anchors[0].x)));
+    assert!(sand.contains(sim.soil().cell_column(anchors[2].x)));
+    for o in [0usize, 2] {
+      assert_eq!(anchors[o].y, soil_surface(sim.soil(), anchors[o].x));
+    }
+  }
+
+  #[test]
+  fn a_transplant_of_an_unknown_column_is_an_error() {
+    let mut sim = six_columns();
+    spawn_founders(&mut sim, 6);
+    let mut anchors = sim.bodies().anchors.clone();
+    let err = transplant_anchors(
+      sim.soil(),
+      &sim.population().organisms,
+      &mut anchors,
+      &[("sand", "loam")],
+    )
+    .unwrap_err();
+    assert!(err.contains("loam"), "{err}");
+    assert_eq!(
+      anchors,
+      sim.bodies().anchors,
+      "a failed move touched nothing"
     );
   }
 

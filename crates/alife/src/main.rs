@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use alife_sim::runtime::{AnySim, RuntimeKind, WgpuOptions};
-use alife_sim::{SimParams, SimParamsCli, dump};
+use alife_sim::{SimParams, SimParamsCli, dump, popdump};
 use anyhow::{Context, Result};
 use clap::Parser;
 
@@ -48,6 +48,23 @@ struct Cli {
   /// Seed this many founder plants, evenly spaced along the soil surface
   #[arg(long, default_value_t = 0, value_name = "N")]
   founders: usize,
+
+  /// Write the population (genomes, lineage, energy, anchors) at the end of a
+  /// headless run
+  #[arg(long, value_name = "PATH")]
+  save_pop: Option<PathBuf>,
+
+  /// Start from a saved population instead of `--founders`; the bodies are
+  /// re-grown at their anchors and seeds in flight are dropped
+  #[arg(long, value_name = "PATH")]
+  load_pop: Option<PathBuf>,
+
+  /// Re-anchor every organism of one soil column in another, `<from>:<to>` by
+  /// column label; repeatable, and all the moves are applied at once, so
+  /// `--transplant sand:clay --transplant clay:sand` swaps the two. Needs
+  /// `--load-pop`.
+  #[arg(long, value_name = "FROM:TO")]
+  transplant: Vec<String>,
 
   /// Write the evolutionary metrics time series to a CSV file (headless only)
   #[arg(long, value_name = "PATH")]
@@ -148,11 +165,62 @@ fn main() -> Result<()> {
     Some(kind) => AnySim::new(kind, params, seed, initial, &wgpu_options)?,
     None => AnySim::new_auto(params, seed, initial, &wgpu_options)?,
   };
-  let founders = sim.spawn_founders(cli.founders);
-  if founders > 0 {
-    println!("Seeded {founders} founder plants");
+  match &cli.load_pop {
+    Some(path) => load_population(&mut sim, path, &cli.transplant)?,
+    None => {
+      if !cli.transplant.is_empty() {
+        anyhow::bail!("--transplant needs a population to move: pass --load-pop as well");
+      }
+      let founders = sim.spawn_founders(cli.founders);
+      if founders > 0 {
+        println!("Seeded {founders} founder plants");
+      }
+    }
   }
   run_headless(sim, &cli)
+}
+
+/// `--load-pop`, and `--transplant` on top of it.
+///
+/// The moves are applied to the snapshot's anchors before the bodies are
+/// grown, so a transplanted plant is laid out where it now stands rather than
+/// being grown once and torn up again.
+fn load_population(sim: &mut AnySim, path: &std::path::Path, moves: &[String]) -> Result<()> {
+  let mut snapshot = popdump::read(path).with_context(|| format!("loading {}", path.display()))?;
+  println!(
+    "Loaded a population of {} plants from {} (written after {} steps, seed {})",
+    snapshot.plants().len(),
+    path.display(),
+    snapshot.step_count,
+    snapshot.seed,
+  );
+
+  let parsed: Vec<(&str, &str)> = moves
+    .iter()
+    .map(|spec| {
+      spec
+        .split_once(':')
+        .ok_or_else(|| anyhow::anyhow!("--transplant wants <from>:<to>, got `{spec}`"))
+    })
+    .collect::<Result<_>>()?;
+  if !parsed.is_empty() {
+    let moved = alife_sim::bodies::transplant_anchors(
+      sim.soil(),
+      &snapshot.organisms,
+      &mut snapshot.anchors,
+      &parsed,
+    )
+    .map_err(|msg| anyhow::anyhow!(msg))?;
+    for ((from, to), slots) in parsed.iter().zip(&moved) {
+      println!("Transplanted {} organisms from {from} to {to}", slots.len());
+    }
+  }
+
+  let restored = sim
+    .load_population(&snapshot)
+    .context("installing the saved population")?;
+  println!("Re-grew {restored} plants");
+  Ok(())
 }
 
 fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
@@ -230,6 +298,17 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
       "Wrote dump: {} ({} particles)",
       path.display(),
       particles.len()
+    );
+  }
+
+  if let Some(path) = &cli.save_pop {
+    sim
+      .save_population(path)
+      .with_context(|| format!("writing {}", path.display()))?;
+    println!(
+      "Wrote population: {} ({} organism slots taken)",
+      path.display(),
+      sim.organism_count()
     );
   }
 
