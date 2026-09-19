@@ -1,0 +1,21 @@
+[package]
+name = "spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cubecl = { version = "=0.11.0-pre.3", features = ["wgpu", "cuda", "cpu"] }
+cubecl-cpu = "=0.11.0-pre.3"
+cubecl-cuda = "=0.11.0-pre.3"
+cubecl-runtime = "=0.11.0-pre.3"
+cubecl-wgpu = "=0.11.0-pre.3"
+# Must match the wgpu that cubecl-wgpu links against, or the `wgpu::Device` we
+# hand to `init_device` is a different type from the one CubeCL expects.
+wgpu = "30"
+pollster = "0.4"
+rand = "0.9"
+
+# Not used at runtime; it is here only to prove that an egui-wgpu that shares
+# cubecl-wgpu's `wgpu` resolves. See README, answer 1.
+egui-wgpu = "0.36"
