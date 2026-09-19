@@ -32,6 +32,8 @@ pub const NOT_IN_GRID: u32 = 0xFFFF_FFFF;
 #[derive(Debug, Clone)]
 pub struct GridDevice {
   pub cell_counts: Handle,
+  /// Per-block totals for the prefix scan; `SCAN_THREADS` entries.
+  pub partials: Handle,
   pub cell_start: Handle,
   pub cell_cursor: Handle,
   pub particle_cell: Handle,
@@ -44,6 +46,7 @@ impl GridDevice {
     let particles = cfg.num_particles as usize * size_of::<u32>();
     Self {
       cell_counts: client.empty(cells),
+      partials: client.empty(SCAN_THREADS as usize * size_of::<u32>()),
       cell_start: client.empty(cells),
       cell_cursor: client.empty(cells),
       particle_cell: client.empty(particles),
@@ -89,51 +92,77 @@ pub fn count_cells(
   cell_counts[cid as usize].fetch_add(1u32);
 }
 
-/// Exclusive prefix sum over the cell histogram, in one cube.
+/// Exclusive prefix sum over the cell histogram, in three launches.
 ///
 /// Each of the `SCAN_THREADS` units owns a contiguous block of cells: it sums
-/// its block, one unit scans the per-block totals in shared memory, then every
-/// unit walks its block again writing the running offsets. Two barriers, one
-/// launch, no runtime-sized allocation.
+/// its block, one unit scans the per-block totals, then every unit walks its
+/// block again writing the running offsets. Three launches rather than one
+/// kernel with two `sync_cube()` barriers, because a cube-wide barrier costs
+/// the CPU runtime ~140 ms per barrier at this cube size — it turned a 25 us
+/// scan into 280 ms. Nothing here uses shared memory or a barrier, so this is
+/// also the portable shape.
+///
+/// `cell_cursor` starts as a copy of `cell_start`; `scatter_ids` consumes it.
 #[cube(launch)]
 #[allow(clippy::needless_range_loop)]
-pub fn scan_cell_starts(
-  cell_counts: &[u32],
-  cell_start: &mut [u32],
-  cell_cursor: &mut [u32],
-  #[comptime] cfg: Cfg,
-) {
-  let mut partials = Shared::<[u32]>::new_slice(SCAN_THREADS as usize);
-
+pub fn scan_block_sums(cell_counts: &[u32], partials: &mut [u32], #[comptime] cfg: Cfg) {
+  let t = ABSOLUTE_POS;
+  if t >= comptime!(SCAN_THREADS as usize) {
+    terminate!();
+  }
   let block = comptime!(cfg.num_cells.div_ceil(SCAN_THREADS) as usize);
   let cells = comptime!(cfg.num_cells as usize);
-  let t = UNIT_POS as usize;
   let begin = t * block;
-  let mut end = begin + block;
-  if end > cells {
-    end = cells;
-  }
-
   let mut sum = 0u32;
   if begin < cells {
+    let mut end = begin + block;
+    if end > cells {
+      end = cells;
+    }
     for c in begin..end {
       sum += cell_counts[c];
     }
   }
   partials[t] = sum;
-  sync_cube();
+}
 
-  if t == 0 {
-    let mut running = 0u32;
-    for k in 0..comptime!(SCAN_THREADS as usize) {
-      let v = partials[k];
-      partials[k] = running;
-      running += v;
-    }
+/// Exclusive scan of the per-block totals, on one unit. `SCAN_THREADS` serial
+/// adds, which is the price of not needing a barrier.
+#[cube(launch)]
+#[allow(clippy::needless_range_loop)]
+pub fn scan_partials(partials: &mut [u32]) {
+  if ABSOLUTE_POS != 0 {
+    terminate!();
   }
-  sync_cube();
+  let mut running = 0u32;
+  for k in 0..comptime!(SCAN_THREADS as usize) {
+    let value = partials[k];
+    partials[k] = running;
+    running += value;
+  }
+}
 
+#[cube(launch)]
+#[allow(clippy::needless_range_loop)]
+pub fn scan_write_starts(
+  cell_counts: &[u32],
+  partials: &[u32],
+  cell_start: &mut [u32],
+  cell_cursor: &mut [u32],
+  #[comptime] cfg: Cfg,
+) {
+  let t = ABSOLUTE_POS;
+  if t >= comptime!(SCAN_THREADS as usize) {
+    terminate!();
+  }
+  let block = comptime!(cfg.num_cells.div_ceil(SCAN_THREADS) as usize);
+  let cells = comptime!(cfg.num_cells as usize);
+  let begin = t * block;
   if begin < cells {
+    let mut end = begin + block;
+    if end > cells {
+      end = cells;
+    }
     let mut running = partials[t];
     for c in begin..end {
       cell_start[c] = running;
@@ -237,11 +266,27 @@ pub fn build<R: Runtime>(
   });
 
   timed("scan_cell_starts", &mut || {
-    scan_cell_starts::launch::<R>(
+    let threads = SCAN_THREADS as usize;
+    scan_block_sums::launch::<R>(
+      client,
+      cube_count(threads),
+      CubeDim::new_1d(super::CUBE_DIM),
+      whole(&grid.cell_counts, cells),
+      whole(&grid.partials, threads),
+      cfg,
+    );
+    scan_partials::launch::<R>(
       client,
       CubeCount::Static(1, 1, 1),
-      CubeDim::new_1d(SCAN_THREADS),
+      CubeDim::new_1d(1),
+      whole(&grid.partials, threads),
+    );
+    scan_write_starts::launch::<R>(
+      client,
+      cube_count(threads),
+      CubeDim::new_1d(super::CUBE_DIM),
       whole(&grid.cell_counts, cells),
+      whole(&grid.partials, threads),
       whole(&grid.cell_start, cells),
       whole(&grid.cell_cursor, cells),
       cfg,
