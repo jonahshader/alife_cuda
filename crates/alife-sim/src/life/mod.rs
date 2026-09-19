@@ -266,8 +266,15 @@ impl<R: Runtime> Sim<R> {
     for o in &decisions.dying {
       death_ids.extend(self.bodies.organism_particles(*o));
     }
+    // Counted by what shed particles: a marked descendant that had not
+    // grown yet is not a break, it just may not grow this tick.
+    let mut shed = 0u64;
     for (o, limb) in &decisions.breaking {
-      death_ids.extend(self.bodies.limb_particles_of(*o, *limb));
+      let ids = self.bodies.limb_particles_of(*o, *limb);
+      if !ids.is_empty() {
+        shed += 1;
+      }
+      death_ids.extend(ids);
     }
     if !death_ids.is_empty() {
       let where_they_stood = launch_free(&self.client, &self.sph, &death_ids);
@@ -289,7 +296,7 @@ impl<R: Runtime> Sim<R> {
     for (o, limb) in &decisions.breaking {
       self.bodies.release_limb(*o, *limb);
     }
-    self.record_breaks(decisions.breaking.len() as u64);
+    self.record_breaks(shed);
 
     // --- Seeds that ran out of time, and the particles of seeds that
     // germinated: both just go back, neither is a death ---
@@ -674,11 +681,12 @@ fn broken_limbs(
     }
   }
 
-  // A descendant that had not grown yet has nothing to shed, and counting it
-  // as a break would only inflate the metric.
-  (0..max_limbs)
-    .filter(|limb| broken[*limb] && grown(*limb) > 0.0)
-    .collect()
+  // Every marked limb, grown or not. A descendant that has not grown yet
+  // has nothing to shed and is not counted as a break (`apply` counts what
+  // actually shed particles), but it still has to be in this list: its
+  // parent is about to lose its particles, and if it were allocated growth
+  // this tick it would end up with a length over an empty map.
+  (0..max_limbs).filter(|limb| broken[*limb]).collect()
 }
 
 /// The limb that is its own parent. Mutation never removes or retypes the
@@ -838,7 +846,8 @@ mod tests {
 
   /// The threshold scales with the limb's *live* thickness, so a young limb
   /// snaps at a bend a grown one shrugs off — and a descendant that has not
-  /// grown yet has nothing to shed.
+  /// grown yet comes away with its parent, so that it is not grown this tick
+  /// over a parent that is about to lose its particles.
   #[test]
   fn a_half_thick_limb_breaks_at_half_the_angle() {
     let mut params = params();
@@ -854,8 +863,8 @@ mod tests {
     packed[pack::LIFE_FIXED + 1] = 0.51;
     assert_eq!(
       broken_limbs(&pop, &bodies, &params, 0, &packed),
-      vec![1],
-      "the ungrown leaf was counted as a break"
+      vec![1, 2],
+      "the ungrown leaf did not come away with its stem"
     );
   }
 
