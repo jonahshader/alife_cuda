@@ -177,6 +177,14 @@ sim_params! {
         "Gaussian sigma in radians applied to a newborn's limb grow angles";
     structural_rate: f32 = 0.1, "organism.structural_rate", "structural-rate",
         "Probability that a birth also makes one structural edit";
+    limb_segment_length: f32 = 0.15, "organism.limb_segment_length", "limb-segment-length",
+        "Rest length between consecutive body particles (at most one grid cell)";
+    constraint_iterations: i32 = 4, "organism.constraint_iterations", "constraint-iterations",
+        "Gauss-Seidel sweeps the body constraint pass runs per step";
+    joint_stiffness: f32 = 0.5, "organism.joint_stiffness", "joint-stiffness",
+        "Stiffness of a limb's base-joint angle constraint, in [0, 1]";
+    bend_stiffness: f32 = 0.3, "organism.bend_stiffness", "bend-stiffness",
+        "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
 }
 
 impl SimParams {
@@ -299,10 +307,31 @@ impl SimParams {
         ));
       }
     }
-    if !(0.0..=1.0).contains(&self.structural_rate) {
+    for (name, value) in [
+      ("structural-rate", self.structural_rate),
+      ("joint-stiffness", self.joint_stiffness),
+      ("bend-stiffness", self.bend_stiffness),
+    ] {
+      if !(0.0..=1.0).contains(&value) {
+        return Err(format!("--{name} must be in [0, 1], got {value}"));
+      }
+    }
+    if self.constraint_iterations < 0 {
       return Err(format!(
-        "--structural-rate must be a probability in [0, 1], got {}",
-        self.structural_rate
+        "--constraint-iterations must be >= 0, got {}",
+        self.constraint_iterations
+      ));
+    }
+    // A rest length longer than a grid cell would let water pass between two
+    // body particles, which is the whole reason bodies are points
+    // (`docs/organism.md`, *Body*). The cell size is what the grid build
+    // derives; recomputed here rather than taking a `WorldGeometry`, because
+    // this runs before one is built.
+    let cell_size = self.world_width / (self.world_width / self.smoothing_radius).floor().max(1.0);
+    if self.limb_segment_length <= 0.0 || self.limb_segment_length > cell_size {
+      return Err(format!(
+        "--limb-segment-length must be in (0, {cell_size}], the grid cell size, got {}",
+        self.limb_segment_length
       ));
     }
     Ok(())

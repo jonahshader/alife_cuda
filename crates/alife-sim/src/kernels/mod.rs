@@ -12,6 +12,7 @@
 use cubecl::prelude::*;
 
 pub mod accel;
+pub mod constraints;
 pub mod density;
 pub mod evap;
 pub mod grid;
@@ -81,6 +82,10 @@ kernel_params! {
     "" P_BOUNDS_Y = |_p, g| g.bounds.y;
     "" P_CELL_SIZE = |_p, g| g.cell_size;
     "" P_SOIL_SIZE = |_p, g| g.soil_cell_size;
+    "" P_LIMB_SEGMENT_LENGTH = |p, _g| p.limb_segment_length;
+    "" P_JOINT_STIFFNESS = |p, _g| p.joint_stiffness;
+    "" P_BEND_STIFFNESS = |p, _g| p.bend_stiffness;
+    "" P_CONSTRAINT_ITERS = |p, _g| p.constraint_iterations as f32;
 }
 
 /// The particle SoA as kernel arguments. Field order matches `SphHost`.

@@ -13,6 +13,8 @@ use glam::Vec2;
 use super::grid::{GridDevice, GridRef};
 use super::{Cfg, PARAM_COUNT, pack_params};
 use crate::SimParams;
+use crate::bodies::{BodyCfg, BodyState};
+use crate::genome::Population;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{threefry4x32_20_ref, u01_ref};
 use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
@@ -130,6 +132,113 @@ impl Harness {
 
   pub fn param_count(&self) -> usize {
     PARAM_COUNT
+  }
+}
+
+/// One organism in a small world, for the constraint and geometry passes.
+///
+/// The body is [`crate::genome::Genome::seed_plant`] — root, stem, leaf — laid
+/// into body slots by hand and then knocked out of shape, so a projection has
+/// something to do. Laying it out properly is `bodies::spawn`'s job; this
+/// fixture deliberately does not use it, so a broken spawn cannot make a
+/// constraint test pass.
+pub struct OrganismHarness {
+  pub client: ComputeClient<CpuRuntime>,
+  pub params: SimParams,
+  pub geom: WorldGeometry,
+  pub cfg: Cfg,
+  pub body_cfg: BodyCfg,
+  pub particles: SphHost,
+  pub sph: SphDevice,
+  pub pop: Population,
+  pub bodies: BodyState,
+  pub params_buf: Handle,
+}
+
+impl Default for OrganismHarness {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
+impl OrganismHarness {
+  pub fn new() -> Self {
+    let params = SimParams {
+      world_width: 4.0,
+      world_height: 3.0,
+      smoothing_radius: 0.5,
+      soil_cell_size: 0.25,
+      particles_per_cell: 1,
+      terrain_mode: 1,
+      max_organisms: 2,
+      max_limbs: 4,
+      max_particles_per_limb: 3,
+      limb_segment_length: 0.15,
+      ..SimParams::default()
+    };
+    let geom = WorldGeometry::from_params(&params);
+    let cfg = geom.cfg();
+    let client = CpuRuntime::client(&CpuDevice);
+
+    let shape = crate::genome::BrainShape::from_params(&params);
+    let mut pop = Population::new(&client, &params, shape);
+    let genome = crate::genome::Genome::seed_plant(&shape, pop.max_limbs, 0, 5);
+    pop.write_genome(0, &genome);
+    pop.organisms.alive[0] = 1;
+    pop.upload(&client);
+
+    let mut particles = fixture_particles(&geom);
+    let mut bodies = BodyState::new(&client, &params, &geom);
+    let body_cfg = bodies.cfg;
+
+    // Organism 0 takes the first body slots, limb by limb, and each particle
+    // starts somewhere plausible but wrong.
+    let mut next = geom.fluid_particles as u32;
+    let anchor = Vec2::new(1.0, 1.0);
+    bodies.anchors[0] = anchor;
+    for limb in 0..pop.max_limbs {
+      let record = pop.limb_index(0, limb);
+      if !pop.limbs.part_type[record].is_present() {
+        continue;
+      }
+      let count = (pop.limbs.length[record] as usize).min(body_cfg.max_particles_per_limb as usize);
+      for i in 0..count {
+        let id = next as usize;
+        next += 1;
+        bodies.limb_particles[body_cfg.limb_slice(0, limb).start + i] = id as u32;
+        let offset = Vec2::new(0.02 * (limb + i) as f32, 0.05 * (1 + limb + i) as f32);
+        particles.pos[id] = anchor + offset;
+        particles.ppos[id] = anchor + offset;
+        particles.vel[id] = Vec2::new(0.1, -0.2);
+        particles.mass[id] = 1.0;
+        particles.state[id] = ParticleKind::Body;
+        particles.organism[id] = 0;
+        particles.limb[id] = limb as u8;
+        particles.index_in_limb[id] = i as u8;
+        particles.part_type[id] = pop.limbs.part_type[record];
+      }
+    }
+    bodies.upload(&client);
+
+    let sph = SphDevice::upload(&client, &particles);
+    let params_buf = client.create_from_slice(bytemuck::cast_slice(&pack_params(&params, &geom)));
+
+    Self {
+      client,
+      params,
+      geom,
+      cfg,
+      body_cfg,
+      particles,
+      sph,
+      pop,
+      bodies,
+      params_buf,
+    }
+  }
+
+  pub fn read_particles(&self) -> SphHost {
+    self.sph.download(&self.client)
   }
 }
 

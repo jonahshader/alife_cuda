@@ -5,6 +5,7 @@
 //! soil-coupled path) and `src/systems/soil.cu`, which stay as the reference
 //! until this port reaches parity.
 
+pub mod bodies;
 pub mod dump;
 pub mod genome;
 pub mod kernels;
