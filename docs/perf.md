@@ -542,3 +542,44 @@ A saved population is `max_organisms x param_count` fp32 and nothing else of
 consequence: **78 MB** at these settings, written in well under a second.
 
 What the runs found is in `REVIEW.md`.
+
+### The same run once upkeep was charged by volume (2026-09-19, commit after 4aa073a)
+
+```
+./target/release/alife --headless --runtime cuda --seed 42 \
+  --founders 64 --iterations 3000 --metrics m.csv
+```
+
+Against the same command on the previous binary (`267ba75`), same box, same
+seed:
+
+| | 267ba75 | volume upkeep |
+|---|---:|---:|
+| alive (slots held, seeds included) | 74 | **256** |
+| plants with an anchor | 51 | 154 |
+| births / deaths | 49 / 62 | 165 / 75 |
+| lineages / generation max | 19 / 2 | 21 / 4 |
+| `root_frac` / height (m) | 0.733 / 0.133 | 0.550 / 0.218 |
+| mean energy | 0.90 | 5.25 |
+| per step (no `--metrics`, warm) | 1.426–1.432 ms | **1.481–1.484 ms** |
+
+The defaults were chosen to leave a *fully grown* founder's upkeep where it
+was (0.0174 a step against 0.018; `organism.md`, decisions), and they do —
+what changed the run is everything that is **not** fully grown. A limb's
+volume goes as `grown²`, so a seedling's first root segment costs 0.0012 a
+step where one particle cost 0.003, and the offspring that used to starve
+before reaching a leaf now reach one: taller bodies (0.218 m against 0.133),
+less root by fraction, three times the births, and every one of the 256
+organism slots taken by step 3000 instead of ~5000. That ceiling is
+`max_organisms`, not the energy balance (`organism.md`, decisions), and the
+`TODO.md` item about a seedling's surplus is the thing this moves, not
+closes.
+
+Three times the population costs **4% of the step** — the per-particle
+kernels run over more claimed body slots, while the per-organism passes are
+a single cube either way. (Take a first run after a build for what it is:
+the same command measured 1.67 ms on a cold card and 1.43 ms warm.)
+
+`--founders 0` is byte-identical to `267ba75`: 300 CUDA steps, whole dumps
+compared with `cmp`, and 0.611 ms a step against 0.613. Two same-seed runs
+of the new binary are byte-identical to each other.

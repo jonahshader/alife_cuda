@@ -10,17 +10,19 @@ the spec, don't re-derive it.
 
 Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
 
-- **A seedling cannot afford to grow, so the population drifts to
-  root-only bodies.** The first thing the continuous growth chunk measured
-  (`organism.md`, decisions): growth is funded by `energy − seed_cost`, a
-  seedling germinates on `seed_energy` 0.5 against a `seed_cost` of 1.0,
-  and one root particle earns about what it costs, so it never gets a
-  surplus and never reaches the leaf that would pay for it. It is the same
-  energy-balance question as the `--column-top` band below and wants
-  answering with it: what a root earns, what a seed germinates with, or
-  whether the growth reserve is `seed_cost` at all. Changing the growth
-  constants does not touch it — the conversion rate, then
-  `--length-per-energy` 2 through 16, was the same run.
+- **A seedling's surplus is whatever is left over `seed_cost`, and nothing
+  sets it deliberately.** Growth is funded by `energy − seed_cost`, and a
+  seedling germinates on `seed_energy` 0.5 against a `seed_cost` of 1.0 —
+  below the floor, living on what its first root segment drinks. Charging
+  upkeep by volume made that segment cost 0.0012 a step instead of 0.003
+  and was enough to get offspring to a leaf (`perf.md`: height 0.13 m →
+  0.22 m, every organism slot full by step 3000), so the drift to root-only
+  bodies is gone — but by accident of a constant chosen for a grown
+  founder, not by design, and the population now hits `max_organisms`
+  rather than any ecological ceiling. It is the same energy-balance
+  question as the `--column-top` band below and wants answering with it:
+  what a root earns, what a seed germinates with, or whether the growth
+  reserve is `seed_cost` at all.
 - **Growth 3 — breaking.** Joint angular error over the interval in the
   packed life buffer; a limb past its thickness-scaled threshold sheds
   itself and its descendants as organic matter and regrows from zero.
