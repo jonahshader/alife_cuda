@@ -622,3 +622,61 @@ slightly less root.
 `--founders 0` is byte-identical to `456062a`: 300 CUDA steps, whole dumps
 compared with `cmp`, and 0.612 ms a step against 0.612. Two same-seed
 `--founders 64` runs of the new binary are byte-identical to each other.
+
+### The same run with the brain's heads wired (2026-09-19, Growth 4)
+
+```
+./target/release/alife --headless --runtime cuda --seed 42 \
+  --founders 64 --iterations 3000 --metrics m.csv
+```
+
+Against the same command on `393aa96`, same box, same seed:
+
+| | 393aa96 | growth logit + joint nudge |
+|---|---:|---:|
+| alive (slots held, seeds included) | 256 | 256 |
+| plants with an anchor | 153 | 140 |
+| births / deaths | 141 / 52 | 136 / 60 |
+| limbs broken | 109 | **238** |
+| lineages / species / generation max | 21 / 5 / 4 | 18 / 4 / 5 |
+| `root_frac` / height (m) | 0.6301 / 0.1744 | 0.6006 / 0.1453 |
+| mean energy | 1.998 | 1.522 |
+| per step (no `--metrics`, warm) | 1.471 ms | 1.447–1.455 ms |
+
+**The cost is again nothing measurable, and the behaviour moved.** The
+constraint pass gained one `tanh` and one load per limb per sweep and
+*dropped* to 0.144 ms from 0.156, because it runs over 13 fewer plants; the
+brain's heads launch is 0.0125 ms against a `d_token x n_types` head's
+0.0126, and the row it reads is 18,659 parameters instead of 18,890. The
+packed readback is the one thing that genuinely grew — `6 + 2 x max_limbs`
+floats per organism instead of `6 + max_limbs`, 38 KB against 22 KB — and it
+is one `read` every tenth step, inside the same 0.066 ms/step the life tick
+costs.
+
+**Twice the limbs break.** A base joint is now held at `grow_angle +
+0.3 x tanh(a)` with `a` the brain's actuator output, and an untrained brain
+moves `a` every step, so every joint chases a target that wanders inside a
+0.6 rad band. The joint never *rests* at its target, the bend maximum the
+life tick reads is correspondingly larger, and what gives way is young
+growth, which bears only `sqrt(progress)` of `break_angle`: 238 limbs shed
+against 109, and with them 13 fewer standing plants, a quarter off the mean
+energy and 3 cm off the mean height. This is the mechanism working rather
+than a regression — a brain that learns to hold `a` still keeps its limbs,
+which is exactly the selection pressure the actuator is supposed to put on
+one — but it is the number to watch if `--actuator-gain` is ever tuned. The
+same command at three gains, one seed each, so read the spread rather than
+the ordering:
+
+| `--actuator-gain` | 0 (logit only) | 0.1 | 0.3 (default) |
+|---|---:|---:|---:|
+| limbs broken | 125 | 167 | 238 |
+| plants with an anchor | 148 | 150 | 140 |
+| height (m) / mean energy | 0.192 / 2.26 | 0.216 / 3.06 | 0.145 / 1.52 |
+
+At gain 0 the growth logit is the only head read, and it alone moves
+breaking barely at all (125 against `393aa96`'s 109) — the joint nudge is
+what does it.
+
+`--founders 0` is byte-identical to `393aa96`: 300 CUDA steps, whole dumps
+compared with `cmp`, and 0.616 ms a step against 0.619. Two same-seed
+`--founders 64` runs of the new binary are byte-identical to each other.
