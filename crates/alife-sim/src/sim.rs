@@ -43,8 +43,21 @@ pub struct Sim<R: Runtime> {
   rng_counter: RngCounter,
   step_count: u32,
   seed: u64,
+  counters: Counters,
   timings: KernelTimings,
   timing: TimingChoice,
+}
+
+/// Life-cycle events since this `Sim` was created, for the metrics time
+/// series. Cumulative: nothing ever resets them, so a sample's delta against
+/// the previous one is the rate over that interval.
+///
+/// Seeded founders are not births — they are the run's initial condition, not
+/// something the life cycle produced.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Counters {
+  pub births: u64,
+  pub deaths: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,6 +144,7 @@ impl<R: Runtime> Sim<R> {
       rng_counter: RngCounter::after_steps(step_count),
       step_count,
       seed,
+      counters: Counters::default(),
       timings: KernelTimings::default(),
       timing: TimingChoice::Off,
     }
@@ -209,6 +223,23 @@ impl<R: Runtime> Sim<R> {
   /// births are host-side; the life-cycle chunk takes that over.
   pub fn organism_count(&self) -> usize {
     self.pop.organisms.alive.iter().filter(|a| **a == 1).count()
+  }
+
+  /// Cumulative births and deaths, which the metrics sampler records.
+  pub fn counters(&self) -> Counters {
+    self.counters
+  }
+
+  /// Count `n` births. The hook the life-cycle chunk calls once it owns
+  /// reproduction; nothing calls it yet, so the counter is 0 for a whole run
+  /// today.
+  pub fn record_births(&mut self, n: u64) {
+    self.counters.births += n;
+  }
+
+  /// Count `n` deaths; the other half of [`Self::record_births`].
+  pub fn record_deaths(&mut self, n: u64) {
+    self.counters.deaths += n;
   }
 
   /// Everything a body spawn touches, borrowed at once — `bodies::spawn` and

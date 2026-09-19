@@ -130,6 +130,12 @@ define_soa! {
         /// Root ancestor's slot: the lineage this organism belongs to.
         lineage_id: u32,
         energy: f32,
+        /// Hops from the founder of this lineage: phylogenetic depth. A
+        /// founder is 0 and a child is its parent's plus one, which the
+        /// life-cycle chunk sets when it fills in the rest of a newborn's
+        /// lineage fields. Mutation never touches it — it is not genome, it
+        /// is where in the lineage this organism sits.
+        generation: u32,
     }
 }
 
@@ -388,6 +394,7 @@ mod tests {
     assert_eq!(pop.latents.len(), 4 * shape.latent_state_len());
     assert!(pop.organisms.alive.iter().all(|a| *a == 0));
     assert!(pop.organisms.parent_id.iter().all(|p| *p == NO_PARENT));
+    assert!(pop.organisms.generation.iter().all(|g| *g == 0));
     assert!(pop.limbs.part_type.iter().all(|t| !t.is_present()));
   }
 
@@ -414,6 +421,7 @@ mod tests {
       pop.organisms.birth_step[i] = 100 + i as u32;
       pop.organisms.lineage_id[i] = 7;
       pop.organisms.energy[i] = i as f32 * -3.5;
+      pop.organisms.generation[i] = 3 * i as u32;
     }
     for (i, v) in pop.brain.iter_mut().enumerate() {
       *v = i as f32 * 1e-3;

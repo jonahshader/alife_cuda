@@ -17,6 +17,7 @@ use glam::Vec2;
 
 use crate::SimParams;
 use crate::define_soa;
+use crate::genome::population::NO_PARENT;
 use crate::genome::slots::{SlotScan, claim_free_slots, read_free_slots};
 use crate::genome::{Genome, Population};
 use crate::kernels::spawn::Placement;
@@ -372,6 +373,19 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
     let genome = Genome::seed_plant(&shape, max_limbs, slot as u32, seed);
     spawn(sim, slot, &genome, anchor);
   }
+
+  // A founder is the root ancestor of its own lineage and generation 0, which
+  // is what the evolutionary metrics count from. Offspring lineage fields are
+  // the life-cycle chunk's, which is why `spawn` does not set any of this.
+  let step = sim.step_count();
+  let access = sim.body_access();
+  for slot in 0..count {
+    access.pop.organisms.lineage_id[slot] = slot as u32;
+    access.pop.organisms.parent_id[slot] = NO_PARENT;
+    access.pop.organisms.birth_step[slot] = step;
+    access.pop.organisms.generation[slot] = 0;
+  }
+  access.pop.upload(access.client);
   count
 }
 
