@@ -397,6 +397,26 @@ pub fn project_constraints(
         }
       }
     }
+
+    // (e) the world. x wraps as it does everywhere; y clamps rather than
+    // reflecting, because a bounce would fight the constraint that pushed
+    // the particle out. Inside the sweep, not after it, so the next sweep's
+    // distance constraints see the clamped position and can bend the limb
+    // along the floor or ceiling instead of compressing it against one.
+    for l in 0..ml {
+      for i in 0..mp {
+        let id = particle_at(map, pbase, l, i, cfg);
+        if id != NO_PARTICLE {
+          let id = id as usize;
+          ppos[2 * id] = wrap_x(ppos[2 * id], bounds_x);
+          if ppos[2 * id + 1] < 0.0f32 {
+            ppos[2 * id + 1] = 0.0f32;
+          } else if ppos[2 * id + 1] > bounds_y {
+            ppos[2 * id + 1] = bounds_y;
+          }
+        }
+      }
+    }
   }
 
   // Velocity from the projection, and the prediction the neighbour kernels
@@ -408,18 +428,10 @@ pub fn project_constraints(
     for i in 0..mp {
       let id = particle_at(map, pbase, l, i, cfg) as usize;
       if id != NO_PARTICLE as usize {
-        // The projection can push a particle out of the world. x wraps as it
-        // does everywhere; y clamps rather than reflecting, because a bounce
-        // here would fight the constraint that pushed it out.
-        let mut px = wrap_x(ppos[2 * id], bounds_x);
+        // Already inside the world: the last sweep's bounds constraint put it
+        // there.
+        let mut px = ppos[2 * id];
         let mut py = ppos[2 * id + 1];
-        if py < 0.0f32 {
-          py = 0.0f32;
-        } else if py > bounds_y {
-          py = bounds_y;
-        }
-        ppos[2 * id] = px;
-        ppos[2 * id + 1] = py;
 
         let vx = vel[2 * id] + wrap_delta(px - ppos_prev[2 * id], bounds_x) / dt;
         let vy = vel[2 * id + 1] + (py - ppos_prev[2 * id + 1]) / dt;
@@ -523,26 +535,8 @@ pub fn project_constraints_ref(
       .map(|id| id.map(|id| particles.ppos[id]))
       .collect();
 
-    let axis = |particles: &SphHost, l: usize| -> Vec2 {
-      let n = len(l);
-      if n >= 2 {
-        match (at(l, n - 2), at(l, n - 1)) {
-          (Some(a), Some(b)) => seg_dir_ref(particles, a, b, bounds.x),
-          _ => Vec2::ZERO,
-        }
-      } else if n == 1 {
-        match (base_particle(l), at(l, 0)) {
-          (Some(a), Some(b)) => seg_dir_ref(particles, a, b, bounds.x),
-          (None, _) => {
-            let g = grow_angle(l);
-            Vec2::new(g.cos(), g.sin())
-          }
-          _ => Vec2::ZERO,
-        }
-      } else {
-        Vec2::ZERO
-      }
-    };
+    let axis =
+      |particles: &SphHost, l: usize| limb_axis_ref(&particles.ppos, pop, bodies, o, l, bounds.x);
 
     for _ in 0..params.constraint_iterations.max(0) {
       if let Some(root) = at(0, 0) {
@@ -615,15 +609,19 @@ pub fn project_constraints_ref(
           }
         }
       }
+
+      for id in ids.iter().flatten() {
+        let mut p = particles.ppos[*id];
+        p.x = wrap_x_ref(p.x, bounds.x);
+        p.y = p.y.clamp(0.0, bounds.y);
+        particles.ppos[*id] = p;
+      }
     }
 
     for (k, id) in ids.iter().enumerate() {
       let Some(id) = *id else { continue };
       let old = prev[k].expect("a particle that is there has a previous position");
-      let mut p = particles.ppos[id];
-      p.x = wrap_x_ref(p.x, bounds.x);
-      p.y = p.y.clamp(0.0, bounds.y);
-      particles.ppos[id] = p;
+      let p = particles.ppos[id];
 
       let mut v = particles.vel[id];
       v.x += wrap_delta_ref(p.x - old.x, bounds.x) / params.dt;
@@ -639,6 +637,68 @@ pub fn project_constraints_ref(
       }
       particles.pos[id] = pred;
     }
+  }
+}
+
+/// Host twin of [`limb_axis`]: the direction a child limb's base joint is
+/// measured against. Shared with `bodies::grow_limb`, which lays a new limb
+/// out along it.
+pub fn limb_axis_ref(
+  ppos: &[Vec2],
+  pop: &Population,
+  bodies: &BodyState,
+  organism: usize,
+  limb: usize,
+  bounds_x: f32,
+) -> Vec2 {
+  let cfg = bodies.cfg;
+  let mp = cfg.max_particles_per_limb as usize;
+  let record = organism * cfg.max_limbs as usize + limb;
+  if !pop.limbs.part_type[record].is_present() {
+    return Vec2::ZERO;
+  }
+  let n = (pop.limbs.length[record] as usize).min(mp);
+  let at = |l: usize, i: usize| {
+    let id = bodies.particle(organism, l, i);
+    (id != NO_PARTICLE).then_some(id as usize)
+  };
+  let dir = |a: usize, b: usize| {
+    let d = Vec2::new(
+      wrap_delta_ref(ppos[b].x - ppos[a].x, bounds_x),
+      ppos[b].y - ppos[a].y,
+    );
+    if d.length() > 1e-6 {
+      d / d.length()
+    } else {
+      Vec2::ZERO
+    }
+  };
+
+  if n >= 2 {
+    return match (at(limb, n - 2), at(limb, n - 1)) {
+      (Some(a), Some(b)) => dir(a, b),
+      _ => Vec2::ZERO,
+    };
+  }
+  if n == 0 {
+    return Vec2::ZERO;
+  }
+
+  // One particle: the limb's own base segment says which way it points, and
+  // for the root — which has none — its grow angle in the world frame does.
+  let parent = pop.limbs.parent[record] as usize;
+  if parent == limb {
+    let g = pop.limbs.grow_angle[record];
+    return Vec2::new(g.cos(), g.sin());
+  }
+  let precord = organism * cfg.max_limbs as usize + parent;
+  let pn = (pop.limbs.length[precord] as usize).min(mp);
+  if !pop.limbs.part_type[precord].is_present() || pn == 0 {
+    return Vec2::ZERO;
+  }
+  match (at(parent, pn - 1), at(limb, 0)) {
+    (Some(a), Some(b)) => dir(a, b),
+    _ => Vec2::ZERO,
   }
 }
 

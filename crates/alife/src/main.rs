@@ -45,6 +45,10 @@ struct Cli {
   #[arg(long, value_name = "PATH")]
   load: Option<PathBuf>,
 
+  /// Seed this many founder plants, evenly spaced along the soil surface
+  #[arg(long, default_value_t = 0, value_name = "N")]
+  founders: usize,
+
   /// Compute backend (default: cuda if available, else wgpu, else cpu)
   #[arg(long, value_enum)]
   runtime: Option<RuntimeKind>,
@@ -127,15 +131,19 @@ fn main() -> Result<()> {
   if !cli.headless {
     // The GUI builds its own sim on the device the window gives it, so
     // nothing here starts a backend it would then throw away.
-    return gui::run(params, initial, cli.runtime);
+    return gui::run(params, initial, cli.runtime, cli.founders);
   }
 
   // Auto-selection builds the sim on the first backend that starts, rather
   // than probing for one and then starting it a second time.
-  let sim = match cli.runtime {
+  let mut sim = match cli.runtime {
     Some(kind) => AnySim::new(kind, params, seed, initial, &wgpu_options)?,
     None => AnySim::new_auto(params, seed, initial, &wgpu_options)?,
   };
+  let founders = sim.spawn_founders(cli.founders);
+  if founders > 0 {
+    println!("Seeded {founders} founder plants");
+  }
   run_headless(sim, &cli)
 }
 

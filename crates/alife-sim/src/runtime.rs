@@ -145,6 +145,15 @@ impl AnySim {
     dispatch!(self, sim => sim.step())
   }
 
+  /// Seed `count` founder plants; see [`crate::bodies::spawn_founders`].
+  pub fn spawn_founders(&mut self, count: usize) -> usize {
+    dispatch!(self, sim => crate::bodies::spawn_founders(sim, count))
+  }
+
+  pub fn organism_count(&self) -> usize {
+    dispatch!(self, sim => sim.organism_count())
+  }
+
   pub fn sync(&self) {
     dispatch!(self, sim => sim.sync())
   }

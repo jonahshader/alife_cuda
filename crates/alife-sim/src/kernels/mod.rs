@@ -20,6 +20,7 @@ pub mod limb_geometry;
 pub mod motion;
 pub mod scan;
 pub mod soil_sample;
+pub mod spawn;
 
 #[cfg(test)]
 pub mod test_support;
@@ -103,6 +104,46 @@ pub struct SphArgs {
   pub near_density: Box<[f32]>,
   pub state: Box<[u32]>,
   pub evap_prob: Box<[f32]>,
+}
+
+/// The particle SoA as the organism kernels see it: the fluid's fields plus
+/// the four that say which limb a particle belongs to.
+///
+/// Deliberately a second struct rather than more fields on [`SphArgs`]. The
+/// fluid kernels' generated code is keyed on their argument list, and the
+/// fluid has to stay byte-for-byte what it was before organisms existed.
+#[derive(CubeLaunch, CubeType)]
+pub struct BodyArgs {
+  pub pos: Box<[f32]>,
+  pub ppos: Box<[f32]>,
+  pub vel: Box<[f32]>,
+  pub mass: Box<[f32]>,
+  pub density: Box<[f32]>,
+  pub near_density: Box<[f32]>,
+  pub state: Box<[u32]>,
+  pub evap_prob: Box<[f32]>,
+  pub organism: Box<[u32]>,
+  pub limb: Box<[u32]>,
+  pub index_in_limb: Box<[u32]>,
+  pub part_type: Box<[u32]>,
+}
+
+pub fn body_args<R: Runtime>(sph: &crate::particles::SphDevice) -> BodyArgsLaunch<R> {
+  let n = sph.len();
+  BodyArgsLaunch::new(
+    whole(&sph.pos, n * 2),
+    whole(&sph.ppos, n * 2),
+    whole(&sph.vel, n * 2),
+    whole(&sph.mass, n),
+    whole(&sph.density, n),
+    whole(&sph.near_density, n),
+    whole(&sph.state, n),
+    whole(&sph.evap_prob, n),
+    whole(&sph.organism, n),
+    whole(&sph.limb, n),
+    whole(&sph.index_in_limb, n),
+    whole(&sph.part_type, n),
+  )
 }
 
 /// The neighbour grid as kernel arguments; see `kernels::grid` for the layout.

@@ -9,7 +9,10 @@ use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 use glam::Vec2;
 
+use crate::BrainShape;
 use crate::SimParams;
+use crate::bodies::{BodyCfg, BodyState, SimBodies};
+use crate::genome::Population;
 use crate::kernels::{self, accel, density, evap, grid::GridDevice, motion};
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
@@ -28,6 +31,12 @@ pub struct Sim<R: Runtime> {
   soil_device: SoilDevice,
   soil: SoilGrid,
   grid: GridDevice,
+  /// The genome population. Empty until something seeds it — `--founders`, or
+  /// the life-cycle chunk once it owns births.
+  pop: Population,
+  /// Which particle holds which limb particle, plus the anchors.
+  bodies: BodyState,
+  body_cfg: BodyCfg,
   params_buf: Handle,
   rng_counter: RngCounter,
   step_count: u32,
@@ -90,6 +99,9 @@ impl<R: Runtime> Sim<R> {
     let vel_next = client.empty(particles.len() * 2 * size_of::<f32>());
     let soil_device = SoilDevice::upload(&client, &soil.cells);
     let grid = GridDevice::alloc(&client, &cfg);
+    let pop = Population::new(&client, &params, BrainShape::from_params(&params));
+    let bodies = BodyState::new(&client, &params, &geom);
+    let body_cfg = bodies.cfg;
     let params_buf = upload_params(&client, &params, &geom);
 
     Self {
@@ -102,6 +114,9 @@ impl<R: Runtime> Sim<R> {
       soil_device,
       soil,
       grid,
+      pop,
+      bodies,
+      body_cfg,
       params_buf,
       // Two launches consume a counter value per step: `evaporate_particles`
       // and `move_vapor_particles`, exactly as the C++ increments twice.
@@ -162,6 +177,39 @@ impl<R: Runtime> Sim<R> {
 
   pub fn device_soil(&self) -> &SoilDevice {
     &self.soil_device
+  }
+
+  pub fn population(&self) -> &Population {
+    &self.pop
+  }
+
+  pub fn bodies(&self) -> &BodyState {
+    &self.bodies
+  }
+
+  pub fn body_cfg(&self) -> BodyCfg {
+    self.body_cfg
+  }
+
+  /// Organism slots currently alive. The host copy is authoritative while
+  /// births are host-side; the life-cycle chunk takes that over.
+  pub fn organism_count(&self) -> usize {
+    self.pop.organisms.alive.iter().filter(|a| **a == 1).count()
+  }
+
+  /// Everything a body spawn touches, borrowed at once — `bodies::spawn` and
+  /// `bodies::grow_limb` need several of these fields together, and they are
+  /// disjoint.
+  pub fn body_access(&mut self) -> SimBodies<'_, R> {
+    SimBodies {
+      client: &self.client,
+      params: &self.params,
+      geom: &self.geom,
+      cfg: self.cfg,
+      sph: &self.sph,
+      pop: &mut self.pop,
+      bodies: &mut self.bodies,
+    }
   }
 
   /// Apply new parameters. Anything that changes the world's shape needs a

@@ -26,6 +26,7 @@ pub fn run(
   params: SimParams,
   initial: Option<InitialState>,
   requested: Option<RuntimeKind>,
+  founders: usize,
 ) -> Result<()> {
   // Only an explicit `--runtime` is worth a warning; without one there is no
   // choice being overridden, and the GUI never asked what this box can run.
@@ -52,7 +53,7 @@ pub fn run(
   eframe::run_native(
     "alife",
     options,
-    Box::new(move |cc| Ok(Box::new(SimApp::new(cc, params, initial)?))),
+    Box::new(move |cc| Ok(Box::new(SimApp::new(cc, params, initial, founders)?))),
   )
   .map_err(|err| anyhow::anyhow!("{err}"))
 }
@@ -179,6 +180,10 @@ struct SimApp {
   params: SimParams,
   seed: u64,
 
+  /// Founders seeded at startup and again on every rebuild, so Reset gives
+  /// back the same world.
+  founders: usize,
+
   running: bool,
   step_once: bool,
   steps_per_frame: u32,
@@ -194,6 +199,7 @@ impl SimApp {
     cc: &eframe::CreationContext<'_>,
     params: SimParams,
     initial: Option<InitialState>,
+    founders: usize,
   ) -> Result<Self> {
     let render_state = cc
       .wgpu_render_state
@@ -212,7 +218,8 @@ impl SimApp {
     let (_device, client) = client_on(&setup);
 
     let seed = params.resolve_seed();
-    let sim = Sim::new(client, params, seed, initial);
+    let mut sim = Sim::new(client, params, seed, initial);
+    alife_sim::bodies::spawn_founders(&mut sim, founders);
     let pipelines = Arc::new(Pipelines::new(
       &render_state.device,
       render_state.target_format,
@@ -225,6 +232,7 @@ impl SimApp {
       pipelines,
       params,
       seed,
+      founders,
       running: true,
       step_once: false,
       steps_per_frame: 1,
@@ -239,6 +247,7 @@ impl SimApp {
   fn rebuild(&mut self) {
     let (_device, client) = client_on(&self.setup);
     self.sim = Sim::new(client, self.params, self.seed, None);
+    alife_sim::bodies::spawn_founders(&mut self.sim, self.founders);
   }
 
   fn controls(&mut self, ui: &mut egui::Ui) {
@@ -265,9 +274,10 @@ impl SimApp {
     // Nothing here reads the particle buffers back: counting the vapor would
     // cost a device round trip every frame.
     ui.label(format!(
-      "step {}  ·  {} particles",
+      "step {}  ·  {} particle slots  ·  {} organisms",
       self.sim.step_count(),
       self.sim.geometry().num_particles,
+      self.sim.organism_count(),
     ));
 
     for (heading, controls) in SLIDERS {
