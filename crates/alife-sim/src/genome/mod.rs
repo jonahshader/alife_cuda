@@ -9,6 +9,7 @@
 //! Nothing here is wired into [`crate::sim::Sim::step`] yet; the life-cycle
 //! chunk is what calls the mutation kernel and the slot allocator.
 
+pub mod mutate;
 pub mod population;
 pub mod seed;
 pub mod shape;

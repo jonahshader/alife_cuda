@@ -137,6 +137,36 @@ define_soa! {
 /// founder rather than an offspring.
 pub const NO_PARENT: u32 = u32::MAX;
 
+/// The discrete section as kernel arguments. Field order matches [`LimbHost`].
+///
+/// The byte-wide fields are `u32` on the device, as [`crate::soa::SoaField`]
+/// spells out; `identity` is [`IDENTITY_DIM`] contiguous floats per record, so
+/// record `i`'s component `k` is at `i * IDENTITY_DIM + k`.
+#[derive(CubeLaunch, CubeType)]
+pub struct LimbArgs {
+  pub part_type: Box<[u32]>,
+  pub length: Box<[u32]>,
+  pub parent: Box<[u32]>,
+  pub child_slot: Box<[u32]>,
+  pub grow_angle: Box<[f32]>,
+  pub identity: Box<[f32]>,
+}
+
+/// Launch arguments are consumed by a launch, so every launch site builds its
+/// own from the long-lived handles.
+pub fn limb_args<R: Runtime>(limbs: &LimbDevice) -> LimbArgsLaunch<R> {
+  let n = limbs.len();
+  let whole = crate::kernels::whole::<R>;
+  LimbArgsLaunch::new(
+    whole(&limbs.part_type, n),
+    whole(&limbs.length, n),
+    whole(&limbs.parent, n),
+    whole(&limbs.child_slot, n),
+    whole(&limbs.grow_angle, n),
+    whole(&limbs.identity, n * IDENTITY_DIM),
+  )
+}
+
 /// One limb record, outside the SoA.
 ///
 /// The population buffers are the working representation; this is the one an
