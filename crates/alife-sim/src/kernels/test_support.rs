@@ -155,10 +155,16 @@ pub struct OrganismHarness {
   pub geom: WorldGeometry,
   pub cfg: Cfg,
   pub body_cfg: BodyCfg,
+  pub soil: SoilGrid,
+  pub soil_dev: SoilDevice,
   pub particles: SphHost,
   pub sph: SphDevice,
   pub pop: Population,
+  /// Carries the host copy of the limb geometry the brain reads: [`Self::new`]
+  /// runs `write_limb_geometry` and downloads it, so a brain test compares
+  /// against the geometry the device pass will actually see.
   pub bodies: BodyState,
+  pub brain: crate::brain::BrainState,
   pub params_buf: Handle,
 }
 
@@ -181,6 +187,14 @@ impl OrganismHarness {
       max_limbs: 4,
       max_particles_per_limb: 3,
       limb_segment_length: 0.15,
+      // Every brain dimension different, and none of them equal to the limb
+      // or organism counts: at the defaults `d_token`, `d_latent` and the
+      // rest are all 32, and an index that used the wrong one would still
+      // land in the right place.
+      brain_d_token: 7,
+      brain_d_latent: 6,
+      brain_n_latents: 3,
+      brain_trunk_hidden: 5,
       ..SimParams::default()
     };
     let geom = WorldGeometry::from_params(&params);
@@ -229,19 +243,63 @@ impl OrganismHarness {
 
     let sph = SphDevice::upload(&client, &particles);
     let params_buf = client.create_from_slice(bytemuck::cast_slice(&pack_params(&params, &geom)));
+    let soil = SoilGrid::new(
+      geom.soil_width,
+      geom.soil_height,
+      geom.soil_cell_size,
+      TerrainMode::from_flag(params.terrain_mode),
+      7,
+    );
+    let soil_dev = SoilDevice::upload(&client, &soil.cells);
+    let brain =
+      crate::brain::BrainState::new(&client, crate::brain::BrainCfg::new(&pop.shape, &params));
 
-    Self {
+    let mut harness = Self {
       client,
       params,
       geom,
       cfg,
       body_cfg,
+      soil,
+      soil_dev,
       particles,
       sph,
       pop,
       bodies,
+      brain,
       params_buf,
-    }
+    };
+    harness.publish_geometry();
+    harness
+  }
+
+  /// Run `write_limb_geometry` and bring its output back into
+  /// [`Self::bodies`], which is what the token features are built from.
+  pub fn publish_geometry(&mut self) {
+    super::limb_geometry::launch(
+      &self.client,
+      &self.sph,
+      &self.bodies,
+      &self.pop,
+      &self.params_buf,
+      self.body_cfg,
+      self.geom.num_particles,
+    );
+    self.bodies.geometry = self.bodies.device.geometry.download(&self.client);
+  }
+
+  pub fn run_sense(&self) {
+    crate::brain::sense::launch(
+      &self.client,
+      &self.sph,
+      &self.soil_dev,
+      &self.bodies,
+      &self.pop,
+      &self.brain.device,
+      &self.params_buf,
+      self.brain.cfg,
+      self.cfg,
+    );
   }
 
   pub fn read_particles(&self) -> SphHost {

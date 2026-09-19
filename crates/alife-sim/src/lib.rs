@@ -6,6 +6,7 @@
 //! until this port reaches parity.
 
 pub mod bodies;
+pub mod brain;
 pub mod dump;
 pub mod genome;
 pub mod kernels;
