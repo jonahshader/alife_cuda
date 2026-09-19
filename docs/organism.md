@@ -148,9 +148,12 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   costs `upkeep_per_particle`. Energy below zero is death: every particle
   goes back to the free pool and leaves `organic_matter_per_particle` in
   the soil cell it was standing in.
-- **Growth.** A plant with `energy ≥ sprout_cost` whose sprout head does
-  not say "none" grows one ungrown child record of its genome, lowest child
-  slot first, and is charged. At most one limb per organism per tick.
+- **Growth.** Continuous, every limb at once, the organism's growth spend
+  split across its growing limbs by a softmax over per-limb biases; a child
+  never outgrows its parent in progress. The whole model is the next
+  section, *Growth*. (Until it lands, the shipped rule is the milestone-1
+  one: a plant with `energy ≥ sprout_cost` whose sprout head does not say
+  "none" grows one ungrown child record whole, lowest child slot first.)
 - **Reproduction.** Energy above `seed_threshold` is spent on a seed
   particle carrying a mutated copy of the genome. The seed is a particle
   with no limb, so no constraint holds it: it falls, water carries it, and
@@ -161,6 +164,75 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   for `seed_lifetime` steps without landing dies unremarked.
 - **Selection.** None explicit. Energy, shading, water, space, and other
   organisms are the fitness function; the simulation is the evaluator.
+
+## Growth
+
+Settled 2026-09-19 (decisions). Limbs grow continuously in length and
+thickness, the way the C++ trees did, instead of appearing whole; the
+genome still says what the body is, and the brain only biases how fast
+each part gets there. Four chunks, in build order; `TODO.md` carries them.
+
+**1. Continuous length and allocation.**
+
+- *State per `(organism, limb)`:* `grown: f32`, the limb's current length
+  in segments, `0 ≤ grown ≤ length` (the record's `length` is now the
+  target in particles). Progress `f = grown / length`. Particle `k`
+  (0-based) of a limb exists while `grown > k`; its rest distance to its
+  predecessor — the previous particle, or the parent's last particle for
+  `k = 0` — is `limb_segment_length × clamp(grown − k, 0, 1)`, so the
+  last segment lengthens between particle claims and growth is visible
+  frame to frame. The root's `k = 0` has no predecessor and stays pinned to
+  the anchor. Germination sets the root's `grown` to 1.
+- *Genome per limb record*, both mutable: `growth_bias: f32` (softmax
+  logit, founders 0) and `growth_rate: f32` (energy the limb can absorb
+  per life tick, founders and structural adds at the `growth_rate` param).
+  Both get the small Gaussian that `grow_angle` gets; the population file
+  format bumps its version and reads the old one with the founder values.
+- *Growing:* a present limb with `f < 1`, and — unless it is the root —
+  `f < f_parent`. A child's increment is clamped so it ends the tick at
+  `f ≤ f_parent`. This is the whole parent-before-child rule; there is no
+  ordering.
+- *Spend per tick:* `spend = clamp(energy − seed_cost, 0, Σ growth_rate
+  over growing limbs)`. Shares are `spend × softmax(growth_bias + logit)`
+  over the growing limbs, `logit` being 0 until chunk 4; a share above the
+  limb's `growth_rate` is capped and the excess redistributed once, by the
+  same softmax, over the uncapped limbs. Energy converts at
+  `length_per_energy` segments per unit until chunk 2 replaces it with
+  volume. The spend is charged; `sprout_cost` is gone.
+- *Particles* are claimed when `ceil(grown)` rises, placed at the
+  predecessor plus the rest offset along the limb's direction, by the
+  existing growth kernel over a list of `(organism, limb, index)` rather
+  than of whole limbs. The sprout head is read by nothing until chunk 4.
+
+**2. Thickness and volume.** Genome per limb record: `target_thickness:
+f32` (mutable; founders from the `thickness` params per part type). A
+limb's thickness is not state: `thickness = target_thickness × sqrt(f)`,
+the C++ rule, so a limb thickens as it lengthens. Volume `V = grown ×
+limb_segment_length × thickness²`. Growth spend buys volume at
+`volume_per_energy`, and `grown` is solved from the new volume in closed
+form (with thickness tied to `sqrt(f)`, `V ∝ grown²`). Upkeep is
+`upkeep_per_volume × Σ V` over the organism's limbs in place of
+`upkeep_per_particle`; a seed in flight has no volume and costs what it
+costs at emission. The renderer draws a segment at its limb's thickness.
+Thickness does not enter the SPH coupling yet.
+
+**3. Breaking.** A base joint whose angular error against its rest angle
+exceeds `break_angle × clamp(thickness / break_thickness_ref, 0, 1)`
+breaks: the limb and its descendants leave their particles as organic
+matter where they stand (the death path per particle) and their `grown`
+returns to 0, so the limb may regrow. Roots do not break. The error is what
+the constraint pass measures each sweep; its maximum per limb over the
+interval rides in the packed life buffer and the decision is the host's,
+in slot order, like every other life decision.
+
+**4. The brain's part.** `head_sprout` becomes `head_growth`, one logit
+per limb added to `growth_bias` before the softmax — the sprout head's
+"when" role, now continuous. The actuator head's first output is wired:
+the base-joint target is `grow_angle + actuator_gain × tanh(a)`, the
+brain nudging the genome's rest angle. Both are the wire phototropism
+needs: a token carries its limb's light, and a brain that raises the
+logit or bends the joint toward the brighter side grows toward the sun
+with no new mechanism.
 
 ## Evolution operators
 
@@ -633,3 +705,27 @@ never uploads the whole population.
   would have to copy every buffer through the host each frame, which is the
   CUDA-GL interop the port set out to delete. `--runtime` is a headless
   flag.
+- 2026-09-19 — **Growth is continuous, allocated by softmax, and children
+  never outgrow parents.** Whole-limb sprouting was dropped after the first
+  look at plants in the window: a limb appearing at full length in one tick
+  let a child exist before its parent had any length, made growth order an
+  accident of record indices, and never looked like growing. The C++ trees'
+  continuous length and thickness is what looked organic, so that model
+  returns on top of the particle bodies (the *Growth* section). The choices
+  that could be re-litigated: softmax over per-limb biases rather than a
+  fixed order, because a bias is only meaningful relative to siblings and a
+  softmax slows a limb rather than deleting it; the parent rule is `child
+  progress ≤ parent progress`, not a cap on the sum of children, because
+  the sum expresses load, which breaking-by-thickness expresses better and
+  which would punish bushy plans for being bushy; upkeep is by **volume**
+  (`length × thickness²`), not by thickness or particle count, so a tall
+  thin plant is cheaper than a tall thick one; the growth budget is the C++
+  rule, a per-limb `growth_rate` summed and capped at `energy − seed_cost`,
+  so growth never starves reproduction and each limb has its own tempo;
+  the brain biases the split and not the total, and later nudges the joint
+  angle — the genome stays the sole heritable body plan. Breaking scales
+  with thickness so a plant that grows leaves faster than trunk snaps in
+  the first current; roots are exempt because their failure is being
+  pulled out, which is a different mechanism for later. One energy pool per
+  organism stays; the old per-node give-take diffusion is not coming back,
+  the softmax does that job.

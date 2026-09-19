@@ -8,6 +8,26 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
+Growth, the four chunks of `organism.md`'s *Growth* section, in order:
+
+- **Growth 1 — continuous length and allocation.** Per-limb `grown`
+  state, `growth_bias` and `growth_rate` in the genome (mutation, founder,
+  population file version bump), the partial last segment in the
+  constraint pass, the parent-before-child rule, the softmax spend, and the
+  growth kernel over `(organism, limb, index)` requests. Replaces whole-limb
+  sprouting and `sprout_cost`; the sprout head goes unread until chunk 4.
+- **Growth 2 — thickness and volume.** `target_thickness` per record,
+  thickness from progress, volume-priced growth and upkeep
+  (`upkeep_per_volume` replaces `upkeep_per_particle`), segments drawn at
+  thickness.
+- **Growth 3 — breaking.** Joint angular error over the interval in the
+  packed life buffer; a limb past its thickness-scaled threshold sheds
+  itself and its descendants as organic matter and regrows from zero.
+  Roots exempt.
+- **Growth 4 — the brain's part.** `head_sprout` → `head_growth`, one
+  logit per limb into the softmax; the actuator's first output nudges the
+  base-joint target. Closes the actuator item below.
+
 Left open by the soil-specialization experiment:
 
 - **A plant lives only in a 0.8 m band above the pool.** `--column-top`
