@@ -1,0 +1,64 @@
+# alife-sim
+
+The simulation: state, CubeCL kernels and their plain-Rust references, and the
+step function. No windowing — that is `crates/alife`.
+
+Ported from the C++/CUDA tree's soil-coupled `update_fluid(state, soil)` in
+`src/systems/particle_fluid2.cu` and from `src/systems/soil.cu`. Those stay as
+the reference until the port is trusted.
+
+## Running the tests
+
+```
+cargo +1.98.1 test -p alife-sim --release -j16
+```
+
+The unit tests run each kernel against its plain-Rust twin over one fixed small
+world, on the CPU runtime. `tests/parity.rs` additionally checks this port
+against the C++ binary, and checks that a same-seed run is bit-reproducible on
+every backend the box has. The CUDA backend needs
+`LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64` on the dev box (`docs/perf.md`
+says why); without it, `available(Cuda)` is false and that backend is skipped.
+
+## Regenerating the parity references
+
+`tests/parity.rs` compares one step of this port against the C++ binary, and
+measures how much the C++ differs from itself over the same two steps. That
+floor is the bar. The dumps are not checked in — they are 2.5 MB each and are
+reproducible in seconds — so the test skips when they are absent.
+
+From the workspace root, with the C++ tree built
+(`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16`):
+
+```
+mkdir -p target/parity
+./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 1 \
+  --dump target/parity/ref1.bin
+./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
+  --dump target/parity/ref2a.bin
+./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
+  --dump target/parity/ref2b.bin
+./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
+  --dump target/parity/ref2c.bin
+```
+
+`ref1.bin` is the starting state; the `ref2*.bin` runs are three samples of the
+same two steps, and their spread is the floor. Two are enough; the third makes
+the floor estimate less jumpy and the test uses it when it is there.
+
+`--terrain-mode 1` is the deterministic capillary-test terrain. Mode 0 works
+too — the noise terrain reproduces the C++ bit for bit, which
+`soil::tests::noise_terrain_matches_the_cpp` pins — but mode 1 keeps the
+reference independent of the noise port.
+
+The C++ dump carries the world's step count, and `--load` resumes the RNG
+counter from it. A dump loaded without that would replay the random stream from
+zero and evaporate a different set of particles.
+
+## Why every kernel has a reference
+
+CubeCL kernels are not debuggable. The CPU runtime's LLVM JIT emits no symbols
+and no line tables, so a debugger never sees the kernel
+(`crates/spike/README.md`, answer 4). The plain-Rust twin next to each kernel,
+plus a test that runs both over one input, is the debugging path. The other
+half is `CUBECL_DEBUG_PLIRON`, which dumps the IR after each compiler pass.

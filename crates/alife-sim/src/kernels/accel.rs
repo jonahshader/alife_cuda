@@ -8,8 +8,8 @@ use super::soil_sample::{friction, properties_at_pos, properties_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CAPILLARY_MULT, P_CELL_SIZE, P_DT, P_GRAVITY, P_NEAR_PRESSURE_MULT,
   P_PRESSURE_MULT, P_SMOOTHING_RADIUS, P_SOIL_SIZE, P_TARGET_DENSITY, P_VISCOSITY_STRENGTH,
-  SoilArgs, SphArgs, clamp_i32, density_kernel_gradient_scale, density_kernel_gradient_scale_ref,
-  particle_to_cid, viscosity_kernel, viscosity_kernel_ref,
+  SoilArgs, SphArgs, clamp_i32, density_kernel_gradient_component,
+  density_kernel_gradient_component_ref, particle_to_cid, viscosity_kernel, viscosity_kernel_ref,
 };
 use crate::particles::{ParticleKind, SphHost};
 use crate::soil::SoilHost;
@@ -126,11 +126,12 @@ pub fn calculate_accel(
           let dst2 = offset_x * offset_x + offset_y * offset_y;
           let dst = f32::sqrt(dst2);
 
-          let weight = other_mass
-            * ((total_pressure + other_pressure + other_near_pressure) / (4.0f32 * other_density))
-            * density_kernel_gradient_scale(smoothing_radius, dst);
-          pressure_force_x -= weight * offset_x;
-          pressure_force_y -= weight * offset_y;
+          let coefficient = other_mass
+            * ((total_pressure + other_pressure + other_near_pressure) / (4.0f32 * other_density));
+          pressure_force_x -=
+            coefficient * density_kernel_gradient_component(smoothing_radius, offset_x, dst);
+          pressure_force_y -=
+            coefficient * density_kernel_gradient_component(smoothing_radius, offset_y, dst);
 
           // viscosity
           if particle_id != pid {
@@ -239,10 +240,14 @@ pub fn calculate_accel_ref(
           let dst2 = offset.length_squared();
           let dst = dst2.sqrt();
 
-          let weight = other_mass
-            * ((total_pressure + other_pressure + other_near_pressure) / (4.0 * other_density))
-            * density_kernel_gradient_scale_ref(params.smoothing_radius, dst);
-          pressure_force -= offset * weight;
+          let coefficient = other_mass
+            * ((total_pressure + other_pressure + other_near_pressure) / (4.0 * other_density));
+          pressure_force -= glam::Vec2::new(
+            coefficient
+              * density_kernel_gradient_component_ref(params.smoothing_radius, offset.x, dst),
+            coefficient
+              * density_kernel_gradient_component_ref(params.smoothing_radius, offset.y, dst),
+          );
 
           if particle_id != pid {
             let influence = viscosity_kernel_ref(params.smoothing_radius, dst2);

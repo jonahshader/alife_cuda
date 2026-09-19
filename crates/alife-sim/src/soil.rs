@@ -315,6 +315,89 @@ mod tests {
     assert_eq!(last, 9981545732273789042);
   }
 
+  /// Values printed by a probe that makes the same calls as the C++
+  /// `reset_soil`, built against the FastNoiseLite and libstdc++ the C++ tree
+  /// uses. Regenerating them is described in `crates/alife-sim/README.md`.
+  // The literals are the C++ probe's printout verbatim, at the nine
+  // significant digits that round-trip an `f32`; truncating them to what
+  // clippy considers the shortest form would lose that provenance.
+  #[test]
+  #[allow(clippy::excessive_precision)]
+  fn noise_terrain_matches_the_cpp() {
+    use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
+
+    let mut rng = Mt19937_64::new(42);
+    let s1 = rng.next_u64();
+    let s2 = rng.next_u64();
+    assert_eq!(s1, 13_930_160_852_258_120_406);
+    assert_eq!(s2, 11_788_048_577_503_494_824);
+    assert_eq!(s1 as i32, 1_860_559_574);
+    assert_eq!(s2 as i32, -1_188_756_824);
+
+    let height = 160usize;
+    let width = 320usize;
+
+    let mut heightmap_noise = FastNoiseLite::with_seed(s1 as i32);
+    heightmap_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+    heightmap_noise.set_fractal_type(Some(FractalType::FBm));
+    heightmap_noise.set_fractal_octaves(Some(6));
+    heightmap_noise.set_frequency(Some(1.0 / height as f32));
+
+    // (x, exact f32 bit pattern printed by the C++ probe)
+    let heightmap_expected: &[(usize, u32)] = &[
+      (0, 0x0000_0000),
+      (1, 0x3c4a_f38c),
+      (7, 0xbd4b_00a4),
+      (63, 0x3e19_18ab),
+      (159, 0xbf02_ec3b),
+      (319, 0x3f0c_4233),
+    ];
+    for (x, bits) in heightmap_expected {
+      let value = heightmap_noise.get_noise_2d(*x as f32, 0.0);
+      assert_eq!(value.to_bits(), *bits, "heightmap noise at x={x}");
+    }
+
+    let mut soil_noise = FastNoiseLite::with_seed(s2 as i32);
+    soil_noise.set_noise_type(Some(NoiseType::OpenSimplex2));
+    soil_noise.set_fractal_type(Some(FractalType::FBm));
+    soil_noise.set_fractal_octaves(Some(5));
+    soil_noise.set_frequency(Some(0.01));
+
+    // Printed with nine significant digits, which round-trips an `f32`.
+    let (x, y) = (100.0f32, 3.0f32);
+    assert_eq!(soil_noise.get_noise_3d(x, y, 0.0), 0.0828871354_f32);
+    assert_eq!(
+      soil_noise.get_noise_3d(x * 0.75, y, 300.0),
+      -0.524124384_f32
+    );
+    assert_eq!(soil_noise.get_noise_3d(x * 0.5, y, 600.0), 0.1870583_f32);
+
+    // The whole generator, including the column heights and the softmax.
+    let soil = noise_terrain(width, height, 42);
+    let id = 100 + 3 * width;
+    assert_eq!(soil.sand_density[id], 0.00543980114_f32);
+    assert_eq!(soil.silt_density[id], 3.58505318e-16_f32);
+    assert_eq!(soil.clay_density[id], 0.994560242_f32);
+
+    // Column heights: the topmost soil cell per column, from the C++ probe.
+    for (x, h) in [
+      (0usize, 16usize),
+      (1, 23),
+      (7, 32),
+      (63, 81),
+      (159, 30),
+      (319, 28),
+    ] {
+      let filled = (0..height)
+        .filter(|y| {
+          let i = x + y * width;
+          soil.sand_density[i] + soil.silt_density[i] + soil.clay_density[i] > 0.0
+        })
+        .count();
+      assert_eq!(filled, h, "column height at x={x}");
+    }
+  }
+
   #[test]
   fn capillary_test_columns_at_default_size() {
     let soil = capillary_test(320, 160);

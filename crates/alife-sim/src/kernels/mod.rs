@@ -216,22 +216,23 @@ pub fn near_density_kernel(radius: f32, dst: f32) -> f32 {
   out
 }
 
-/// Gradient of the density kernel, as the scalar that multiplies the offset.
+/// One component of the density kernel's gradient.
 ///
-/// The C++ `density_kernel_gradient` returns `-2 * norm * diff * value / dst`
-/// as a `float2`; the direction is just `diff`, so this returns the scalar and
-/// callers scale their own offset by it. The `dst > 1e-5` guard keeps a
+/// The C++ `density_kernel_gradient` builds the whole `float2` as
+/// `-2 * norm * diff * value / dst`; this evaluates one component in that same
+/// order, because the evaporation kernel sums components that nearly cancel
+/// and a different association shows up there. The `dst > 1e-5` guard keeps a
 /// coincident pair from producing a NaN direction.
 #[cube]
-pub fn density_kernel_gradient_scale(radius: f32, dst: f32) -> f32 {
-  let mut scale = 0.0f32;
+pub fn density_kernel_gradient_component(radius: f32, diff: f32, dst: f32) -> f32 {
+  let mut grad = 0.0f32;
   if dst < radius && dst > 1e-5f32 {
     let r2 = radius * radius;
     let normalization_factor_2d = 6.0f32 / (core::f32::consts::PI * r2 * r2);
     let value = radius - dst;
-    scale = -2.0f32 * normalization_factor_2d * value / dst;
+    grad = -2.0f32 * normalization_factor_2d * diff * value / dst;
   }
-  scale
+  grad
 }
 
 /// poly6: `(r^2 - d^2)^3 * 4/(pi r^8)`, so it only ever needs the squared
@@ -269,11 +270,11 @@ pub fn near_density_kernel_ref(radius: f32, dst: f32) -> f32 {
   normalization_factor_2d * value * value * value
 }
 
-pub fn density_kernel_gradient_scale_ref(radius: f32, dst: f32) -> f32 {
+pub fn density_kernel_gradient_component_ref(radius: f32, diff: f32, dst: f32) -> f32 {
   if dst < radius && dst > 1e-5 {
     let normalization_factor_2d = 6.0 / (std::f32::consts::PI * radius.powi(4));
     let value = radius - dst;
-    -2.0 * normalization_factor_2d * value / dst
+    -2.0 * normalization_factor_2d * diff * value / dst
   } else {
     0.0
   }

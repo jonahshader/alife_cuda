@@ -7,7 +7,7 @@ use super::grid::GridDevice;
 use super::soil_sample::{presence_at_pos, presence_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, SoilArgs, SphArgs,
-  density_kernel_gradient_scale, density_kernel_gradient_scale_ref, particle_to_cid,
+  density_kernel_gradient_component, density_kernel_gradient_component_ref, particle_to_cid,
 };
 use crate::particles::{ParticleKind, SphHost};
 use crate::soil::SoilHost;
@@ -76,7 +76,7 @@ pub fn calculate_evap_prob(
           let diff_x = pos_x - other_x;
           let diff_y = pos_y - other_y;
           let dst = f32::sqrt(diff_x * diff_x + diff_y * diff_y);
-          let grad_y = diff_y * density_kernel_gradient_scale(smoothing_radius, dst);
+          let grad_y = density_kernel_gradient_component(smoothing_radius, diff_y, dst);
           drho_dy += sph.mass[pid] * grad_y;
         }
       }
@@ -143,7 +143,7 @@ pub fn calculate_evap_prob_ref(
           }
           let diff = pos - other;
           let grad_y =
-            diff.y * density_kernel_gradient_scale_ref(params.smoothing_radius, diff.length());
+            density_kernel_gradient_component_ref(params.smoothing_radius, diff.y, diff.length());
           drho_dy += particles.mass[pid] * grad_y;
         }
       }

@@ -145,21 +145,29 @@ impl AnySim {
   }
 }
 
-/// CUDA if this box can run it, else wgpu, else the CPU runtime.
+/// Whether this box can run a given backend.
 ///
 /// CubeCL's `Runtime::client` is infallible and panics when the backend is not
 /// there, so probing means catching that panic; nothing is kept from a failed
 /// probe.
-pub fn default_runtime() -> RuntimeKind {
-  if probe(|| {
-    let _ = CudaRuntime::client(&CudaDevice::new(0));
-  }) {
-    return RuntimeKind::Cuda;
+pub fn available(kind: RuntimeKind) -> bool {
+  match kind {
+    RuntimeKind::Cpu => true,
+    RuntimeKind::Cuda => probe(|| {
+      let _ = CudaRuntime::client(&CudaDevice::new(0));
+    }),
+    RuntimeKind::Wgpu => probe(|| {
+      let _ = crate::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, None).unwrap();
+    }),
   }
-  if probe(|| {
-    let _ = crate::wgpu_backend::headless_setup(wgpu::Backends::PRIMARY, None).unwrap();
-  }) {
-    return RuntimeKind::Wgpu;
+}
+
+/// CUDA if this box can run it, else wgpu, else the CPU runtime.
+pub fn default_runtime() -> RuntimeKind {
+  for kind in [RuntimeKind::Cuda, RuntimeKind::Wgpu] {
+    if available(kind) {
+      return kind;
+    }
   }
   RuntimeKind::Cpu
 }
