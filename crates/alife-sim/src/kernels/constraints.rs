@@ -15,7 +15,12 @@
 //!   limb's last;
 //! - **base-joint angle** — a limb's first segment points along its parent's
 //!   last segment rotated by the limb record's `grow_angle` (the root limb
-//!   measures against the world frame, 0 at +x, counter-clockwise);
+//!   measures against the world frame, 0 at +x, counter-clockwise). How far
+//!   off it was before the sweep pulled it back is kept per `(organism,
+//!   limb)` as a running maximum in `BodyState::bend_max`, which the life
+//!   tick reads and resets: that is what a limb breaks on
+//!   (`docs/organism.md`, *Growth*). One unit owns the organism, so the
+//!   maximum needs no atomic;
 //! - **bend** — consecutive segments within a limb stay aligned, or a limb is
 //!   a rope.
 //!
@@ -157,6 +162,43 @@ pub fn project_angle(
   }
 }
 
+/// How far the segment `u -> v` is from pointing along `target`, in radians
+/// and unsigned, or zero where there is no angle to be had — the same "no
+/// direction to aim at" cases [`project_angle`] leaves alone.
+///
+/// This is the error that projection is about to take a `stiffness` fraction
+/// out of, measured before it does. `docs/organism.md`, *Growth*: its running
+/// maximum per limb is what the life tick breaks a base joint on.
+///
+/// Takes the target as two floats rather than a [`Dir`], so a caller can
+/// measure and then project against the same one: a CubeCL expand type is not
+/// `Copy`, so passing the `Dir` here would move it.
+#[cube]
+pub fn angle_error(
+  ppos: &mut [f32],
+  u: usize,
+  v: usize,
+  target_x: f32,
+  target_y: f32,
+  bounds_x: f32,
+) -> f32 {
+  let dx = wrap_delta(ppos[2 * v] - ppos[2 * u], bounds_x);
+  let dy = ppos[2 * v + 1] - ppos[2 * u + 1];
+  let len = f32::sqrt(dx * dx + dy * dy);
+  let aimed = target_x != 0.0f32 || target_y != 0.0f32;
+  let mut out = 0.0f32;
+  if aimed && len > 1e-6f32 {
+    let ux = dx / len;
+    let uy = dy / len;
+    // The target is a unit direction either way it was built, so the cross
+    // and the dot are the sine and cosine of the angle between the two.
+    let dot = target_x * ux + target_y * uy;
+    let cross = target_x * uy - target_y * ux;
+    out = f32::atan2(f32::abs(cross), dot);
+  }
+  out
+}
+
 /// Particles limb `l` of organism `o` actually holds: the leading run of its
 /// slice of the map, which is `ceil(grown)`.
 ///
@@ -280,6 +322,7 @@ pub fn project_constraints(
   map: &[u32],
   anchors: &[f32],
   grown: &[f32],
+  bend_max: &mut [f32],
   alive: &[u32],
   params: &[f32],
   #[comptime] cfg: BodyCfg,
@@ -367,11 +410,23 @@ pub fn project_constraints(
           let parent = limbs.parent[(base + l) as usize];
           let axis = limb_axis(ppos, limbs, map, base, pbase, parent, bounds_x, cfg);
           if first != NO_PARTICLE {
+            let target = rotate(axis, g);
+            let err = angle_error(
+              ppos,
+              anchor as usize,
+              first as usize,
+              target.x,
+              target.y,
+              bounds_x,
+            );
+            if err > bend_max[(base + l) as usize] {
+              bend_max[(base + l) as usize] = err;
+            }
             project_angle(
               ppos,
               anchor as usize,
               first as usize,
-              rotate(axis, g),
+              target,
               joint_k,
               bounds_x,
             );
@@ -385,6 +440,17 @@ pub fn project_constraints(
             y: f32::sin(g),
           };
           if first != NO_PARTICLE && second != NO_PARTICLE {
+            let err = angle_error(
+              ppos,
+              first as usize,
+              second as usize,
+              target.x,
+              target.y,
+              bounds_x,
+            );
+            if err > bend_max[(base + l) as usize] {
+              bend_max[(base + l) as usize] = err;
+            }
             project_angle(
               ppos,
               first as usize,
@@ -509,6 +575,7 @@ pub fn launch<R: Runtime>(
     whole(&bodies.device.limb_particles, cfg.particle_map_len()),
     whole(&bodies.device.anchors, cfg.max_organisms as usize * 2),
     whole(&bodies.device.grown, cfg.limb_count()),
+    whole(&bodies.device.bend_max, cfg.limb_count()),
     whole(&pop.device.organisms.alive, cfg.max_organisms as usize),
     whole(params, super::PARAM_COUNT),
     cfg,
@@ -521,10 +588,15 @@ pub fn launch<R: Runtime>(
 ///
 /// Same order, same projections, same wrapping; written as a sequential walk
 /// because that is what the kernel is per organism.
+///
+/// `bend_max` is `[max_organisms x max_limbs]` and is accumulated into, not
+/// overwritten: it is the running maximum the life tick reads and resets, so
+/// the caller owns its zeroing exactly as the pack kernel does on the device.
 pub fn project_constraints_ref(
   particles: &mut SphHost,
   pop: &Population,
   bodies: &BodyState,
+  bend_max: &mut [f32],
   params: &crate::SimParams,
   geom: &crate::world::WorldGeometry,
 ) {
@@ -592,9 +664,16 @@ pub fn project_constraints_ref(
           continue;
         }
         let g = grow_angle(l);
+        let mut record_bend = |err: f32| {
+          let slot = &mut bend_max[o * ml + l];
+          if err > *slot {
+            *slot = err;
+          }
+        };
         match (base_particle(l), at(l, 0)) {
           (Some(a), Some(first)) => {
             let target = rotate_ref(axis(particles, parent(l)), g);
+            record_bend(angle_error_ref(particles, a, first, target, bounds.x));
             project_angle_ref(
               particles,
               a,
@@ -607,6 +686,7 @@ pub fn project_constraints_ref(
           (None, Some(first)) if n > 1 => {
             if let Some(second) = at(l, 1) {
               let target = Vec2::new(g.cos(), g.sin());
+              record_bend(angle_error_ref(particles, first, second, target, bounds.x));
               project_angle_ref(
                 particles,
                 first,
@@ -774,6 +854,23 @@ fn project_distance_ref(particles: &mut SphHost, a: usize, b: usize, rest: f32, 
   }
 }
 
+/// Host twin of [`angle_error`].
+fn angle_error_ref(particles: &SphHost, u: usize, v: usize, target: Vec2, bounds_x: f32) -> f32 {
+  if target == Vec2::ZERO {
+    return 0.0;
+  }
+  let (pu, pv) = (particles.ppos[u], particles.ppos[v]);
+  let d = Vec2::new(wrap_delta_ref(pv.x - pu.x, bounds_x), pv.y - pu.y);
+  let len = d.length();
+  if len <= 1e-6 {
+    return 0.0;
+  }
+  let u = d / len;
+  let dot = target.x * u.x + target.y * u.y;
+  let cross = target.x * u.y - target.y * u.x;
+  cross.abs().atan2(dot)
+}
+
 fn project_angle_ref(
   particles: &mut SphHost,
   u: usize,
@@ -801,7 +898,7 @@ fn project_angle_ref(
 
 #[cfg(test)]
 mod tests {
-  use super::super::test_support::{OrganismHarness, assert_close_vec2};
+  use super::super::test_support::{OrganismHarness, assert_close, assert_close_vec2};
   use crate::bodies::NO_PARTICLE;
   use crate::particles::{SphDevice, SphHost};
 
@@ -828,14 +925,36 @@ mod tests {
     h.read_particles()
   }
 
+  /// The per-limb bend maxima the pass has accumulated on the device.
+  fn read_bend_max(h: &OrganismHarness) -> Vec<f32> {
+    crate::soa::download_field(
+      &h.client,
+      &h.bodies.device.bend_max,
+      h.body_cfg.limb_count(),
+    )
+  }
+
   #[test]
   fn matches_reference() {
     let h = OrganismHarness::new();
     let actual = run_kernel(&h);
 
     let mut expected = h.particles.clone();
-    super::project_constraints_ref(&mut expected, &h.pop, &h.bodies, &h.params, &h.geom);
+    let mut bend = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut expected,
+      &h.pop,
+      &h.bodies,
+      &mut bend,
+      &h.params,
+      &h.geom,
+    );
 
+    assert_close(&read_bend_max(&h), &bend, 1e-6, "bend maxima");
+    assert!(
+      bend.iter().any(|v| *v > 1e-3),
+      "no joint was bent, so the maxima prove nothing: {bend:?}"
+    );
     assert_close_vec2(&actual.ppos, &expected.ppos, 1e-6, "ppos after projection");
     assert_close_vec2(&actual.pos, &expected.pos, 1e-6, "pos after projection");
     assert_close_vec2(&actual.vel, &expected.vel, 1e-6, "vel after projection");
@@ -926,6 +1045,53 @@ mod tests {
     assert!(
       (len / expected - 1.0).abs() < 0.05,
       "the growing segment is {len} against {expected}"
+    );
+  }
+
+  /// The maximum runs across steps, not just across one pass's sweeps: two
+  /// launches with no reset between them leave the worst of both, and the
+  /// reference accumulates identically.
+  #[test]
+  fn the_bend_maximum_spans_the_whole_interval() {
+    let mut h = OrganismHarness::new();
+
+    // One step, on the host alone, as the yardstick.
+    let mut one_step = h.particles.clone();
+    let mut after_one = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut one_step,
+      &h.pop,
+      &h.bodies,
+      &mut after_one,
+      &h.params,
+      &h.geom,
+    );
+
+    // Two steps with no reset between them, kernel and reference together.
+    let mut expected = h.particles.clone();
+    let mut bend = vec![0.0f32; h.body_cfg.limb_count()];
+    for _ in 0..2 {
+      h.particles = run_kernel(&h);
+      h.sph = SphDevice::upload(&h.client, &h.particles);
+      super::project_constraints_ref(
+        &mut expected,
+        &h.pop,
+        &h.bodies,
+        &mut bend,
+        &h.params,
+        &h.geom,
+      );
+    }
+
+    assert_close(
+      &read_bend_max(&h),
+      &bend,
+      1e-6,
+      "bend maxima over two steps",
+    );
+    assert!(
+      bend.iter().zip(&after_one).all(|(two, one)| two >= one),
+      "a maximum went down over a step that never reset it"
     );
   }
 

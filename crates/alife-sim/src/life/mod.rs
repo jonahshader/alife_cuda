@@ -8,7 +8,7 @@
 //! 1. rebuild the light grid ([`light`]);
 //! 2. credit and charge every organism ([`energy`]);
 //! 3. one packed readback ([`pack`]) — energies, seed positions and speeds,
-//!    body tops, and one sprout choice per limb;
+//!    body tops, and each limb's worst base-joint bend over the interval;
 //! 4. decide, on the host: who dies, who germinates, how much every limb
 //!    grows, who seeds;
 //! 5. free the dead, place the seeds, run the growth and mutation kernels.
@@ -124,8 +124,6 @@ impl<R: Runtime> Sim<R> {
       &self.sph,
       &self.bodies,
       &self.pop,
-      &self.brain.device,
-      self.brain.cfg,
       &self.life_pack,
       num_particles,
     )

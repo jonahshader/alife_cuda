@@ -142,6 +142,14 @@ pub struct BodyDevice {
   /// `[max_organisms x max_limbs]` lengths in segments; see
   /// [`BodyState::grown`].
   pub grown: Handle,
+  /// `[max_organisms x max_limbs]` radians: the worst the base joint of each
+  /// limb has been bent away from its rest angle since the last life tick.
+  ///
+  /// Device-mastered, and the only body buffer that is — the constraint pass
+  /// accumulates it every sweep and [`crate::life::pack`] reads and zeroes it
+  /// once a tick, so there is no host copy for [`BodyState::upload`] to
+  /// clobber it with. `docs/organism.md`, *Growth*: a limb breaks on it.
+  pub bend_max: Handle,
   /// Where the integrator left each particle, before the projection moved it.
   /// `[num_particles]` interleaved x,y; only body particles are written.
   pub ppos_prev: Handle,
@@ -197,6 +205,7 @@ impl BodyState {
       anchors: client.create_from_slice(bytemuck::cast_slice(&flatten(&anchors))),
       seed_particles: client.create_from_slice(bytemuck::cast_slice(&seed_particles)),
       grown: client.create_from_slice(bytemuck::cast_slice(&grown)),
+      bend_max: client.create_from_slice(bytemuck::cast_slice(&vec![0.0f32; cfg.limb_count()])),
       ppos_prev: client.empty(geom.num_particles * 2 * size_of::<f32>()),
       geometry: LimbGeometryDevice::upload(client, &geometry),
     };
@@ -275,6 +284,10 @@ impl BodyState {
   }
 
   /// Upload the host master copies of the map, the anchors and the seeds.
+  ///
+  /// Not `bend_max`: the device is its master, and replacing its handle here
+  /// would throw away whatever the constraint pass has accumulated since the
+  /// last life tick — this runs mid-interval every time a limb grows.
   pub fn upload<R: Runtime>(&mut self, client: &ComputeClient<R>) {
     self.device.limb_particles =
       client.create_from_slice(bytemuck::cast_slice(&self.limb_particles));

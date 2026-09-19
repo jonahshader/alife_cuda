@@ -403,7 +403,9 @@ grid cell size) times how far the limb has grown into that segment
 (*Growth*), which is 1 for every segment but a growing limb's last;
 the angle at each limb's base joint against the parent
 segment's direction (target from the limb record for plants, from the brain
-for actuated limbs later, stiffness `joint_stiffness`); bend, keeping a
+for actuated limbs later, stiffness `joint_stiffness`), whose error before
+the projection is kept per limb as a running maximum for the life tick to
+break on (*Growth*); bend, keeping a
 limb's consecutive segments in line (`bend_stiffness`), or a limb is a rope;
 and the world bounds, x wrapping and y clamping. Velocity is recomputed from
 the projected displacement, position-based-dynamics style. Slot allocation
@@ -526,8 +528,9 @@ freeing and mutation are kernels; the *decisions* between them are a serial
 walk over the organism slots on the host, in slot order, and therefore
 deterministic. It costs one `read` per tick of a packed
 `[max_organisms × (6 + max_limbs)]` float buffer — energies, seed positions
-and speeds, body tops, and the sprout head's argmax per limb, reduced on
-the device rather than shipped — plus the free-slot scan's reads when
+and speeds, body tops, and per limb the worst its base joint was bent over
+the interval, accumulated by the constraint pass and reset by the pack
+kernel that reads it — plus the free-slot scan's reads when
 something is claimed and one limb-record download when something was born.
 The organism SoA is host-mastered except `energy`, which the energy kernel
 writes; the brain tensor and the limb records are device-mastered for a

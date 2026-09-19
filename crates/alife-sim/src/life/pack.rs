@@ -11,23 +11,25 @@
 //! - the organism's energy, which the energy kernel just wrote;
 //! - its seed particle's position and speed, for germination;
 //! - the top of its body, where a seed is emitted from;
-//! - the sprout head's argmax per limb, reduced here rather than shipped.
+//! - per limb, the worst its base joint has been bent since the last tick,
+//!   which is what a limb breaks on (`docs/organism.md`, *Growth*).
 //!
-//! A free slot packs as zeros, and so reads as "no energy, no seed, no
-//! sprout", which is what the host does nothing about.
+//! The per-limb maximum is *reset* here, for every slot alive or not: this is
+//! the one reader of it, and the interval it covers is the one that just
+//! ended. A free slot packs as zeros, and so reads as "no energy, no seed, no
+//! bend", which is what the host does nothing about.
 
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
 use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
-use crate::brain::{BrainCfg, BrainDevice};
 use crate::genome::PartType;
 use crate::genome::Population;
 use crate::kernels::constraints::{limb_len, particle_at};
 use crate::kernels::{CUBE_DIM, cube_count, whole};
 use crate::particles::SphDevice;
 
-/// Slots of one organism's packed entry, before the per-limb sprout choices.
+/// Slots of one organism's packed entry, before the per-limb bend maxima.
 pub const LIFE_ENERGY: usize = 0;
 pub const LIFE_SEED_X: usize = 1;
 pub const LIFE_SEED_Y: usize = 2;
@@ -60,10 +62,9 @@ pub fn pack_life(
   energy: &[f32],
   seed_particles: &[u32],
   anchors: &[f32],
-  heads: &[f32],
+  bend_max: &mut [f32],
   out: &mut [f32],
   #[comptime] body: BodyCfg,
-  #[comptime] brain: BrainCfg,
 ) {
   let o = ABSOLUTE_POS as u32;
   if o >= comptime!(body.max_organisms) {
@@ -73,8 +74,18 @@ pub fn pack_life(
   let mp = comptime!(body.max_particles_per_limb);
   let width = comptime!((LIFE_FIXED as u32) + body.max_limbs);
   let base = (o * width) as usize;
+  let base_limb = o * ml;
   for k in 0..width {
     out[base + k as usize] = 0.0f32;
+  }
+  // Read and reset before the `alive` guard: a slot that died during the
+  // interval must not hand its bend on to whatever germinates into it next.
+  // A dead slot's maxima are already zero — the constraint pass skips it —
+  // so the packed value is the same zero the loop above wrote.
+  for l in 0..ml {
+    let slot = (base_limb + l) as usize;
+    out[base + LIFE_FIXED + l as usize] = bend_max[slot];
+    bend_max[slot] = 0.0f32;
   }
   if alive[o as usize] == 0u32 {
     terminate!();
@@ -98,7 +109,6 @@ pub fn pack_life(
   let mut top_x = anchors[2 * o as usize];
   let mut top_y = anchors[2 * o as usize + 1];
   let mut found = false;
-  let base_limb = o * ml;
   let pbase = o * ml * mp;
   for l in 0..ml {
     let n = limb_len(map, pbase, l, body);
@@ -119,24 +129,6 @@ pub fn pack_life(
   }
   out[base + LIFE_TOP_X] = top_x;
   out[base + LIFE_TOP_Y] = top_y;
-
-  // The sprout head is a distribution over child types with "none" at index
-  // 0; the life cycle only needs its argmax, so the reduction happens here
-  // and 10 floats per limb become one.
-  let nt = comptime!(brain.n_types);
-  let hd = comptime!(brain.head_dim);
-  for l in 0..ml {
-    let hb = ((base_limb + l) * hd) as usize;
-    let mut best = 0u32;
-    let mut best_value = heads[hb];
-    for j in 1..nt {
-      if heads[hb + j as usize] > best_value {
-        best_value = heads[hb + j as usize];
-        best = j;
-      }
-    }
-    out[base + LIFE_FIXED + l as usize] = best as f32;
-  }
 }
 
 /// Scratch for the packed readback, allocated once.
@@ -157,14 +149,14 @@ impl LifePack {
 }
 
 /// Pack and read back. One `read`, and the only one the decision pass takes.
-#[allow(clippy::too_many_arguments)]
+///
+/// Resets the per-limb bend maxima on the device as it goes, so the interval
+/// the next tick reads starts here.
 pub fn read<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   bodies: &BodyState,
   pop: &Population,
-  brain: &BrainDevice,
-  brain_cfg: BrainCfg,
   pack: &LifePack,
   num_particles: usize,
 ) -> Vec<f32> {
@@ -181,22 +173,19 @@ pub fn read<R: Runtime>(
     whole(&pop.device.organisms.energy, body.max_organisms as usize),
     whole(&bodies.device.seed_particles, body.max_organisms as usize),
     whole(&bodies.device.anchors, body.max_organisms as usize * 2),
-    whole(&brain.heads, brain_cfg.heads_len()),
+    whole(&bodies.device.bend_max, body.limb_count()),
     whole(&pack.buffer, pack.len),
     body,
-    brain_cfg,
   );
   crate::genome::population::read_f32(client, &pack.buffer, pack.len)
 }
 
-/// Plain-Rust twin of [`pack_life`].
+/// Plain-Rust twin of [`pack_life`], resetting `bend_max` as the kernel does.
 pub fn pack_life_ref(
   particles: &crate::particles::SphHost,
   pop: &Population,
   bodies: &BodyState,
-  heads: &[f32],
-  head_dim: usize,
-  n_types: usize,
+  bend_max: &mut [f32],
 ) -> Vec<f32> {
   let body = bodies.cfg;
   let ml = body.max_limbs as usize;
@@ -205,6 +194,9 @@ pub fn pack_life_ref(
 
   for o in 0..body.max_organisms as usize {
     let base = o * width;
+    for l in 0..ml {
+      out[base + LIFE_FIXED + l] = std::mem::take(&mut bend_max[o * ml + l]);
+    }
     if pop.organisms.alive[o] == 0 {
       continue;
     }
@@ -243,17 +235,6 @@ pub fn pack_life_ref(
     }
     out[base + LIFE_TOP_X] = top.x;
     out[base + LIFE_TOP_Y] = top.y;
-
-    for l in 0..ml {
-      let hb = (o * ml + l) * head_dim;
-      let mut best = 0usize;
-      for j in 1..n_types {
-        if heads[hb + j] > heads[hb + best] {
-          best = j;
-        }
-      }
-      out[base + LIFE_FIXED + l] = best as f32;
-    }
   }
   out
 }
@@ -261,9 +242,14 @@ pub fn pack_life_ref(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::brain::HEAD_DIM;
-  use crate::genome::shape::N_TYPES;
   use crate::kernels::test_support::{OrganismHarness, assert_close};
+
+  /// Distinct bend maxima, as if the constraint pass had accumulated them.
+  fn fixture_bend_max(h: &OrganismHarness) -> Vec<f32> {
+    (0..h.body_cfg.limb_count())
+      .map(|i| 0.05 * (i as f32 + 1.0))
+      .collect()
+  }
 
   #[test]
   fn matches_reference() {
@@ -277,7 +263,8 @@ mod tests {
     h.sph = crate::particles::SphDevice::upload(&h.client, &h.particles);
     h.pop.upload(&h.client);
     h.bodies.upload(&h.client);
-    h.run_brain();
+    let mut bend = fixture_bend_max(&h);
+    h.bodies.device.bend_max = h.client.create_from_slice(bytemuck::cast_slice(&bend));
 
     let pack = LifePack::new(&h.client, h.body_cfg);
     let actual = read(
@@ -285,13 +272,10 @@ mod tests {
       &h.sph,
       &h.bodies,
       &h.pop,
-      &h.brain.device,
-      h.brain.cfg,
       &pack,
       h.geom.num_particles,
     );
-    let heads = h.brain.read_heads(&h.client);
-    let expected = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, HEAD_DIM, N_TYPES);
+    let expected = pack_life_ref(&h.particles, &h.pop, &h.bodies, &mut bend);
     assert_eq!(actual.len(), expected.len());
     assert_close(&actual, &expected, 1e-6, "life pack");
 
@@ -299,28 +283,55 @@ mod tests {
     assert_eq!(actual[LIFE_ENERGY], 1.75);
     assert_eq!(actual[LIFE_SEED_X], 1.5);
     assert!((actual[LIFE_SEED_SPEED] - 0.5).abs() < 1e-6);
-    // The free slot packs as zeros, not as the previous organism's numbers.
-    assert!(actual[width..2 * width].iter().all(|v| *v == 0.0));
+    // The free slot packs as zeros — no energy, no seed — but its bend slots
+    // are read and cleared like everyone else's.
+    assert!(actual[width..width + LIFE_FIXED].iter().all(|v| *v == 0.0));
   }
 
-  /// The argmax the host reads is the argmax of the sprout logits, and index
-  /// 0 — "none" — wins when nothing beats it.
+  /// The per-limb slots carry the bend maxima, and reading them clears them:
+  /// the next tick measures its own interval, not the sum of two.
   #[test]
-  fn the_sprout_choice_is_the_argmax_over_the_child_types() {
-    let h = OrganismHarness::new();
+  fn the_bend_maxima_are_read_and_reset() {
+    let mut h = OrganismHarness::new();
     let ml = h.body_cfg.max_limbs as usize;
-    let mut heads = vec![0.0f32; h.body_cfg.limb_count() * HEAD_DIM];
-    heads[3] = 2.0; // organism 0, limb 0, type 3
-    heads[HEAD_DIM] = 5.0; // organism 0, limb 1, type 0 (none)
-    let packed = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, HEAD_DIM, N_TYPES);
-    let width = stride(h.body_cfg);
-    assert_eq!(packed[LIFE_FIXED], 3.0);
-    assert_eq!(packed[LIFE_FIXED + 1], 0.0);
-    assert!(
-      packed[LIFE_FIXED..LIFE_FIXED + ml]
-        .iter()
-        .all(|v| *v >= 0.0)
+    let bend = fixture_bend_max(&h);
+    h.bodies.device.bend_max = h.client.create_from_slice(bytemuck::cast_slice(&bend));
+
+    let pack = LifePack::new(&h.client, h.body_cfg);
+    let first = read(
+      &h.client,
+      &h.sph,
+      &h.bodies,
+      &h.pop,
+      &pack,
+      h.geom.num_particles,
     );
+    let width = stride(h.body_cfg);
     assert_eq!(width, LIFE_FIXED + ml);
+    for l in 0..ml {
+      assert_eq!(first[LIFE_FIXED + l], bend[l], "limb {l}");
+    }
+
+    let second = read(
+      &h.client,
+      &h.sph,
+      &h.bodies,
+      &h.pop,
+      &pack,
+      h.geom.num_particles,
+    );
+    assert!(
+      second[LIFE_FIXED..LIFE_FIXED + ml]
+        .iter()
+        .all(|v| *v == 0.0),
+      "the maxima survived the tick that read them: {:?}",
+      &second[LIFE_FIXED..LIFE_FIXED + ml]
+    );
+
+    // And the host twin resets its own copy the same way.
+    let mut host = bend.clone();
+    let packed = pack_life_ref(&h.particles, &h.pop, &h.bodies, &mut host);
+    assert_eq!(&packed[LIFE_FIXED..LIFE_FIXED + ml], &bend[..ml]);
+    assert!(host.iter().all(|v| *v == 0.0));
   }
 }
