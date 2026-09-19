@@ -258,6 +258,48 @@ fn another_terrain_gets_one_column_spanning_the_world() {
   let _ = std::fs::remove_file(&path);
 }
 
+/// A seed in flight holds an organism slot and has no anchor yet, so it is in
+/// `alive` and in no column — rather than in the leftmost one, which is where
+/// its `Vec2::ZERO` anchor would otherwise put it.
+#[test]
+fn a_seed_in_flight_counts_in_alive_and_in_no_column() {
+  let mut sim = small_world();
+  assert_eq!(spawn_founders(&mut sim, 3), 3);
+  {
+    // The fourth slot, as a newborn seed: alive, staged as a seed, energy and
+    // anchor untouched. This is exactly what `life::apply` leaves behind
+    // between the tick that emits a seed and the one that germinates it.
+    let access = sim.body_access();
+    access.pop.organisms.alive[3] = 1;
+    access.pop.organisms.stage[3] = crate::genome::population::STAGE_SEED;
+    access.pop.upload_organisms(access.client);
+  }
+  assert_eq!(sim.bodies().anchors[3], Vec2::ZERO);
+
+  let path = temp_path("seed-in-flight");
+  let mut sampler = Sampler::create(&path, 1, 0.25, sim.soil()).unwrap();
+  sim.step();
+  sampler.sample(&sim).unwrap();
+  sampler.flush().unwrap();
+
+  let (header, rows) = read_csv(&path);
+  let columns = sim.soil().columns();
+  let field = |name: &str| -> &str { &rows[0][header.iter().position(|h| h == name).expect(name)] };
+  assert_eq!(field("alive"), "4");
+  let per_column: usize = (0..columns.len())
+    .map(|c| rows[0][16 + 5 * c].parse::<usize>().unwrap())
+    .sum();
+  assert_eq!(per_column, 3, "the seed was binned into a column");
+  // The three founders land in columns 1, 3 and 5 at this width, so the
+  // leftmost column is empty — and stays empty, which is what the seed's
+  // `Vec2::ZERO` anchor would otherwise break.
+  assert_eq!(
+    rows[0][16], "0",
+    "a seed at the origin was binned into the leftmost column"
+  );
+  let _ = std::fs::remove_file(&path);
+}
+
 fn population_of(genomes: &[Genome], params: &SimParams, shape: &BrainShape) -> Population {
   let client = CpuRuntime::client(&CpuDevice);
   let mut pop = Population::new(&client, params, *shape);

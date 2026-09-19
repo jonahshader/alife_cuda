@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use cubecl::prelude::*;
 use glam::Vec2;
 
+use crate::genome::population::STAGE_PLANT;
 use crate::genome::{PartType, Population};
 use crate::particles::ParticleKind;
 use crate::sim::{Counters, Sim};
@@ -387,6 +388,13 @@ fn measure<R: Runtime>(
   let mut column_species: Vec<Vec<usize>> = vec![Vec::new(); columns.len()];
   let mut column_bodies = vec![0usize; columns.len()];
   for (k, &o) in alive.iter().enumerate() {
+    // A seed in flight holds an organism slot but has no anchor yet: its entry
+    // is still `Vec2::ZERO`, which reads as x = 0 and would bin every seed in
+    // the world into the leftmost column. It is in `alive` and in no column,
+    // for the same reason an organism anchored in a gap is.
+    if pop.organisms.stage[o] != STAGE_PLANT {
+      continue;
+    }
     let cell = soil.cell_column(anchors[o].x);
     let Some(c) = columns.iter().position(|column| column.contains(cell)) else {
       // A gap between two columns belongs to no column, so an organism
