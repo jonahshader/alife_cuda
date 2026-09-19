@@ -18,7 +18,7 @@
 use cubecl::prelude::*;
 
 use super::{BrainCfg, Weights};
-use crate::bodies::BodyState;
+use crate::bodies::{BodyState, LimbGeometryHost};
 use crate::genome::Population;
 use crate::genome::shape::{BrainShape, FEATURE_DIM, IDENTITY_DIM, SENSOR_DIM};
 use crate::kernels::{CUBE_DIM, cube_count, whole};
@@ -193,18 +193,20 @@ pub fn token_ref(
 }
 
 /// Plain-Rust twin of [`write_tokens`], over the whole population.
+///
+/// `geometry` is what [`crate::kernels::limb_geometry`] published this step,
+/// read back to the host.
 pub fn write_tokens_ref(
   pop: &Population,
-  bodies: &BodyState,
+  geometry: &LimbGeometryHost,
   sensors: &[f32],
   shape: &BrainShape,
 ) -> Vec<f32> {
-  let cfg = bodies.cfg;
-  let ml = cfg.max_limbs as usize;
+  let ml = pop.max_limbs;
   let dt = shape.d_token;
-  let mut out = vec![0.0f32; cfg.limb_count() * dt];
+  let mut out = vec![0.0f32; pop.max_organisms * ml * dt];
 
-  for o in 0..cfg.max_organisms as usize {
+  for o in 0..pop.max_organisms {
     if pop.organisms.alive[o] == 0 {
       continue;
     }
@@ -215,9 +217,9 @@ pub fn write_tokens_ref(
         continue;
       }
       let features = token_features_ref(
-        bodies.geometry.rel_pos[li],
-        bodies.geometry.angle[li],
-        bodies.geometry.depth[li],
+        geometry.rel_pos[li],
+        geometry.angle[li],
+        geometry.depth[li],
         pop.limbs.child_slot[li],
         &pop.limbs.identity[li],
         &sensors[li * SENSOR_DIM..],
@@ -258,7 +260,7 @@ mod tests {
 
     let actual = h.brain.read_tokens(&h.client);
     let sensors = h.brain.read_sensors(&h.client);
-    let expected = write_tokens_ref(&h.pop, &h.bodies, &sensors, &h.pop.shape);
+    let expected = write_tokens_ref(&h.pop, &h.bodies.geometry, &sensors, &h.pop.shape);
 
     assert_eq!(actual.len(), expected.len());
     assert_close(&actual, &expected, 1e-5, "tokens");

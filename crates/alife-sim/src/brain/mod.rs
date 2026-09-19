@@ -35,6 +35,7 @@ use crate::genome::shape::{BrainShape, FEATURE_DIM, IDENTITY_DIM, N_TYPES, SENSO
 /// population that owns the tensor; every kernel here is generic over it.
 pub use crate::genome::population::Weights;
 
+pub mod forward;
 pub mod sense;
 pub mod tokens;
 
@@ -165,6 +166,10 @@ pub struct BrainDevice {
   pub hidden: Handle,
   /// The trunk's output: the candidate the gate blends into the latents.
   pub trunk: Handle,
+  /// The blend the gate produced, before [`forward::latent_norm`] scales it
+  /// into the persistent state. A buffer of its own because the norm reads a
+  /// whole latent vector that the gate's other units are still writing.
+  pub gated: Handle,
   /// Output cross-attention: queries from the tokens, keys and values from
   /// the updated latents. `out_kv` holds both jobs, keys first.
   pub out_q: Handle,
@@ -207,6 +212,7 @@ impl BrainState {
       h2: zeros(latent),
       hidden: zeros(cfg.hidden_len()),
       trunk: zeros(latent),
+      gated: zeros(latent),
       out_q: zeros(cfg.limb_latent_len()),
       out_kv: zeros(2 * latent),
       out_scores: zeros(cfg.organisms() * (cfg.max_limbs * cfg.n_latents) as usize),

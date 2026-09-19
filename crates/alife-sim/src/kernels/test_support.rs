@@ -320,6 +320,21 @@ impl OrganismHarness {
     );
   }
 
+  /// Sense, tokens, then the rest of one tick, untimed.
+  pub fn run_brain(&self) {
+    self.run_sense();
+    self.run_tokens();
+    crate::brain::forward::launch(
+      &self.client,
+      &self.weights(),
+      &self.brain.device,
+      &self.pop,
+      &self.pop.shape,
+      self.brain.cfg,
+      &mut |_, f| f(),
+    );
+  }
+
   pub fn read_particles(&self) -> SphHost {
     self.sph.download(&self.client)
   }
