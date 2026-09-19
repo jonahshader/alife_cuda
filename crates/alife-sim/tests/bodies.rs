@@ -32,6 +32,11 @@ fn params() -> SimParams {
     terrain_mode: 0,
     seed: 42,
     max_organisms: 8,
+    // The life cycle off: what is under test here is the constraint pass
+    // holding a body together over hundreds of steps, and a founder that
+    // starved or sprouted halfway through would be testing `crate::life`
+    // instead. `tests/life.rs` covers the two together.
+    life_interval: 100_000,
     ..SimParams::default()
   }
 }

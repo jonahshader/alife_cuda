@@ -398,6 +398,17 @@ impl Population {
     self.latents = read_f32(client, &self.device.latents, self.latents.len());
   }
 
+  /// Send the per-organism SoA up and nothing else.
+  ///
+  /// The life cycle writes `alive`, `stage`, `energy` and the lineage fields
+  /// on the host and the mutation kernels write the brain and the limb
+  /// records on the device, so a full [`Self::upload`] in the middle of a
+  /// tick would overwrite a newborn's genome with whatever the host master
+  /// still held.
+  pub fn upload_organisms<R: Runtime>(&mut self, client: &ComputeClient<R>) {
+    self.device.organisms = OrganismDevice::upload(client, &self.organisms);
+  }
+
   /// Refresh the host mirror of the discrete section alone.
   ///
   /// The mutation kernel writes a newborn's limb records on the device, and

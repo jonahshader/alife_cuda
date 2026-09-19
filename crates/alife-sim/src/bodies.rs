@@ -274,6 +274,9 @@ fn install<R: Runtime>(
   let access = sim.body_access();
   access.pop.write_genome(organism, genome);
   access.pop.organisms.alive[organism] = 1;
+  // A founder starts germinated: `--founders` is the run's initial
+  // condition, not something the life cycle produced.
+  access.pop.organisms.stage[organism] = crate::genome::population::STAGE_PLANT;
   access.bodies.anchors[organism] = anchor;
   access.bodies.release(organism);
 }

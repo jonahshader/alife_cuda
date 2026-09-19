@@ -18,6 +18,7 @@ use crate::kernels::{
   self, accel, constraints, density, evap, grid::GridDevice, limb_geometry, motion,
 };
 use crate::life::light::LightGrid;
+use crate::life::pack::LifePack;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
 use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
@@ -35,8 +36,8 @@ pub struct Sim<R: Runtime> {
   pub(crate) soil_device: SoilDevice,
   pub(crate) soil: SoilGrid,
   pub(crate) grid: GridDevice,
-  /// The genome population. Empty until something seeds it — `--founders`, or
-  /// the life-cycle chunk once it owns births.
+  /// The genome population. Empty until something seeds it: `--founders` at
+  /// startup, and the life tick's seeds after that.
   pub(crate) pop: Population,
   /// Which particle holds which limb particle, plus the anchors.
   pub(crate) bodies: BodyState,
@@ -45,6 +46,8 @@ pub struct Sim<R: Runtime> {
   pub(crate) brain: BrainState,
   /// Light reaching each soil cell, rebuilt every `life_interval` steps.
   pub(crate) light: LightGrid,
+  /// Scratch for the life tick's one readback.
+  pub(crate) life_pack: LifePack,
   pub(crate) params_buf: Handle,
   pub(crate) rng_counter: RngCounter,
   pub(crate) step_count: u32,
@@ -132,6 +135,7 @@ impl<R: Runtime> Sim<R> {
     let body_cfg = bodies.cfg;
     let brain = BrainState::new(&client, BrainCfg::new(&shape, &params));
     let light = LightGrid::new(&client, &soil, params.light_top);
+    let life_pack = LifePack::new(&client, body_cfg);
     let params_buf = upload_params(&client, &params, &geom);
 
     Self {
@@ -149,6 +153,7 @@ impl<R: Runtime> Sim<R> {
       body_cfg,
       brain,
       light,
+      life_pack,
       params_buf,
       // Two launches consume a counter value per step: `evaporate_particles`
       // and `move_vapor_particles`, exactly as the C++ increments twice.
@@ -259,8 +264,9 @@ impl<R: Runtime> Sim<R> {
     kernels::LiveParticles(self.geom.fluid_particles.max(self.bodies.high_water))
   }
 
-  /// Organism slots currently alive. The host copy is authoritative while
-  /// births are host-side; the life-cycle chunk takes that over.
+  /// Organism slots currently occupied — seeds in flight included, because
+  /// a seed holds its slot. The host mirror of `alive` is the master: the
+  /// life tick writes it and uploads, and no kernel writes it back.
   pub fn organism_count(&self) -> usize {
     self.pop.organisms.alive.iter().filter(|a| **a == 1).count()
   }
@@ -270,9 +276,9 @@ impl<R: Runtime> Sim<R> {
     self.counters
   }
 
-  /// Count `n` births. The hook the life-cycle chunk calls once it owns
-  /// reproduction; nothing calls it yet, so the counter is 0 for a whole run
-  /// today.
+  /// Count `n` births. A seed counts when it germinates, not when it is
+  /// emitted: until it lands it has no body and no place in the population
+  /// (`crate::life`).
   pub fn record_births(&mut self, n: u64) {
     self.counters.births += n;
   }

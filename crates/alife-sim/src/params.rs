@@ -199,16 +199,16 @@ sim_params! {
         "Energy a leaf particle gains per step at full light";
     water_gain: f32 = 0.004, "life.water_gain", "water-gain",
         "Energy a root particle gains per step per unit of wetness";
-    upkeep_per_particle: f32 = 0.001, "life.upkeep_per_particle", "upkeep-per-particle",
+    upkeep_per_particle: f32 = 0.003, "life.upkeep_per_particle", "upkeep-per-particle",
         "Energy a body particle costs its organism per step";
-    sprout_cost: f32 = 0.05, "life.sprout_cost", "sprout-cost",
+    sprout_cost: f32 = 0.5, "life.sprout_cost", "sprout-cost",
         "Energy a sprouted limb costs, and the energy a sprout needs";
     seed_threshold: f32 = 2.0, "life.seed_threshold", "seed-threshold",
         "Energy above which an organism emits a seed";
     seed_cost: f32 = 1.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
     seed_energy: f32 = 0.5, "life.seed_energy", "seed-energy",
         "Energy a seed germinates with, and the energy a founder starts with";
-    germinate_speed: f32 = 0.05, "life.germinate_speed", "germinate-speed",
+    germinate_speed: f32 = 0.5, "life.germinate_speed", "germinate-speed",
         "Speed below which a landed seed germinates";
     seed_lifetime: i32 = 6000, "life.seed_lifetime", "seed-lifetime",
         "Steps a seed may drift before it dies ungerminated";

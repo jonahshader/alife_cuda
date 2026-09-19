@@ -23,12 +23,22 @@
 //! **Why the defaults break a founder about even.** The founder plant
 //! (`Genome::seed_plant`) is a 2-particle root, a 3-particle stem and a
 //! 1-particle leaf: 6 particles. At `light_gain` 0.012, `water_gain` 0.004
-//! and `upkeep_per_particle` 0.001 it gains
-//! `0.012 * light + 0.004 * 2 * wet - 0.006` per step, so in open light with
-//! dry roots it makes +0.006 and a fully shaded one loses 0.006. A seedling
-//! that has germinated but not yet sprouted a leaf is pure upkeep and dies
-//! unless its brain sprouts one, which is the selection pressure the sprout
-//! head is under.
+//! and `upkeep_per_particle` 0.003 it gains
+//! `0.012 * light + 0.008 * wet - 0.018` per step, so it breaks even in open
+//! light with a wet root (wetness about 0.75, which saturated soil reaches)
+//! and loses about 0.006 with a dry one or in shade. Upkeep is the one
+//! constant this chunk moved off the brief's figure, and the run is why: at
+//! 0.001 open light alone pays for the whole body, nothing ever starves, and
+//! a 3000-step run at `--founders 64` records 3 deaths against 99 births and
+//! fills every organism slot by step 400 — a population with no selection in
+//! it. At 0.003 the same run records 78 deaths against 68 births, ends at 93
+//! of 256 slots, and 45 of the 64 founder lineages are already extinct
+//! (`docs/perf.md`).
+//!
+//! A seedling that has germinated but not yet sprouted a leaf is pure upkeep
+//! plus whatever its root drinks, so it lives about as long as its
+//! `seed_energy` lasts unless its brain sprouts one. That is the selection
+//! pressure the sprout head is under.
 //!
 //! One unit per organism and a serial walk over its particles: no float
 //! atomic, so the sum order is the slot order and the result is the same on

@@ -21,6 +21,10 @@ fn small_world() -> Sim<CpuRuntime> {
     terrain_mode: 1,
     max_organisms: 4,
     max_particles_per_limb: 3,
+    // The life cycle off for the length of this run: what is under test is
+    // the writer, and a founder that starved or seeded halfway through would
+    // be testing `crate::life` instead. `tests/life.rs` is where the two meet.
+    life_interval: 100_000,
     ..SimParams::default()
   };
   Sim::new(CpuRuntime::client(&CpuDevice), params, 42, None)
