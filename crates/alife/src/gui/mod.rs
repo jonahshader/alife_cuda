@@ -19,6 +19,9 @@ use std::sync::Arc;
 
 use render::{Pipelines, SimCallback, ViewUniform};
 
+// Unqualified so the slider table below fits one parameter per line.
+use Effect::{Reshape, Retune};
+
 pub fn run(
   params: SimParams,
   initial: Option<InitialState>,
@@ -53,6 +56,121 @@ pub fn run(
   )
   .map_err(|err| anyhow::anyhow!("{err}"))
 }
+
+/// What moving a parameter costs.
+#[derive(Clone, Copy)]
+enum Effect {
+  /// Re-uploads the params buffer and the world keeps running, so the slider
+  /// can act while it is being dragged.
+  Retune,
+  /// Resizes a buffer or moves a constant compiled into the kernels, so the
+  /// world has to be rebuilt — which is why these act on `drag_stopped`
+  /// rather than every frame of a drag. The C++ slider rebuilt nothing at
+  /// all and left the device grid at the old size while kernels launched
+  /// with the new one.
+  Reshape,
+}
+
+/// Which field a slider moves, and between what.
+///
+/// A function pointer rather than an offset: the borrow is handed out at the
+/// moment of use, so the table itself is a `const`.
+enum Field {
+  Float {
+    at: fn(&mut SimParams) -> &mut f32,
+    range: (f32, f32),
+  },
+  Int {
+    at: fn(&mut SimParams) -> &mut i32,
+    range: (i32, i32),
+  },
+}
+
+struct Control {
+  label: &'static str,
+  field: Field,
+  effect: Effect,
+}
+
+impl Control {
+  const fn float(
+    label: &'static str,
+    at: fn(&mut SimParams) -> &mut f32,
+    lo: f32,
+    hi: f32,
+    effect: Effect,
+  ) -> Self {
+    Self {
+      label,
+      field: Field::Float {
+        at,
+        range: (lo, hi),
+      },
+      effect,
+    }
+  }
+
+  const fn int(
+    label: &'static str,
+    at: fn(&mut SimParams) -> &mut i32,
+    lo: i32,
+    hi: i32,
+    effect: Effect,
+  ) -> Self {
+    Self {
+      label,
+      field: Field::Int {
+        at,
+        range: (lo, hi),
+      },
+      effect,
+    }
+  }
+
+  /// Draw the slider; true when its [`Effect`] should be applied now.
+  fn show(&self, ui: &mut egui::Ui, params: &mut SimParams) -> bool {
+    let response = match &self.field {
+      Field::Float { at, range } => {
+        ui.add(egui::Slider::new(at(params), range.0..=range.1).text(self.label))
+      }
+      Field::Int { at, range } => {
+        ui.add(egui::Slider::new(at(params), range.0..=range.1).text(self.label))
+      }
+    };
+    match self.effect {
+      Effect::Retune => response.changed(),
+      Effect::Reshape => response.drag_stopped(),
+    }
+  }
+}
+
+/// Every parameter slider the panel shows, under the heading it sits below.
+/// One line per parameter is the point, so rustfmt is kept off it; adding a
+/// parameter to the GUI is adding a line here.
+#[rustfmt::skip]
+const SLIDERS: &[(&str, &[Control])] = &[
+  ("Fluid", &[
+    Control::float("dt", |p| &mut p.dt, 0.0, 0.1, Retune),
+    Control::float("dt_predict", |p| &mut p.dt_predict, 0.0, 0.1, Retune),
+    Control::float("gravity", |p| &mut p.gravity, -30.0, 0.0, Retune),
+    Control::float("collision_damping", |p| &mut p.collision_damping, 0.0, 1.0, Retune),
+    Control::float("smoothing_radius", |p| &mut p.smoothing_radius, 0.001, 0.5, Reshape),
+    Control::float("target_density", |p| &mut p.target_density, 0.0, 400.0, Retune),
+    Control::float("pressure_mult", |p| &mut p.pressure_mult, 0.0, 1200.0, Retune),
+    Control::float("near_pressure_mult", |p| &mut p.near_pressure_mult, 0.0, 100.0, Retune),
+    Control::float("viscosity_strength", |p| &mut p.viscosity_strength, 0.0, 10.0, Retune),
+    Control::float("capillary_mult", |p| &mut p.capillary_mult, 0.0, 5.0, Retune),
+    Control::int("particles_per_cell", |p| &mut p.particles_per_cell, 1, 32, Reshape),
+    Control::int("max_particles_per_cell", |p| &mut p.max_particles_per_cell, 1, 1024, Reshape),
+  ]),
+  ("Evaporation / condensation", &[
+    Control::float("evap_rate", |p| &mut p.evap_rate, 0.0, 0.1, Retune),
+    Control::float("condense_rate", |p| &mut p.condense_rate, 0.0, 0.1, Retune),
+    Control::float("vapor_buoyancy", |p| &mut p.vapor_buoyancy, 0.0, 20.0, Retune),
+    Control::float("vapor_drift", |p| &mut p.vapor_drift, 0.0, 5.0, Retune),
+    Control::float("condense_alt_power", |p| &mut p.condense_altitude_power, 0.5, 5.0, Retune),
+  ]),
+];
 
 struct SimApp {
   sim: Sim<cubecl_wgpu::WgpuRuntime>,
@@ -152,67 +270,18 @@ impl SimApp {
       self.sim.geometry().num_particles,
     ));
 
-    ui.separator();
-    ui.heading("Fluid");
-    retune |= ui
-      .add(egui::Slider::new(&mut p.dt, 0.0..=0.1).text("dt"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.dt_predict, 0.0..=0.1).text("dt_predict"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.gravity, -30.0..=0.0).text("gravity"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.collision_damping, 0.0..=1.0).text("collision_damping"))
-      .changed();
-    // Changing the smoothing radius resizes the neighbour grid, so it cannot
-    // be a live tweak: the C++ slider did exactly that and left the device
-    // grid at the old size while kernels launched with the new one.
-    reshape |= ui
-      .add(egui::Slider::new(&mut p.smoothing_radius, 0.001..=0.5).text("smoothing_radius"))
-      .drag_stopped();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.target_density, 0.0..=400.0).text("target_density"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.pressure_mult, 0.0..=1200.0).text("pressure_mult"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.near_pressure_mult, 0.0..=100.0).text("near_pressure_mult"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.viscosity_strength, 0.0..=10.0).text("viscosity_strength"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.capillary_mult, 0.0..=5.0).text("capillary_mult"))
-      .changed();
-    reshape |= ui
-      .add(egui::Slider::new(&mut p.particles_per_cell, 1..=32).text("particles_per_cell"))
-      .drag_stopped();
-    reshape |= ui
-      .add(
-        egui::Slider::new(&mut p.max_particles_per_cell, 1..=1024).text("max_particles_per_cell"),
-      )
-      .drag_stopped();
-
-    ui.separator();
-    ui.heading("Evaporation / condensation");
-    retune |= ui
-      .add(egui::Slider::new(&mut p.evap_rate, 0.0..=0.1).text("evap_rate"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.condense_rate, 0.0..=0.1).text("condense_rate"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.vapor_buoyancy, 0.0..=20.0).text("vapor_buoyancy"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.vapor_drift, 0.0..=5.0).text("vapor_drift"))
-      .changed();
-    retune |= ui
-      .add(egui::Slider::new(&mut p.condense_altitude_power, 0.5..=5.0).text("condense_alt_power"))
-      .changed();
+    for (heading, controls) in SLIDERS {
+      ui.separator();
+      ui.heading(*heading);
+      for control in *controls {
+        if control.show(ui, p) {
+          match control.effect {
+            Retune => retune = true,
+            Reshape => reshape = true,
+          }
+        }
+      }
+    }
 
     ui.separator();
     ui.heading("View");
