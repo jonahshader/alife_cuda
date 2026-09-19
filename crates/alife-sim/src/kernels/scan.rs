@@ -24,6 +24,36 @@ pub struct ScanCfg {
   pub n: u32,
 }
 
+/// The entries one unit owns, as a half-open range.
+///
+/// Both block-walking passes take it from [`scan_block`], so they cannot
+/// disagree about which entries a unit owns.
+#[derive(CubeType, Clone, Copy)]
+pub struct ScanBlock {
+  pub begin: usize,
+  pub end: usize,
+}
+
+/// The entries unit `t` owns. `begin` is clamped as well as `end`: a unit past
+/// the last entry would otherwise get `end < begin`, and the loop bound
+/// reaches the kernel as `end - begin` and underflows — the same trap
+/// `grid::sort_cells` guards against.
+#[cube]
+fn scan_block(t: usize, #[comptime] cfg: ScanCfg) -> ScanBlock {
+  let block = comptime!(cfg.n.div_ceil(SCAN_THREADS) as usize);
+  let n = comptime!(cfg.n as usize);
+
+  let mut begin = t * block;
+  if begin > n {
+    begin = n;
+  }
+  let mut end = begin + block;
+  if end > n {
+    end = n;
+  }
+  ScanBlock { begin, end }
+}
+
 #[cube(launch)]
 #[allow(clippy::needless_range_loop)]
 pub fn block_sums(values: &[u32], partials: &mut [u32], #[comptime] cfg: ScanCfg) {
@@ -31,18 +61,10 @@ pub fn block_sums(values: &[u32], partials: &mut [u32], #[comptime] cfg: ScanCfg
   if t >= comptime!(SCAN_THREADS as usize) {
     terminate!();
   }
-  let block = comptime!(cfg.n.div_ceil(SCAN_THREADS) as usize);
-  let n = comptime!(cfg.n as usize);
-  let begin = t * block;
+  let block = scan_block(t, cfg);
   let mut sum = 0u32;
-  if begin < n {
-    let mut end = begin + block;
-    if end > n {
-      end = n;
-    }
-    for c in begin..end {
-      sum += values[c];
-    }
+  for c in block.begin..block.end {
+    sum += values[c];
   }
   partials[t] = sum;
 }
@@ -80,20 +102,12 @@ pub fn write_starts(
   if t >= comptime!(SCAN_THREADS as usize) {
     terminate!();
   }
-  let block = comptime!(cfg.n.div_ceil(SCAN_THREADS) as usize);
-  let n = comptime!(cfg.n as usize);
-  let begin = t * block;
-  if begin < n {
-    let mut end = begin + block;
-    if end > n {
-      end = n;
-    }
-    let mut running = partials[t];
-    for c in begin..end {
-      starts[c] = running;
-      cursor[c] = running;
-      running += values[c];
-    }
+  let block = scan_block(t, cfg);
+  let mut running = partials[t];
+  for c in block.begin..block.end {
+    starts[c] = running;
+    cursor[c] = running;
+    running += values[c];
   }
 }
 
