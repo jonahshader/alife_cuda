@@ -14,6 +14,7 @@ pub mod life;
 pub mod metrics;
 pub mod params;
 pub mod particles;
+pub mod popdump;
 pub mod rng;
 pub mod runtime;
 pub mod sim;

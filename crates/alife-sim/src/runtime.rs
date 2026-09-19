@@ -154,6 +154,29 @@ impl AnySim {
     dispatch!(self, sim => sim.organism_count())
   }
 
+  /// Write the population out; see [`crate::popdump`].
+  pub fn save_population(
+    &self,
+    path: &std::path::Path,
+  ) -> Result<(), crate::popdump::PopDumpError> {
+    dispatch!(self, sim => crate::popdump::write(
+      path,
+      sim.population(),
+      sim.bodies(),
+      sim.step_count(),
+      sim.seed(),
+    ))
+  }
+
+  /// Install a saved population and re-grow its bodies; see
+  /// [`crate::popdump::restore`].
+  pub fn load_population(
+    &mut self,
+    snapshot: &crate::popdump::PopSnapshot,
+  ) -> Result<usize, crate::popdump::PopDumpError> {
+    dispatch!(self, sim => crate::popdump::restore(sim, snapshot))
+  }
+
   /// Write one row of the metrics time series; see [`crate::metrics`].
   pub fn sample_metrics(&self, sampler: &mut crate::metrics::Sampler) -> std::io::Result<()> {
     dispatch!(self, sim => sampler.sample(sim))
