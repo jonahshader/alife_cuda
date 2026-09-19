@@ -14,9 +14,11 @@ pub mod population;
 pub mod seed;
 pub mod shape;
 pub mod slots;
+pub mod species;
 
 pub use population::{
   Genome, LimbDevice, LimbHost, LimbRecord, OrganismDevice, OrganismHost, PartType, Population,
   PopulationDevice,
 };
 pub use shape::{BrainShape, FEATURE_DIM, IDENTITY_DIM, InitKind, N_TYPES, SENSOR_DIM, SliceSpec};
+pub use species::species_distance;
