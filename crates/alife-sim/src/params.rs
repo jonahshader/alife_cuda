@@ -253,7 +253,7 @@ impl SimParams {
       ("dt", self.dt),
     ];
     for (name, value) in positive {
-      if value.is_nan() || value <= 0.0 || !value.is_finite() {
+      if value <= 0.0 || !value.is_finite() {
         return Err(format!(
           "--{name} must be a positive finite number, got {value}"
         ));
@@ -301,7 +301,7 @@ impl SimParams {
       ("angle-sigma", self.angle_sigma),
     ];
     for (name, value) in sigmas {
-      if value.is_nan() || value < 0.0 || !value.is_finite() {
+      if value < 0.0 || !value.is_finite() {
         return Err(format!(
           "--{name} must be a non-negative finite number, got {value}"
         ));

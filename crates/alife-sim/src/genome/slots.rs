@@ -34,6 +34,9 @@ pub struct SlotScan {
 
 impl SlotScan {
   pub fn alloc<R: Runtime>(client: &ComputeClient<R>, len: usize) -> Self {
+    // `scatter_free` finds the total at entry `n - 1`, so an empty scan
+    // would underflow that index before any unit could terminate.
+    assert!(len >= 1, "a slot scan needs at least one slot");
     let words = len * size_of::<u32>();
     Self {
       free_flags: client.empty(words),

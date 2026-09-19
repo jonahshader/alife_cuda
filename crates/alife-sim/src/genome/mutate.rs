@@ -61,6 +61,13 @@ pub struct MutateCfg {
 
 impl MutateCfg {
   pub fn new(pop: &Population) -> Self {
+    // `pick(roll, n)` computes `n - 1`, so a zero here would wrap on the
+    // device; `SimParams::validate` floors both, this is the backstop for
+    // callers that build a population from unvalidated params.
+    assert!(
+      pop.max_limbs >= 1 && pop.max_particles_per_limb >= 1,
+      "max_limbs and max_particles_per_limb must be at least 1"
+    );
     Self {
       param_count: pop.shape.param_count() as u32,
       max_limbs: pop.max_limbs as u32,
