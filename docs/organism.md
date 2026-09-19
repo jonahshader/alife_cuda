@@ -113,8 +113,8 @@ projections are reused across a body's tokens and are cheap. Trunk width is
 therefore a first-class throughput knob, and "beefy" means tens of thousands
 of parameters, not millions. `alife_cuda_2`'s custom fp16 batched-GEMV
 kernel (one block per agent, coalesced half reads, fp32 accumulate) is the
-starting point for the trunk; its block-DAG engine assumes one MLP
-architecture per population and is not ported as-is.
+design the trunk kernel follows, rewritten in CubeCL; its block-DAG engine
+assumes one MLP architecture per population and is not ported.
 
 ## World coupling and life cycle
 
@@ -209,6 +209,17 @@ soil alone drives a split, and the controls must separate causes:
   capsule collision is the upgrade path, not the start.
 - 2026-09-18 — **Plants first.** The locomotion stall is the one
   project-killing failure mode, and anchored organisms do not have it.
+- 2026-09-18 — **Substrate: Rust + CubeCL, pinned to an exact
+  pre-release.** CPU and Radeon support are musts, Intel a bonus, Mac
+  possible if the project is ever gamified. Kokkos and AdaptiveCpp reach
+  AMD only through ROCm (short consumer-card list, no AMD on Windows) and
+  never reach Metal; wgpu with hand-written WGSL reaches every GPU but has
+  no native CPU path (software Vulkan only) and no generics. CubeCL is one
+  Rust kernel language over CPU (LLVM JIT), CUDA, HIP, Vulkan, Metal, and
+  WebGPU, with tensor cores on the native backends if the brain ever
+  becomes GEMM-shaped. It is alpha with breaking changes between minor
+  versions; the mitigation is an exact version pin bumped deliberately.
+  The C++/CUDA tree is the reference until parity, then deleted.
 - 2026-09-18 — **Fluid solver swap (FLIP/PIC) is on hold.** Fluid fidelity
   is not on the path to emergence. SPH kernel optimization stays relevant
   because bodies ride on the same per-particle cost.

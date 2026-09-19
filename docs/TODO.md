@@ -48,15 +48,18 @@ the spec, don't re-derive it.
   renders one frame offscreen and exits — the minimum for an agent to look
   at the sim without parking a window.
 
-## Code health
+## Code health (C++ tree — carry into the port, don't fix in place)
 
-- Remaining ports from `alife_cuda_2`: CPU/GPU duality (Device enum + OpenMP
-  fallbacks) for debuggability; determinism infrastructure (counter-based
-  RNG is in for the fluid via Random123, fixed-point energy and determinism
-  tests are not); `CopyLevel` enum for partial state copies
-  (FULL/NORMAL/RENDER).
-- Redesign `World` as a top-level composition of all systems (soil + fluid +
-  organisms).
+- CPU/GPU duality is subsumed by CubeCL's CPU runtime. `CopyLevel` is not
+  needed: renderers read device buffers directly. Determinism tests
+  (same-seed bitwise, CPU vs GPU) are part of the port.
+- `World` as a top-level composition of all systems (soil + fluid +
+  organisms) with one init and one step shared by headless and GUI; the
+  C++ headless loop and the FluidSoil screen each build the systems by
+  hand.
+- The fluid file carries a soil-free duplicate of the density, accel, and
+  evap kernels and step function, reachable only from the commented-out
+  FluidTest2 screen. Port only the soil-coupled path.
 - `--extended-lambda` and `--expt-relaxed-constexpr` are set in
   `CMakeLists.txt` but nothing uses device lambdas or device-side
   `constexpr`; drop them.
@@ -110,13 +113,29 @@ the spec, don't re-derive it.
   superseded by the plant milestone; delete or absorb once particle-body
   plants render.
 
-## Tooling
+## Substrate: Rust + CubeCL (decided 2026-09-18, see `organism.md` decisions)
 
-- **Rust port — revisit, not now** (decided 2026-09-18). The codebase is a
-  good fit (25 flat kernels, no shared memory / CUB / cuBLAS, thrust as
-  containers only) but NVIDIA's `cuda-oxide` is alpha: pinned nightly,
-  custom LLVM 21, git-install, Linux only. Re-evaluate when it reaches
-  crates.io on stable Rust. If curious sooner, the cheap probe is porting
-  `particle_fluid2.cu` alone as a standalone experiment. GL interop would
-  need two hand-declared FFI functions (`cuGraphicsGLRegisterBuffer` /
-  `RegisterImage`); no crate exposes them.
+The sim moves to Rust with kernels in CubeCL, pinned to an exact
+pre-release and bumped deliberately. The C++/CUDA tree stays as the
+reference until the port reaches parity, then is deleted. The C++
+maintenance items below are therefore **not** done in C++.
+
+- **Spike first, port second.** One kernel (SPH density or grid populate)
+  running identically on the CPU, CUDA, and wgpu/Vulkan runtimes, in a
+  Cargo workspace at the repo root (`crates/`). The spike exists to answer
+  the unknowns, not to be kept: (1) can the CubeCL wgpu runtime share a
+  device and buffers with a rendering `wgpu` instance and egui, so
+  compute output renders without a copy; (2) what the CPU runtime's LLVM
+  dependency (`cubecl-llvm`) needs on a fresh machine and whether a
+  GPU-less laptop can build it; (3) does the CUDA runtime work on the
+  dev box's sm_120 with CUDA 13.3; (4) is a CubeCL kernel steppable in a
+  debugger on the CPU runtime. Record the answers in `perf.md` and the
+  decisions log.
+- **Port fluid and soil** (~1.5k lines; the L-system trees do not come
+  along). Same SPH design and constants. Headless mode, sim params as one
+  declaration each (the X-macro's job, via a derive or macro_rules),
+  per-kernel timing via timestamp queries, format and lint targets.
+- **Windowing and UI**: winit + egui replace SDL + ImGui; rendering is
+  wgpu, so the CUDA-GL interop disappears.
+- **Determinism**: counter-based RNG as today; the CPU runtime is the
+  reference for a same-seed CPU-vs-GPU comparison test.
