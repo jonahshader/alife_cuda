@@ -177,6 +177,27 @@ macro_rules! define_soa {
                 ::core::mem::size_of::<<$ty0 as $crate::soa::SoaField>::Raw>()
                 $( + ::core::mem::size_of::<<$ty as $crate::soa::SoaField>::Raw>() )*;
 
+            /// Declared fields, which is how many arrays a dump holds. A
+            /// reader of an older dump takes a prefix of them
+            /// ([`Self::read_fields_prefix`]).
+            pub const FIELD_COUNT: usize = 1 $( + { let _ = ::core::mem::size_of::<$ty>(); 1 } )*;
+
+            /// Bytes one element occupies in a dump written by a format
+            /// version that only had the first `fields` arrays.
+            pub const fn raw_bytes_prefix(fields: usize) -> usize {
+                let sizes = [
+                    ::core::mem::size_of::<<$ty0 as $crate::soa::SoaField>::Raw>(),
+                    $( ::core::mem::size_of::<<$ty as $crate::soa::SoaField>::Raw>(), )*
+                ];
+                let mut total = 0;
+                let mut i = 0;
+                while i < fields {
+                    total += sizes[i];
+                    i += 1;
+                }
+                total
+            }
+
             /// `n` elements per field, at the field's declared initial value.
             pub fn new(n: usize) -> Self {
                 Self {
@@ -206,6 +227,19 @@ macro_rules! define_soa {
                 self.$field0.len()
             }
 
+            /// Move every element of `other` onto the end of this one,
+            /// emptying it — `Vec::append` per field.
+            pub fn append(&mut self, other: &mut Self) {
+                self.$field0.append(&mut other.$field0);
+                $( self.$field.append(&mut other.$field); )*
+            }
+
+            /// Copy element `i` of `src` onto the end of this one.
+            pub fn push_from(&mut self, src: &Self, i: usize) {
+                self.$field0.push(src.$field0[i]);
+                $( self.$field.push(src.$field[i]); )*
+            }
+
             pub fn is_empty(&self) -> bool {
                 self.len() == 0
             }
@@ -223,10 +257,27 @@ macro_rules! define_soa {
                 input: &mut R,
                 n: usize,
             ) -> std::io::Result<Self> {
-                Ok(Self {
-                    $field0: $crate::soa::read_field(input, n)?,
-                    $( $field: $crate::soa::read_field(input, n)?, )*
-                })
+                Self::read_fields_prefix(input, n, Self::FIELD_COUNT)
+            }
+
+            /// Read the first `fields` arrays only; the rest stay at their
+            /// declared initial value. That is how a dump written before a
+            /// field existed still loads.
+            pub fn read_fields_prefix<R: std::io::Read>(
+                input: &mut R,
+                n: usize,
+                fields: usize,
+            ) -> std::io::Result<Self> {
+                let mut out = Self::new(n);
+                #[allow(unused_mut, unused_variables, unused_assignments)]
+                let mut k = 0usize;
+                if k < fields { out.$field0 = $crate::soa::read_field(input, n)?; }
+                k += 1;
+                $(
+                    if k < fields { out.$field = $crate::soa::read_field(input, n)?; }
+                    k += 1;
+                )*
+                Ok(out)
             }
         }
 
