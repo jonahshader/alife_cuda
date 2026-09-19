@@ -47,15 +47,15 @@ __global__ void populate_grid_indices(SPHPtrs sph, ParticleGridPtrs grid, int ma
     grid.grid_indices[grid_index * max_particles_per_cell + slot_index] = i;
 }
 
-// TODO: the provided dst is calculated using sqrt, but we square it here...
-__device__ float viscosity_kernel(float radius, float dst) {
-  float q = dst / radius;
-  if (q > 1.0f)
+// poly6: (r^2 - d^2)^3 * 4/(pi r^8), so it only ever needs the squared distance
+__device__ float viscosity_kernel(float radius, float dst2) {
+  float radius2 = radius * radius;
+  if (dst2 > radius2)
     return 0.0f;
 
   const float normalization_factor_2d = 4.0f / (M_PI_F * powf(radius, 8));
 
-  float value = radius * radius - dst * dst;
+  float value = radius2 - dst2;
   return normalization_factor_2d * value * value * value;
 }
 // gradient of the smoothing kernel
@@ -577,18 +577,17 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
         float other_pressure = calculate_pressure(other_density, params);
         float other_near_pressure = calculate_near_pressure(other_near_density, params);
         float other_mass = sph.mass[particle_id];
+        float2 offset = pos - other_pos;
         pressure_force = pressure_force -
                          other_mass *
                              ((pressure + other_pressure + near_pressure + other_near_pressure) /
                               (4.0f * other_density)) *
-                             density_kernel_gradient(params.smoothing_radius, pos - other_pos);
+                             density_kernel_gradient(params.smoothing_radius, offset);
 
         // viscosity
-        // TODO: distance is calculated twice. once here and once above.
         if (particle_id != pid) {
           float2 diff = sph.vel[particle_id] - vel;
-          float dist = length(pos - other_pos);
-          float influence = viscosity_kernel(params.smoothing_radius, dist);
+          float influence = viscosity_kernel(params.smoothing_radius, length2(offset));
           viscosity_force = viscosity_force + influence * diff; // scale with mass?
         }
       }
@@ -665,18 +664,17 @@ __global__ void calculate_accel(SPHPtrs sph, ParticleGridPtrs grid, int max_part
         float other_pressure = calculate_pressure(other_density, params);
         float other_near_pressure = calculate_near_pressure(other_near_density, params);
         float other_mass = sph.mass[particle_id];
+        float2 offset = pos - other_pos;
         pressure_force =
             pressure_force -
             other_mass *
                 ((total_pressure + other_pressure + other_near_pressure) / (4.0f * other_density)) *
-                density_kernel_gradient(params.smoothing_radius, pos - other_pos);
+                density_kernel_gradient(params.smoothing_radius, offset);
 
         // viscosity
-        // TODO: distance is calculated twice. once here and once above.
         if (particle_id != pid) {
           float2 diff = sph.vel[particle_id] - vel;
-          float dist = length(pos - other_pos);
-          float influence = viscosity_kernel(params.smoothing_radius, dist);
+          float influence = viscosity_kernel(params.smoothing_radius, length2(offset));
           viscosity_force = viscosity_force + influence * diff; // scale with mass?
         }
       }
