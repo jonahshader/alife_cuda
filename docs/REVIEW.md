@@ -9,6 +9,22 @@ acknowledgements, no changelog, no pre-milestone tuning (that goes to
 
 ## Pending
 
+- **2026-09-19 — four design readings the orchestrating session took so
+  the builders would not block, each recorded in `organism.md`'s
+  decisions; say if any is wrong.** (1) The brain's latent state is
+  RMS-normalized on its way into the recurrence, outside the parameter
+  table, because the spec's tick as written diverged to infinity by step
+  45; the textbook fix (pre-norm per block) costs six parameter slices.
+  (2) The sprout head decides *when* a genome's limb records grow, never
+  what they are, so the genome stays the heritable body plan; the type
+  logits are computed and unused. (3) `contact` is the spec's literal
+  `solid fraction > 0.5`, which puts pure clay (0.50) on the edge — soil
+  presence would be edge-free but blind to soil type. (4) Terrain mode 1
+  is frozen because the parity references pin it; the experiment's terrain
+  with headroom is mode 2. Also: `main` was pushed at the end of every
+  green cycle, as the delegation cycle's step 6 allows; the C++ tree is
+  untouched and still buildable.
+
 - **2026-09-19 — the soil-specialization experiment ran, and the answer is
   no.** Eleven runs, `./scripts/soil_experiment.sh 60000`, CUDA,
   `--terrain-mode 2 --founders 60 --max-organisms 1024`, seeds 1–3, about
