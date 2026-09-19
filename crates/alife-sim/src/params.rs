@@ -195,9 +195,15 @@ sim_params! {
     angle_sigma: f32 = 0.05, "organism.angle_sigma", "angle-sigma",
         "Gaussian sigma in radians applied to a newborn's limb grow angles";
     growth_sigma: f32 = 0.05, "organism.growth_sigma", "growth-sigma",
-        "Gaussian sigma applied to a newborn's per-limb growth bias and growth rate";
+        "Gaussian sigma applied to a newborn's per-limb growth genes";
     growth_rate: f32 = 0.05, "organism.growth_rate", "growth-rate",
         "Energy a limb absorbs per life tick, for a founder's and a new limb's record";
+    thickness_root: f32 = 0.04, "organism.thickness_root", "thickness-root",
+        "Thickness a root limb grows to, for a founder's and a new limb's record";
+    thickness_stem: f32 = 0.05, "organism.thickness_stem", "thickness-stem",
+        "Thickness a stem limb grows to, for a founder's and a new limb's record";
+    thickness_leaf: f32 = 0.03, "organism.thickness_leaf", "thickness-leaf",
+        "Thickness a leaf or seed limb grows to, for a founder's and a new limb's record";
     structural_rate: f32 = 0.1, "organism.structural_rate", "structural-rate",
         "Probability that a birth also makes one structural edit";
     limb_segment_length: f32 = 0.15, "organism.limb_segment_length", "limb-segment-length",
@@ -454,6 +460,20 @@ impl SimParams {
       if value < 0.0 || !value.is_finite() {
         return Err(format!(
           "--{name} must be a non-negative finite number, got {value}"
+        ));
+      }
+    }
+    // A limb's volume goes as its thickness squared, and growth solves a
+    // length back out of a volume by dividing by it, so a founder thickness
+    // of zero is a limb that grows an unbounded length for nothing.
+    for (name, value) in [
+      ("thickness-root", self.thickness_root),
+      ("thickness-stem", self.thickness_stem),
+      ("thickness-leaf", self.thickness_leaf),
+    ] {
+      if value <= 0.0 || !value.is_finite() {
+        return Err(format!(
+          "--{name} must be a positive finite number, got {value}"
         ));
       }
     }

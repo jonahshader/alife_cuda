@@ -11,7 +11,7 @@
 //!
 //! ```text
 //!   char[8]  magic "ALIFEPOP"
-//!   uint32   version (2)
+//!   uint32   version (3)
 //!   uint32   organism slots (max_organisms)
 //!   uint32   limb records per organism (max_limbs)
 //!   uint32   brain parameters per organism
@@ -24,20 +24,22 @@
 //!     (uint32);
 //!   the limb SoA over `max_organisms * max_limbs` records — part_type,
 //!     length, parent, child_slot (uint8), grow_angle (float), identity
-//!     (IDENTITY_DIM floats), growth_bias, growth_rate (float);
+//!     (IDENTITY_DIM floats), growth_bias, growth_rate, target_thickness
+//!     (float);
 //!   brain[max_organisms * param_count] (float);
 //!   latents[max_organisms * latent_len] (float);
 //!   anchors[max_organisms] (float2).
 //! ```
 //!
 //! As with `dump.rs`, the field order is the SoA declaration order, so adding
-//! a field there extends this format. Version 1 is the same file without the
-//! limb SoA's last two float arrays — `growth_bias` and `growth_rate`, which
-//! the growth chunk added — and it still loads: the arrays before them are a
-//! prefix of the current ones, and a version-1 organism comes back with a
-//! founder's growth genes (bias 0, rate `--growth-rate`). The four shape words
-//! in the header are checked against the run's own before a byte of it is
-//! used.
+//! a field there extends this format. The older versions are the same file
+//! without the limb SoA's trailing float arrays, and they still load, because
+//! the arrays before them are a prefix of the current ones: version 1 stops
+//! before `growth_bias` and comes back with a founder's growth genes (bias 0,
+//! rate `--growth-rate`), version 2 stops before `target_thickness` and comes
+//! back with the `--thickness-*` param of each record's part type. The four
+//! shape words in the header are checked against the run's own before a byte
+//! of it is used.
 //!
 //! **What a load restores, and what it does not.** The genomes, the lineage
 //! fields, the energies, the latent state and the anchors come back exactly as
@@ -62,15 +64,15 @@ use crate::genome::{LimbHost, OrganismHost, Population};
 use crate::sim::Sim;
 
 pub const MAGIC: &[u8; 8] = b"ALIFEPOP";
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Limb SoA fields a file of version `v` carries: version 1 stopped before
-/// `growth_bias`.
+/// `growth_bias`, version 2 before `target_thickness`.
 fn limb_fields(version: u32) -> usize {
-  if version < 2 {
-    LimbHost::FIELD_COUNT - 2
-  } else {
-    LimbHost::FIELD_COUNT
+  match version {
+    0 | 1 => LimbHost::FIELD_COUNT - 3,
+    2 => LimbHost::FIELD_COUNT - 1,
+    _ => LimbHost::FIELD_COUNT,
   }
 }
 
@@ -103,8 +105,9 @@ pub enum PopDumpError {
 /// A population as it was written, before anything is done with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PopSnapshot {
-  /// Format version the file was written at. A version-1 file carries no
-  /// growth genes, and [`restore`] fills them with the founder values.
+  /// Format version the file was written at. A file older than the current
+  /// version carries only some of the growth genes, and [`restore`] fills the
+  /// rest with the founder values.
   pub version: u32,
   pub max_organisms: usize,
   pub max_limbs: usize,
@@ -279,17 +282,30 @@ pub fn restore<R: Runtime>(
   }
 
   let plants = snapshot.plants();
-  let growth_rate = sim.params().growth_rate;
+  let params = *sim.params();
   {
     let access = sim.body_access();
     access.pop.organisms = snapshot.organisms.clone();
     access.pop.limbs = snapshot.limbs.clone();
-    // A version-1 file predates the growth genes, and its records came back
-    // at the SoA's zeroes. A zero rate is a limb that can never grow, so the
-    // founder values are what an old population comes back on.
+    // A file older than a growth gene predates it, and its records came back
+    // at the SoA's zeroes. A zero rate is a limb that can never grow and a
+    // zero thickness is one with no volume at all, so the founder values are
+    // what an old population comes back on.
     if snapshot.version < 2 {
       access.pop.limbs.growth_bias.fill(0.0);
-      access.pop.limbs.growth_rate.fill(growth_rate);
+      access.pop.limbs.growth_rate.fill(params.growth_rate);
+    }
+    if snapshot.version < 3 {
+      // Present records only, as mutation perturbs present records only: an
+      // absent record's thickness is the genome of nothing, and a structural
+      // add writes its own.
+      for i in 0..access.pop.limbs.len() {
+        let part = access.pop.limbs.part_type[i];
+        if part.is_present() {
+          access.pop.limbs.target_thickness[i] =
+            crate::genome::seed::founder_thickness(&params, part);
+        }
+      }
     }
     access.pop.brain = snapshot.brain.clone();
     access.pop.latents = snapshot.latents.clone();
@@ -465,13 +481,11 @@ mod tests {
     assert_eq!(target.organism_count(), 3);
   }
 
-  /// A file written before the growth genes existed still loads, and its
-  /// organisms come back able to grow rather than frozen at a zero rate.
-  #[test]
-  fn a_version_one_file_loads_with_the_founder_growth_genes() {
-    let mut source = world();
-    assert_eq!(spawn_founders(&mut source, 2), 2);
-    let path = temp_path("v1");
+  /// Write a population and age the file down to `version`: rewrite the
+  /// version word and drop the growth-gene arrays that version did not have,
+  /// which are the tail of the limb block.
+  fn aged_file(source: &Sim<CpuRuntime>, version: u32, tag: &str) -> PopSnapshot {
+    let path = temp_path(tag);
     write(
       &path,
       source.population(),
@@ -481,22 +495,35 @@ mod tests {
     )
     .unwrap();
 
-    // Turn the file back into what version 1 wrote: the version word, and the
-    // limb SoA without its two growth arrays.
     let mut bytes = std::fs::read(&path).unwrap();
-    bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    bytes[8..12].copy_from_slice(&version.to_le_bytes());
     let records = source.population().max_organisms * source.population().max_limbs;
     let organisms = source.population().max_organisms * OrganismHost::RAW_BYTES;
-    // Four one-byte fields, `grow_angle` and `identity`; the two growth
-    // arrays are the tail of the limb block.
-    let start = HEADER_BYTES as usize
+    // Four one-byte fields, `grow_angle` and `identity`, then one float
+    // array per growth gene — the ones the older version lacks are the tail
+    // of the limb block, not all of it.
+    const HEAD_FIELDS: usize = 6;
+    let head = HEADER_BYTES as usize
       + organisms
       + records * (4 + 4 + 4 * crate::genome::shape::IDENTITY_DIM);
-    bytes.drain(start..start + 2 * records * 4);
+    let kept = limb_fields(version) - HEAD_FIELDS;
+    let dropped = LimbHost::FIELD_COUNT - limb_fields(version);
+    let start = head + kept * records * 4;
+    bytes.drain(start..start + dropped * records * 4);
     std::fs::write(&path, &bytes).unwrap();
 
     let snapshot = read(&path).unwrap();
     std::fs::remove_file(&path).ok();
+    snapshot
+  }
+
+  /// A file written before the growth genes existed still loads, and its
+  /// organisms come back able to grow rather than frozen at a zero rate.
+  #[test]
+  fn a_version_one_file_loads_with_the_founder_growth_genes() {
+    let mut source = world();
+    assert_eq!(spawn_founders(&mut source, 2), 2);
+    let snapshot = aged_file(&source, 1, "v1");
     assert_eq!(snapshot.version, 1);
     assert_eq!(snapshot.limbs.identity, source.population().limbs.identity);
     assert_eq!(
@@ -504,6 +531,7 @@ mod tests {
       source.population().limbs.grow_angle
     );
     assert!(snapshot.limbs.growth_rate.iter().all(|r| *r == 0.0));
+    assert!(snapshot.limbs.target_thickness.iter().all(|t| *t == 0.0));
 
     let mut target = world();
     assert_eq!(restore(&mut target, &snapshot).unwrap(), 2);
@@ -523,6 +551,42 @@ mod tests {
         .growth_bias
         .iter()
         .all(|b| *b == 0.0)
+    );
+  }
+
+  /// A version-2 file predates `target_thickness` alone: its growth bias and
+  /// rate come back as written, and every record takes its part type's
+  /// founder thickness.
+  #[test]
+  fn a_version_two_file_loads_with_the_founder_thicknesses() {
+    let mut source = world();
+    assert_eq!(spawn_founders(&mut source, 2), 2);
+    let snapshot = aged_file(&source, 2, "v2");
+    assert_eq!(snapshot.version, 2);
+    assert_eq!(
+      snapshot.limbs.growth_rate,
+      source.population().limbs.growth_rate
+    );
+    assert!(snapshot.limbs.target_thickness.iter().all(|t| *t == 0.0));
+
+    let mut target = world();
+    assert_eq!(restore(&mut target, &snapshot).unwrap(), 2);
+    let params = *target.params();
+    let limbs = &target.population().limbs;
+    for i in 0..limbs.len() {
+      if limbs.part_type[i].is_present() {
+        assert_eq!(
+          limbs.target_thickness[i],
+          crate::genome::seed::founder_thickness(&params, limbs.part_type[i]),
+          "record {i}"
+        );
+      }
+    }
+    // And the founders it came from were written with exactly those values,
+    // so an aged file is indistinguishable from a current one here.
+    assert_eq!(
+      limbs.target_thickness,
+      source.population().limbs.target_thickness
     );
   }
 

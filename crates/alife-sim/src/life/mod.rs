@@ -596,7 +596,7 @@ mod tests {
     let client = CpuRuntime::client(&CpuDevice);
     let shape = BrainShape::from_params(params);
     let mut pop = Population::new(&client, params, shape);
-    let genome = Genome::seed_plant(&shape, pop.max_limbs, 0, 1, params.growth_rate);
+    let genome = Genome::seed_plant(&shape, pop.max_limbs, 0, 1, params);
     pop.write_genome(0, &genome);
     pop.organisms.alive[0] = 1;
     let geom = WorldGeometry::from_params(params);

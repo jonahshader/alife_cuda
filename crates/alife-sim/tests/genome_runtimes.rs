@@ -61,13 +61,7 @@ fn population<R: Runtime>(client: &ComputeClient<R>, params: &SimParams) -> Popu
   let shape = BrainShape::from_params(params);
   let mut pop = Population::new(client, params, shape);
   for slot in 0..4u32 {
-    let genome = Genome::seed_plant(
-      &shape,
-      pop.max_limbs,
-      slot,
-      100 + slot as u64,
-      params.growth_rate,
-    );
+    let genome = Genome::seed_plant(&shape, pop.max_limbs, slot, 100 + slot as u64, params);
     pop.write_genome(slot as usize, &genome);
     pop.organisms.alive[slot as usize] = 1;
   }

@@ -420,8 +420,9 @@ geometry the brain will read — beside the population tensors.
   (u8), `grow_angle` (f32, the rest angle at the base joint, measured
   against the parent segment's direction — the root, being its own parent,
   measures against the world frame instead, 0 at +x and counter-clockwise),
-  `identity` (`[f32; 4]`), `growth_bias` and `growth_rate` (f32, the
-  softmax logit and the per-tick energy cap of *Growth*). A field appended
+  `identity` (`[f32; 4]`), `growth_bias`, `growth_rate` and
+  `target_thickness` (f32, the softmax logit, the per-tick energy cap and
+  the thickness at full length of *Growth*). A field appended
   here appends an array to the population file, which is what lets an older
   one still load (`popdump.rs`).
 - Continuous, `[max_organisms × BrainShape::param_count()]` f32 on the

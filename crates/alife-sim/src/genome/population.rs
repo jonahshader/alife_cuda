@@ -122,11 +122,17 @@ define_soa! {
         /// Energy this limb can absorb in one life tick — its own tempo, and
         /// the cap its softmax share is clamped at. Founders and structural
         /// adds start at `--growth-rate`.
-        ///
-        /// Declared last, with `growth_bias`: the population file's field
-        /// order is this declaration order, so a field appended here is a
-        /// field an older file simply lacks (`crate::popdump`).
         growth_rate: f32,
+        /// The thickness this limb grows to, reached at full length: a limb's
+        /// live thickness is `target_thickness * sqrt(grown / length)`, so it
+        /// thickens as it lengthens (`docs/organism.md`, *Growth*). Founders
+        /// and structural adds take the `--thickness-*` param of their part
+        /// type.
+        ///
+        /// Declared last, with the other growth genes: the population file's
+        /// field order is this declaration order, so a field appended here is
+        /// a field an older file simply lacks (`crate::popdump`).
+        target_thickness: f32,
     }
 }
 
@@ -182,6 +188,7 @@ pub struct LimbArgs {
   pub identity: Box<[f32]>,
   pub growth_bias: Box<[f32]>,
   pub growth_rate: Box<[f32]>,
+  pub target_thickness: Box<[f32]>,
 }
 
 /// Launch arguments are consumed by a launch, so every launch site builds its
@@ -198,6 +205,7 @@ pub fn limb_args<R: Runtime>(limbs: &LimbDevice) -> LimbArgsLaunch<R> {
     whole(&limbs.identity, n * IDENTITY_DIM),
     whole(&limbs.growth_bias, n),
     whole(&limbs.growth_rate, n),
+    whole(&limbs.target_thickness, n),
   )
 }
 
@@ -216,6 +224,7 @@ pub struct LimbRecord {
   pub identity: [f32; IDENTITY_DIM],
   pub growth_bias: f32,
   pub growth_rate: f32,
+  pub target_thickness: f32,
 }
 
 /// One organism's genome: `max_limbs` records and one brain row.
@@ -384,6 +393,7 @@ impl Population {
       self.limbs.identity[i] = record.identity;
       self.limbs.growth_bias[i] = record.growth_bias;
       self.limbs.growth_rate[i] = record.growth_rate;
+      self.limbs.target_thickness[i] = record.target_thickness;
     }
     self.brain_row_mut(organism).copy_from_slice(&genome.brain);
     let init = self.shape.latent_init();
@@ -530,6 +540,7 @@ mod tests {
       pop.limbs.grow_angle[i] = i as f32 * 0.25;
       pop.limbs.growth_bias[i] = i as f32 * -0.5;
       pop.limbs.growth_rate[i] = i as f32 * 0.125;
+      pop.limbs.target_thickness[i] = 0.01 + i as f32 * 0.002;
       pop.limbs.identity[i] = [i as f32, -1.0, 0.5, i as f32 * 2.0];
     }
     for i in 0..pop.organisms.len() {

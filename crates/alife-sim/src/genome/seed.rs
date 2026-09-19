@@ -8,6 +8,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use super::population::{Genome, LimbRecord, PartType};
 use super::shape::{BrainShape, IDENTITY_DIM, InitKind};
+use crate::SimParams;
 use crate::rng::{gaussian_ref, threefry4x32_20_ref};
 
 /// Threefry key words 1..3 for the founder streams, so a founder's brain, its
@@ -35,20 +36,22 @@ impl Genome {
   /// identical founders and slot `n` is always the same founder.
   ///
   /// Every record starts at growth bias 0 — a bias only means anything
-  /// relative to its siblings — and at `growth_rate`, which is the
-  /// `--growth-rate` param; mutation moves both from there.
+  /// relative to its siblings — at the `--growth-rate` param, and at the
+  /// `--thickness-*` param of its part type ([`founder_thickness`]);
+  /// mutation moves all three from there.
   pub fn seed_plant(
     shape: &BrainShape,
     max_limbs: usize,
     slot: u32,
     seed: u64,
-    growth_rate: f32,
+    params: &SimParams,
   ) -> Self {
     assert!(
       max_limbs >= 3,
       "the seed plant needs three limb records, got {max_limbs}"
     );
     let mut genome = Genome::empty(shape, max_limbs);
+    let growth_rate = params.growth_rate;
 
     genome.limbs[0] = LimbRecord {
       part_type: PartType::Root,
@@ -60,6 +63,7 @@ impl Genome {
       identity: [0.0; IDENTITY_DIM],
       growth_bias: 0.0,
       growth_rate,
+      target_thickness: founder_thickness(params, PartType::Root),
     };
     genome.limbs[1] = LimbRecord {
       part_type: PartType::Stem,
@@ -70,6 +74,7 @@ impl Genome {
       identity: [0.0; IDENTITY_DIM],
       growth_bias: 0.0,
       growth_rate,
+      target_thickness: founder_thickness(params, PartType::Stem),
     };
     genome.limbs[2] = LimbRecord {
       part_type: PartType::Leaf,
@@ -80,6 +85,7 @@ impl Genome {
       identity: [0.0; IDENTITY_DIM],
       growth_bias: 0.0,
       growth_rate,
+      target_thickness: founder_thickness(params, PartType::Leaf),
     };
 
     fill_brain(&mut genome.brain, shape, slot, seed);
@@ -89,6 +95,21 @@ impl Genome {
       }
     }
     genome
+  }
+}
+
+/// The thickness a record of this part type starts at — a founder's, a
+/// structural add's, and what a population file older than the gene is read
+/// back with.
+///
+/// A seed record shares the leaf's: nothing grows one (a seed is a particle
+/// in flight, not a limb), so it needs a value rather than a value of its
+/// own. The reserved and absent codes take it too, for the same reason.
+pub fn founder_thickness(params: &SimParams, part: PartType) -> f32 {
+  match part {
+    PartType::Root => params.thickness_root,
+    PartType::Stem => params.thickness_stem,
+    _ => params.thickness_leaf,
   }
 }
 
@@ -137,9 +158,17 @@ mod tests {
     BrainShape::default()
   }
 
+  /// A founder is built from the params, so the test's expectations are too.
+  fn founder_params() -> SimParams {
+    SimParams {
+      growth_rate: 0.25,
+      ..SimParams::default()
+    }
+  }
+
   #[test]
   fn the_seed_plant_is_a_root_a_stem_and_a_leaf() {
-    let genome = Genome::seed_plant(&shape(), 16, 0, 1, 0.25);
+    let genome = Genome::seed_plant(&shape(), 16, 0, 1, &founder_params());
     assert_eq!(genome.limbs.len(), 16);
 
     assert_eq!(genome.limbs[0].part_type, PartType::Root);
@@ -157,10 +186,19 @@ mod tests {
     assert_eq!(genome.limbs[2].parent, 1);
     assert_eq!(genome.limbs[2].child_slot, 0);
 
+    let params = founder_params();
     for record in &genome.limbs[..3] {
       assert_eq!(record.growth_bias, 0.0);
       assert_eq!(record.growth_rate, 0.25);
+      assert_eq!(
+        record.target_thickness,
+        founder_thickness(&params, record.part_type)
+      );
     }
+    assert_ne!(
+      genome.limbs[0].target_thickness, genome.limbs[1].target_thickness,
+      "a root and a stem start at different thicknesses"
+    );
     for record in &genome.limbs[3..] {
       assert_eq!(record.part_type, PartType::Absent);
       assert_eq!(record.identity, [0.0; IDENTITY_DIM]);
@@ -169,18 +207,24 @@ mod tests {
 
   #[test]
   fn the_same_slot_and_seed_give_the_same_founder() {
-    let a = Genome::seed_plant(&shape(), 16, 5, 42, 0.25);
-    let b = Genome::seed_plant(&shape(), 16, 5, 42, 0.25);
+    let a = Genome::seed_plant(&shape(), 16, 5, 42, &founder_params());
+    let b = Genome::seed_plant(&shape(), 16, 5, 42, &founder_params());
     assert_eq!(a, b);
 
-    assert_ne!(Genome::seed_plant(&shape(), 16, 6, 42, 0.25), a);
-    assert_ne!(Genome::seed_plant(&shape(), 16, 5, 43, 0.25), a);
+    assert_ne!(
+      Genome::seed_plant(&shape(), 16, 6, 42, &founder_params()),
+      a
+    );
+    assert_ne!(
+      Genome::seed_plant(&shape(), 16, 5, 43, &founder_params()),
+      a
+    );
   }
 
   #[test]
   fn biases_are_zero_and_weights_scale_with_fan_in() {
     let shape = shape();
-    let genome = Genome::seed_plant(&shape, 16, 0, 7, 0.25);
+    let genome = Genome::seed_plant(&shape, 16, 0, 7, &founder_params());
     for slice in shape.slices() {
       let values = &genome.brain[slice.range.clone()];
       match slice.init {
@@ -204,7 +248,7 @@ mod tests {
 
   #[test]
   fn identity_vectors_differ_between_limbs() {
-    let genome = Genome::seed_plant(&shape(), 16, 3, 9, 0.25);
+    let genome = Genome::seed_plant(&shape(), 16, 3, 9, &founder_params());
     assert_ne!(genome.limbs[0].identity, genome.limbs[1].identity);
     assert_ne!(genome.limbs[1].identity, genome.limbs[2].identity);
     assert!(
@@ -229,7 +273,7 @@ mod tests {
     let client = CpuRuntime::client(&CpuDevice);
     let mut pop = Population::new(&client, &params, shape);
 
-    let genome = Genome::seed_plant(&shape, pop.max_limbs, 2, 11, 0.25);
+    let genome = Genome::seed_plant(&shape, pop.max_limbs, 2, 11, &params);
     pop.write_genome(2, &genome);
 
     assert_eq!(pop.brain_row(2), genome.brain.as_slice());

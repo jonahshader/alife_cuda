@@ -32,6 +32,10 @@ const STREAM_STRUCT: u32 = 3;
 const STREAM_NEW_IDENTITY: u32 = 4;
 /// The growth bias and the growth rate, two draws per record.
 const STREAM_GROWTH: u32 = 5;
+/// The target thickness, one draw per record. Its own stream rather than a
+/// third `STREAM_GROWTH` draw, so adding it left the bias and rate draws
+/// exactly where they were.
+const STREAM_THICKNESS: u32 = 6;
 
 /// Slots of the mutation knob buffer.
 pub const K_MUTATION_SIGMA: u32 = 0;
@@ -40,7 +44,18 @@ pub const K_ANGLE_SIGMA: u32 = 2;
 pub const K_STRUCTURAL_RATE: u32 = 3;
 pub const K_GROWTH_SIGMA: u32 = 4;
 pub const K_GROWTH_RATE: u32 = 5;
-pub const KNOB_COUNT: usize = 6;
+pub const K_THICKNESS_ROOT: u32 = 6;
+pub const K_THICKNESS_STEM: u32 = 7;
+pub const K_THICKNESS_LEAF: u32 = 8;
+pub const KNOB_COUNT: usize = 9;
+
+/// The floor a mutated `target_thickness` is held above.
+///
+/// A limb's volume goes as its thickness squared and growth solves a length
+/// back out of a volume, so a thickness of zero is a limb that grows without
+/// limit for nothing. `growth_rate`'s floor can be zero — a limb that absorbs
+/// nothing simply never grows — and this one cannot.
+pub const MIN_THICKNESS: f32 = 1e-3;
 
 /// Slots of the 4-word RNG buffer: the step, and the run's seed folded to one
 /// word.
@@ -182,6 +197,7 @@ pub fn mutate_structure(
     limbs.grow_angle[cbase + l] = limbs.grow_angle[pbase + l];
     limbs.growth_bias[cbase + l] = limbs.growth_bias[pbase + l];
     limbs.growth_rate[cbase + l] = limbs.growth_rate[pbase + l];
+    limbs.target_thickness[cbase + l] = limbs.target_thickness[pbase + l];
     for k in 0..dim {
       limbs.identity[(cbase + l) * dim + k] = limbs.identity[(pbase + l) * dim + k];
     }
@@ -205,6 +221,13 @@ pub fn mutate_structure(
         rate = 0.0f32;
       }
       limbs.growth_rate[cbase + l] = rate;
+      let mut thickness = limbs.target_thickness[cbase + l]
+        + knobs[K_GROWTH_SIGMA as usize]
+          * draw_gaussian(child, step, seed, STREAM_THICKNESS, l as u32);
+      if thickness < MIN_THICKNESS {
+        thickness = MIN_THICKNESS;
+      }
+      limbs.target_thickness[cbase + l] = thickness;
       for k in 0..dim {
         let index = (l * dim + k) as u32;
         limbs.identity[(cbase + l) * dim + k] += knobs[K_IDENTITY_SIGMA as usize]
@@ -265,7 +288,8 @@ pub fn mutate_structure(
         }
       }
       let at = cbase + slot as usize;
-      limbs.part_type[at] = 1u32 + pick(type_roll, 4u32);
+      let new_type = 1u32 + pick(type_roll, 4u32);
+      limbs.part_type[at] = new_type;
       limbs.length[at] = 1u32 + pick(length_roll, cfg.max_particles_per_limb);
       limbs.parent[at] = chosen;
       limbs.child_slot[at] = kids;
@@ -274,6 +298,16 @@ pub fn mutate_structure(
       // the run's growth rate.
       limbs.growth_bias[at] = 0.0f32;
       limbs.growth_rate[at] = knobs[K_GROWTH_RATE as usize];
+      // The thickness param of the type it came out as; a seed record shares
+      // the leaf's, as a founder's does.
+      let mut thickness = knobs[K_THICKNESS_LEAF as usize];
+      if new_type == 1u32 {
+        thickness = knobs[K_THICKNESS_ROOT as usize];
+      }
+      if new_type == 2u32 {
+        thickness = knobs[K_THICKNESS_STEM as usize];
+      }
+      limbs.target_thickness[at] = thickness;
       for k in 0..dim {
         limbs.identity[at * dim + k] =
           draw_gaussian(child, step, seed, STREAM_NEW_IDENTITY, k as u32);
@@ -373,6 +407,9 @@ pub fn knob_values(params: &SimParams) -> [f32; KNOB_COUNT] {
     params.structural_rate,
     params.growth_sigma,
     params.growth_rate,
+    params.thickness_root,
+    params.thickness_stem,
+    params.thickness_leaf,
   ]
 }
 
@@ -556,6 +593,7 @@ pub fn mutate_ref(
       pop.limbs.grow_angle[cbase + l] = pop.limbs.grow_angle[pbase + l];
       pop.limbs.growth_bias[cbase + l] = pop.limbs.growth_bias[pbase + l];
       pop.limbs.growth_rate[cbase + l] = pop.limbs.growth_rate[pbase + l];
+      pop.limbs.target_thickness[cbase + l] = pop.limbs.target_thickness[pbase + l];
       pop.limbs.identity[cbase + l] = pop.limbs.identity[pbase + l];
     }
 
@@ -571,6 +609,14 @@ pub fn mutate_ref(
         // The kernel's comparison, not `max`: they differ on NaN, and the
         // twin has to compute what the kernel computes.
         pop.limbs.growth_rate[cbase + l] = if rate < 0.0 { 0.0 } else { rate };
+        let thickness = pop.limbs.target_thickness[cbase + l]
+          + knobs[K_GROWTH_SIGMA as usize]
+            * draw_gaussian_ref(child, step_word, seed_word, STREAM_THICKNESS, l as u32);
+        pop.limbs.target_thickness[cbase + l] = if thickness < MIN_THICKNESS {
+          MIN_THICKNESS
+        } else {
+          thickness
+        };
         for k in 0..dim {
           let index = (l * dim + k) as u32;
           pop.limbs.identity[cbase + l][k] += knobs[K_IDENTITY_SIGMA as usize]
@@ -605,13 +651,19 @@ pub fn mutate_ref(
           })
           .count() as u32;
         let at = cbase + slot;
-        pop.limbs.part_type[at] = PartType::from_byte((1 + pick_ref(type_roll, 4)) as u8);
+        let new_type = 1 + pick_ref(type_roll, 4);
+        pop.limbs.part_type[at] = PartType::from_byte(new_type as u8);
         pop.limbs.length[at] = (1 + pick_ref(length_roll, max_len)) as u8;
         pop.limbs.parent[at] = chosen as u8;
         pop.limbs.child_slot[at] = kids as u8;
         pop.limbs.grow_angle[at] = (angle_roll * 2.0 - 1.0) * std::f32::consts::PI;
         pop.limbs.growth_bias[at] = 0.0;
         pop.limbs.growth_rate[at] = knobs[K_GROWTH_RATE as usize];
+        pop.limbs.target_thickness[at] = match new_type {
+          1 => knobs[K_THICKNESS_ROOT as usize],
+          2 => knobs[K_THICKNESS_STEM as usize],
+          _ => knobs[K_THICKNESS_LEAF as usize],
+        };
         for k in 0..dim {
           pop.limbs.identity[at][k] =
             draw_gaussian_ref(child, step_word, seed_word, STREAM_NEW_IDENTITY, k as u32);
@@ -672,13 +724,7 @@ pub mod tests {
     let shape = BrainShape::from_params(params);
     let mut pop = Population::new(client, params, shape);
     for slot in 0..4u32 {
-      let genome = Genome::seed_plant(
-        &shape,
-        pop.max_limbs,
-        slot,
-        100 + slot as u64,
-        params.growth_rate,
-      );
+      let genome = Genome::seed_plant(&shape, pop.max_limbs, slot, 100 + slot as u64, params);
       pop.write_genome(slot as usize, &genome);
       pop.organisms.alive[slot as usize] = 1;
     }
@@ -703,6 +749,7 @@ pub mod tests {
       pop.limbs.grow_angle[i] = 0.1 * limb as f32;
       pop.limbs.growth_bias[i] = 0.2 * limb as f32 - 0.3;
       pop.limbs.growth_rate[i] = 0.01 * (1 + limb) as f32;
+      pop.limbs.target_thickness[i] = 0.02 + 0.005 * limb as f32;
       pop.limbs.identity[i] = [limb as f32, 0.5, -0.25, 1.0];
     }
     pop.upload(client);
@@ -798,6 +845,15 @@ pub mod tests {
       .enumerate()
     {
       assert_eq!(a.to_bits(), e.to_bits(), "{what}: growth_rate[{i}]");
+    }
+    for (i, (a, e)) in actual
+      .limbs
+      .target_thickness
+      .iter()
+      .zip(&expected.limbs.target_thickness)
+      .enumerate()
+    {
+      assert_eq!(a.to_bits(), e.to_bits(), "{what}: target_thickness[{i}]");
     }
     for (i, (a, e)) in actual
       .limbs
@@ -937,7 +993,14 @@ pub mod tests {
         actual.limbs.growth_bias[c.clone()],
         actual.limbs.growth_bias[p.clone()]
       );
-      assert_eq!(actual.limbs.growth_rate[c], actual.limbs.growth_rate[p]);
+      assert_eq!(
+        actual.limbs.growth_rate[c.clone()],
+        actual.limbs.growth_rate[p.clone()]
+      );
+      assert_eq!(
+        actual.limbs.target_thickness[c],
+        actual.limbs.target_thickness[p]
+      );
     }
   }
 
@@ -1041,12 +1104,49 @@ pub mod tests {
             assert!((after.limbs.parent[i] as i32) < params.max_limbs);
             assert!((after.limbs.part_type[i] as u8) <= 4);
             // A rate is energy per tick and never goes negative, however far
-            // the Gaussian walks it.
+            // the Gaussian walks it; a thickness stays off zero, which the
+            // volume-to-length solve divides by.
             assert!(after.limbs.growth_rate[i] >= 0.0);
+            assert!(after.limbs.target_thickness[i] >= MIN_THICKNESS);
           }
         }
       }
     }
+  }
+
+  /// A structural add starts its record at the `--thickness-*` param of the
+  /// type it came out as, as a founder's record does.
+  #[test]
+  fn an_added_limb_starts_at_its_types_thickness() {
+    let client = CpuRuntime::client(&CpuDevice);
+    // No Gaussian on the growth genes, so an inherited thickness is exactly
+    // the parent's and only a new record can hold a founder value.
+    let params = SimParams {
+      growth_sigma: 0.0,
+      ..test_params()
+    };
+    let base = seeded_population(&client, &params);
+    let mut checked = 0;
+    for step in 0..64u32 {
+      let (_, after) = run_both(&client, &params, step, 4242);
+      for birth in births() {
+        let parent = base.limb_range(birth.parent as usize);
+        let child = after.limb_range(birth.child as usize);
+        for (i, (p, c)) in parent.zip(child).enumerate() {
+          if base.limbs.part_type[p].is_present() || !after.limbs.part_type[c].is_present() {
+            continue;
+          }
+          assert_eq!(
+            after.limbs.target_thickness[c],
+            crate::genome::seed::founder_thickness(&params, after.limbs.part_type[c]),
+            "step {step}, child {} limb {i}",
+            birth.child
+          );
+          checked += 1;
+        }
+      }
+    }
+    assert!(checked > 0, "no limb was added over 64 steps");
   }
 
   #[test]

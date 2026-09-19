@@ -206,7 +206,7 @@ impl OrganismHarness {
 
     let shape = crate::genome::BrainShape::from_params(&params);
     let mut pop = Population::new(&client, &params, shape);
-    let genome = crate::genome::Genome::seed_plant(&shape, pop.max_limbs, 0, 5, params.growth_rate);
+    let genome = crate::genome::Genome::seed_plant(&shape, pop.max_limbs, 0, 5, &params);
     pop.write_genome(0, &genome);
     pop.organisms.alive[0] = 1;
     pop.upload(&client);
