@@ -210,7 +210,7 @@ mod tests {
     let shape = BrainShape::from_params(&params);
     let mut pop = Population::new(&client, &params, shape);
     for slot in [0usize, 1, 4] {
-      pop.write_genome(slot, &Genome::seed_plant(&shape, pop.max_limbs, 0, 1));
+      pop.write_genome(slot, &Genome::seed_plant(&shape, pop.max_limbs, 0, 1, 0.05));
       pop.organisms.alive[slot] = 1;
     }
     pop.upload(&client);

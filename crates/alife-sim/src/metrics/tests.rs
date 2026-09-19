@@ -331,7 +331,7 @@ fn identical_organisms_are_one_species() {
     ..SimParams::default()
   };
   let shape = BrainShape::from_params(&params);
-  let genome = Genome::seed_plant(&shape, params.max_limbs as usize, 0, 7);
+  let genome = Genome::seed_plant(&shape, params.max_limbs as usize, 0, 7, params.growth_rate);
   let genomes = vec![genome.clone(), genome.clone(), genome];
   let pop = population_of(&genomes, &params, &shape);
   assert_eq!(cluster_species(&pop, &[0, 1, 2], 0.25), [0, 0, 0]);
@@ -345,7 +345,7 @@ fn a_distance_above_the_threshold_starts_a_second_species() {
   };
   let shape = BrainShape::from_params(&params);
   let max_limbs = params.max_limbs as usize;
-  let genome = Genome::seed_plant(&shape, max_limbs, 0, 7);
+  let genome = Genome::seed_plant(&shape, max_limbs, 0, 7, params.growth_rate);
   let mut genomes = vec![genome.clone(), genome.clone(), genome];
   // Six added limbs: `6 / max_limbs` = 0.375, over the 0.25 threshold.
   for limb in 3..9 {

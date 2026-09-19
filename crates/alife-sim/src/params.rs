@@ -194,6 +194,10 @@ sim_params! {
         "Gaussian sigma applied to a newborn's per-limb identity vectors";
     angle_sigma: f32 = 0.05, "organism.angle_sigma", "angle-sigma",
         "Gaussian sigma in radians applied to a newborn's limb grow angles";
+    growth_sigma: f32 = 0.05, "organism.growth_sigma", "growth-sigma",
+        "Gaussian sigma applied to a newborn's per-limb growth bias and growth rate";
+    growth_rate: f32 = 0.05, "organism.growth_rate", "growth-rate",
+        "Energy a limb absorbs per life tick, for a founder's and a new limb's record";
     structural_rate: f32 = 0.1, "organism.structural_rate", "structural-rate",
         "Probability that a birth also makes one structural edit";
     limb_segment_length: f32 = 0.15, "organism.limb_segment_length", "limb-segment-length",
@@ -386,6 +390,7 @@ impl SimParams {
       ("mutation-sigma", self.mutation_sigma),
       ("identity-sigma", self.identity_sigma),
       ("angle-sigma", self.angle_sigma),
+      ("growth-sigma", self.growth_sigma),
     ];
     for (name, value) in sigmas {
       if value < 0.0 || !value.is_finite() {
@@ -435,6 +440,7 @@ impl SimParams {
       ("light-gain", self.light_gain),
       ("water-gain", self.water_gain),
       ("upkeep-per-particle", self.upkeep_per_particle),
+      ("growth-rate", self.growth_rate),
       ("sprout-cost", self.sprout_cost),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),

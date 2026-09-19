@@ -454,6 +454,7 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
   let seed = sim.seed();
   let shape = sim.population().shape;
   let max_limbs = sim.population().max_limbs;
+  let growth_rate = sim.params().growth_rate;
 
   let anchors: Vec<Vec2> = (0..count)
     .map(|i| {
@@ -463,7 +464,7 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
     .collect();
 
   for (slot, anchor) in anchors.into_iter().enumerate() {
-    let genome = Genome::seed_plant(&shape, max_limbs, slot as u32, seed);
+    let genome = Genome::seed_plant(&shape, max_limbs, slot as u32, seed, growth_rate);
     install(sim, slot, &genome, anchor);
   }
 

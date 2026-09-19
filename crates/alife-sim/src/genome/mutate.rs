@@ -30,13 +30,17 @@ const STREAM_ANGLE: u32 = 1;
 const STREAM_IDENTITY: u32 = 2;
 const STREAM_STRUCT: u32 = 3;
 const STREAM_NEW_IDENTITY: u32 = 4;
+/// The growth bias and the growth rate, two draws per record.
+const STREAM_GROWTH: u32 = 5;
 
 /// Slots of the mutation knob buffer.
 pub const K_MUTATION_SIGMA: u32 = 0;
 pub const K_IDENTITY_SIGMA: u32 = 1;
 pub const K_ANGLE_SIGMA: u32 = 2;
 pub const K_STRUCTURAL_RATE: u32 = 3;
-pub const KNOB_COUNT: usize = 4;
+pub const K_GROWTH_SIGMA: u32 = 4;
+pub const K_GROWTH_RATE: u32 = 5;
+pub const KNOB_COUNT: usize = 6;
 
 /// Slots of the 4-word RNG buffer: the step, and the run's seed folded to one
 /// word.
@@ -176,6 +180,8 @@ pub fn mutate_structure(
     limbs.parent[cbase + l] = limbs.parent[pbase + l];
     limbs.child_slot[cbase + l] = limbs.child_slot[pbase + l];
     limbs.grow_angle[cbase + l] = limbs.grow_angle[pbase + l];
+    limbs.growth_bias[cbase + l] = limbs.growth_bias[pbase + l];
+    limbs.growth_rate[cbase + l] = limbs.growth_rate[pbase + l];
     for k in 0..dim {
       limbs.identity[(cbase + l) * dim + k] = limbs.identity[(pbase + l) * dim + k];
     }
@@ -188,6 +194,17 @@ pub fn mutate_structure(
     if limbs.part_type[cbase + l] != 0u32 {
       limbs.grow_angle[cbase + l] +=
         knobs[K_ANGLE_SIGMA as usize] * draw_gaussian(child, step, seed, STREAM_ANGLE, l as u32);
+      limbs.growth_bias[cbase + l] += knobs[K_GROWTH_SIGMA as usize]
+        * draw_gaussian(child, step, seed, STREAM_GROWTH, (2 * l) as u32);
+      // A rate is energy per tick, so it has a floor a bias does not: a limb
+      // that absorbed negative energy would feed on its own growth.
+      let mut rate = limbs.growth_rate[cbase + l]
+        + knobs[K_GROWTH_SIGMA as usize]
+          * draw_gaussian(child, step, seed, STREAM_GROWTH, (2 * l + 1) as u32);
+      if rate < 0.0f32 {
+        rate = 0.0f32;
+      }
+      limbs.growth_rate[cbase + l] = rate;
       for k in 0..dim {
         let index = (l * dim + k) as u32;
         limbs.identity[(cbase + l) * dim + k] += knobs[K_IDENTITY_SIGMA as usize]
@@ -253,6 +270,10 @@ pub fn mutate_structure(
       limbs.parent[at] = chosen;
       limbs.child_slot[at] = kids;
       limbs.grow_angle[at] = (angle_roll * 2.0f32 - 1.0f32) * core::f32::consts::PI;
+      // A new record starts where a founder's does: no bias of its own, and
+      // the run's growth rate.
+      limbs.growth_bias[at] = 0.0f32;
+      limbs.growth_rate[at] = knobs[K_GROWTH_RATE as usize];
       for k in 0..dim {
         limbs.identity[at * dim + k] =
           draw_gaussian(child, step, seed, STREAM_NEW_IDENTITY, k as u32);
@@ -350,6 +371,8 @@ pub fn knob_values(params: &SimParams) -> [f32; KNOB_COUNT] {
     params.identity_sigma,
     params.angle_sigma,
     params.structural_rate,
+    params.growth_sigma,
+    params.growth_rate,
   ]
 }
 
@@ -531,6 +554,8 @@ pub fn mutate_ref(
       pop.limbs.parent[cbase + l] = pop.limbs.parent[pbase + l];
       pop.limbs.child_slot[cbase + l] = pop.limbs.child_slot[pbase + l];
       pop.limbs.grow_angle[cbase + l] = pop.limbs.grow_angle[pbase + l];
+      pop.limbs.growth_bias[cbase + l] = pop.limbs.growth_bias[pbase + l];
+      pop.limbs.growth_rate[cbase + l] = pop.limbs.growth_rate[pbase + l];
       pop.limbs.identity[cbase + l] = pop.limbs.identity[pbase + l];
     }
 
@@ -538,6 +563,12 @@ pub fn mutate_ref(
       if pop.limbs.part_type[cbase + l].is_present() {
         pop.limbs.grow_angle[cbase + l] += knobs[K_ANGLE_SIGMA as usize]
           * draw_gaussian_ref(child, step_word, seed_word, STREAM_ANGLE, l as u32);
+        pop.limbs.growth_bias[cbase + l] += knobs[K_GROWTH_SIGMA as usize]
+          * draw_gaussian_ref(child, step_word, seed_word, STREAM_GROWTH, 2 * l as u32);
+        let rate = pop.limbs.growth_rate[cbase + l]
+          + knobs[K_GROWTH_SIGMA as usize]
+            * draw_gaussian_ref(child, step_word, seed_word, STREAM_GROWTH, 2 * l as u32 + 1);
+        pop.limbs.growth_rate[cbase + l] = rate.max(0.0);
         for k in 0..dim {
           let index = (l * dim + k) as u32;
           pop.limbs.identity[cbase + l][k] += knobs[K_IDENTITY_SIGMA as usize]
@@ -577,6 +608,8 @@ pub fn mutate_ref(
         pop.limbs.parent[at] = chosen as u8;
         pop.limbs.child_slot[at] = kids as u8;
         pop.limbs.grow_angle[at] = (angle_roll * 2.0 - 1.0) * std::f32::consts::PI;
+        pop.limbs.growth_bias[at] = 0.0;
+        pop.limbs.growth_rate[at] = knobs[K_GROWTH_RATE as usize];
         for k in 0..dim {
           pop.limbs.identity[at][k] =
             draw_gaussian_ref(child, step_word, seed_word, STREAM_NEW_IDENTITY, k as u32);
@@ -637,7 +670,13 @@ pub mod tests {
     let shape = BrainShape::from_params(params);
     let mut pop = Population::new(client, params, shape);
     for slot in 0..4u32 {
-      let genome = Genome::seed_plant(&shape, pop.max_limbs, slot, 100 + slot as u64);
+      let genome = Genome::seed_plant(
+        &shape,
+        pop.max_limbs,
+        slot,
+        100 + slot as u64,
+        params.growth_rate,
+      );
       pop.write_genome(slot as usize, &genome);
       pop.organisms.alive[slot as usize] = 1;
     }
@@ -660,6 +699,8 @@ pub mod tests {
       pop.limbs.length[i] = 1 + (limb as u8 % 3);
       pop.limbs.child_slot[i] = limb as u8 % 2;
       pop.limbs.grow_angle[i] = 0.1 * limb as f32;
+      pop.limbs.growth_bias[i] = 0.2 * limb as f32 - 0.3;
+      pop.limbs.growth_rate[i] = 0.01 * (1 + limb) as f32;
       pop.limbs.identity[i] = [limb as f32, 0.5, -0.25, 1.0];
     }
     pop.upload(client);
@@ -737,6 +778,24 @@ pub mod tests {
       .enumerate()
     {
       assert_eq!(a.to_bits(), e.to_bits(), "{what}: grow_angle[{i}]");
+    }
+    for (i, (a, e)) in actual
+      .limbs
+      .growth_bias
+      .iter()
+      .zip(&expected.limbs.growth_bias)
+      .enumerate()
+    {
+      assert_eq!(a.to_bits(), e.to_bits(), "{what}: growth_bias[{i}]");
+    }
+    for (i, (a, e)) in actual
+      .limbs
+      .growth_rate
+      .iter()
+      .zip(&expected.limbs.growth_rate)
+      .enumerate()
+    {
+      assert_eq!(a.to_bits(), e.to_bits(), "{what}: growth_rate[{i}]");
     }
     for (i, (a, e)) in actual
       .limbs
@@ -843,6 +902,7 @@ pub mod tests {
       mutation_sigma: 0.0,
       identity_sigma: 0.0,
       angle_sigma: 0.0,
+      growth_sigma: 0.0,
       structural_rate: 0.0,
       ..test_params()
     };
@@ -867,7 +927,15 @@ pub mod tests {
         actual.limbs.parent[c.clone()],
         actual.limbs.parent[p.clone()]
       );
-      assert_eq!(actual.limbs.identity[c], actual.limbs.identity[p]);
+      assert_eq!(
+        actual.limbs.identity[c.clone()],
+        actual.limbs.identity[p.clone()]
+      );
+      assert_eq!(
+        actual.limbs.growth_bias[c.clone()],
+        actual.limbs.growth_bias[p.clone()]
+      );
+      assert_eq!(actual.limbs.growth_rate[c], actual.limbs.growth_rate[p]);
     }
   }
 
@@ -970,6 +1038,9 @@ pub mod tests {
             assert!(after.limbs.length[i] <= params.max_particles_per_limb as u8);
             assert!((after.limbs.parent[i] as i32) < params.max_limbs);
             assert!((after.limbs.part_type[i] as u8) <= 4);
+            // A rate is energy per tick and never goes negative, however far
+            // the Gaussian walks it.
+            assert!(after.limbs.growth_rate[i] >= 0.0);
           }
         }
       }

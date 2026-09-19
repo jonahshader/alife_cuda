@@ -11,7 +11,7 @@
 //!
 //! ```text
 //!   char[8]  magic "ALIFEPOP"
-//!   uint32   version (1)
+//!   uint32   version (2)
 //!   uint32   organism slots (max_organisms)
 //!   uint32   limb records per organism (max_limbs)
 //!   uint32   brain parameters per organism
@@ -24,17 +24,20 @@
 //!     (uint32);
 //!   the limb SoA over `max_organisms * max_limbs` records — part_type,
 //!     length, parent, child_slot (uint8), grow_angle (float), identity
-//!     (IDENTITY_DIM floats);
+//!     (IDENTITY_DIM floats), growth_bias, growth_rate (float);
 //!   brain[max_organisms * param_count] (float);
 //!   latents[max_organisms * latent_len] (float);
 //!   anchors[max_organisms] (float2).
 //! ```
 //!
 //! As with `dump.rs`, the field order is the SoA declaration order, so adding
-//! a field there extends this format — and, unlike `dump.rs`, nothing else
-//! reads this one, so an older file simply stops loading (the four shape words
+//! a field there extends this format. Version 1 is the same file without the
+//! limb SoA's last two float arrays — `growth_bias` and `growth_rate`, which
+//! the growth chunk added — and it still loads: the arrays before them are a
+//! prefix of the current ones, and a version-1 organism comes back with a
+//! founder's growth genes (bias 0, rate `--growth-rate`). The four shape words
 //! in the header are checked against the run's own before a byte of it is
-//! used).
+//! used.
 //!
 //! **What a load restores, and what it does not.** The genomes, the lineage
 //! fields, the energies, the latent state and the anchors come back exactly as
@@ -59,7 +62,17 @@ use crate::genome::{LimbHost, OrganismHost, Population};
 use crate::sim::Sim;
 
 pub const MAGIC: &[u8; 8] = b"ALIFEPOP";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+
+/// Limb SoA fields a file of version `v` carries: version 1 stopped before
+/// `growth_bias`.
+fn limb_fields(version: u32) -> usize {
+  if version < 2 {
+    LimbHost::FIELD_COUNT - 2
+  } else {
+    LimbHost::FIELD_COUNT
+  }
+}
 
 /// Bytes before the first field array.
 const HEADER_BYTES: u64 = 8 + 4 * 6 + 8;
@@ -90,6 +103,9 @@ pub enum PopDumpError {
 /// A population as it was written, before anything is done with it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PopSnapshot {
+  /// Format version the file was written at. A version-1 file carries no
+  /// growth genes, and [`restore`] fills them with the founder values.
+  pub version: u32,
   pub max_organisms: usize,
   pub max_limbs: usize,
   pub param_count: usize,
@@ -150,7 +166,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
     return Err(PopDumpError::BadMagic);
   }
   let version = read_u32(&mut input)?;
-  if version != VERSION {
+  if version == 0 || version > VERSION {
     return Err(PopDumpError::BadVersion(version));
   }
 
@@ -173,7 +189,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
     let records = o.checked_mul(max_limbs as u64)?;
     HEADER_BYTES
       .checked_add(o.checked_mul(OrganismHost::RAW_BYTES as u64)?)?
-      .checked_add(records.checked_mul(LimbHost::RAW_BYTES as u64)?)?
+      .checked_add(records.checked_mul(LimbHost::raw_bytes_prefix(limb_fields(version)) as u64)?)?
       .checked_add(o.checked_mul(param_count as u64)?.checked_mul(4)?)?
       .checked_add(o.checked_mul(latent_len as u64)?.checked_mul(4)?)?
       .checked_add(o.checked_mul(8)?)
@@ -191,7 +207,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
   let records = max_organisms * max_limbs;
 
   let organisms = OrganismHost::read_fields(&mut input, max_organisms)?;
-  let limbs = LimbHost::read_fields(&mut input, records)?;
+  let limbs = LimbHost::read_fields_prefix(&mut input, records, limb_fields(version))?;
   let brain = read_f32(&mut input, max_organisms * param_count)?;
   let latents = read_f32(&mut input, max_organisms * latent_len)?;
   let flat = read_f32(&mut input, max_organisms * 2)?;
@@ -203,6 +219,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
     .collect();
 
   Ok(PopSnapshot {
+    version,
     max_organisms,
     max_limbs,
     param_count,
@@ -262,10 +279,18 @@ pub fn restore<R: Runtime>(
   }
 
   let plants = snapshot.plants();
+  let growth_rate = sim.params().growth_rate;
   {
     let access = sim.body_access();
     access.pop.organisms = snapshot.organisms.clone();
     access.pop.limbs = snapshot.limbs.clone();
+    // A version-1 file predates the growth genes, and its records came back
+    // at the SoA's zeroes. A zero rate is a limb that can never grow, so the
+    // founder values are what an old population comes back on.
+    if snapshot.version < 2 {
+      access.pop.limbs.growth_bias.fill(0.0);
+      access.pop.limbs.growth_rate.fill(growth_rate);
+    }
     access.pop.brain = snapshot.brain.clone();
     access.pop.latents = snapshot.latents.clone();
     access.bodies.anchors = snapshot.anchors.clone();
@@ -438,6 +463,67 @@ mod tests {
     assert_eq!(restore(&mut target, &snapshot).unwrap(), 3);
     assert_eq!(target.population().organisms.alive[3], 0);
     assert_eq!(target.organism_count(), 3);
+  }
+
+  /// A file written before the growth genes existed still loads, and its
+  /// organisms come back able to grow rather than frozen at a zero rate.
+  #[test]
+  fn a_version_one_file_loads_with_the_founder_growth_genes() {
+    let mut source = world();
+    assert_eq!(spawn_founders(&mut source, 2), 2);
+    let path = temp_path("v1");
+    write(
+      &path,
+      source.population(),
+      source.bodies(),
+      source.step_count(),
+      source.seed(),
+    )
+    .unwrap();
+
+    // Turn the file back into what version 1 wrote: the version word, and the
+    // limb SoA without its two growth arrays.
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    let records = source.population().max_organisms * source.population().max_limbs;
+    let organisms = source.population().max_organisms * OrganismHost::RAW_BYTES;
+    // Four one-byte fields, `grow_angle` and `identity`; the two growth
+    // arrays are the tail of the limb block.
+    let start = HEADER_BYTES as usize
+      + organisms
+      + records * (4 + 4 + 4 * crate::genome::shape::IDENTITY_DIM);
+    bytes.drain(start..start + 2 * records * 4);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let snapshot = read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(snapshot.version, 1);
+    assert_eq!(snapshot.limbs.identity, source.population().limbs.identity);
+    assert_eq!(
+      snapshot.limbs.grow_angle,
+      source.population().limbs.grow_angle
+    );
+    assert!(snapshot.limbs.growth_rate.iter().all(|r| *r == 0.0));
+
+    let mut target = world();
+    assert_eq!(restore(&mut target, &snapshot).unwrap(), 2);
+    let rate = target.params().growth_rate;
+    assert!(
+      target
+        .population()
+        .limbs
+        .growth_rate
+        .iter()
+        .all(|r| *r == rate)
+    );
+    assert!(
+      target
+        .population()
+        .limbs
+        .growth_bias
+        .iter()
+        .all(|b| *b == 0.0)
+    );
   }
 
   #[test]

@@ -33,7 +33,17 @@ impl Genome {
   /// Deterministic in `(slot, seed)`: the brain and the identity vectors come
   /// from a Threefry stream keyed by both, so two runs at one seed produce
   /// identical founders and slot `n` is always the same founder.
-  pub fn seed_plant(shape: &BrainShape, max_limbs: usize, slot: u32, seed: u64) -> Self {
+  ///
+  /// Every record starts at growth bias 0 — a bias only means anything
+  /// relative to its siblings — and at `growth_rate`, which is the
+  /// `--growth-rate` param; mutation moves both from there.
+  pub fn seed_plant(
+    shape: &BrainShape,
+    max_limbs: usize,
+    slot: u32,
+    seed: u64,
+    growth_rate: f32,
+  ) -> Self {
     assert!(
       max_limbs >= 3,
       "the seed plant needs three limb records, got {max_limbs}"
@@ -48,6 +58,8 @@ impl Genome {
       child_slot: 0,
       grow_angle: ROOT_DOWN,
       identity: [0.0; IDENTITY_DIM],
+      growth_bias: 0.0,
+      growth_rate,
     };
     genome.limbs[1] = LimbRecord {
       part_type: PartType::Stem,
@@ -56,6 +68,8 @@ impl Genome {
       child_slot: 0,
       grow_angle: REVERSE_PARENT,
       identity: [0.0; IDENTITY_DIM],
+      growth_bias: 0.0,
+      growth_rate,
     };
     genome.limbs[2] = LimbRecord {
       part_type: PartType::Leaf,
@@ -64,6 +78,8 @@ impl Genome {
       child_slot: 0,
       grow_angle: ALONG_PARENT,
       identity: [0.0; IDENTITY_DIM],
+      growth_bias: 0.0,
+      growth_rate,
     };
 
     fill_brain(&mut genome.brain, shape, slot, seed);
@@ -123,7 +139,7 @@ mod tests {
 
   #[test]
   fn the_seed_plant_is_a_root_a_stem_and_a_leaf() {
-    let genome = Genome::seed_plant(&shape(), 16, 0, 1);
+    let genome = Genome::seed_plant(&shape(), 16, 0, 1, 0.25);
     assert_eq!(genome.limbs.len(), 16);
 
     assert_eq!(genome.limbs[0].part_type, PartType::Root);
@@ -141,6 +157,10 @@ mod tests {
     assert_eq!(genome.limbs[2].parent, 1);
     assert_eq!(genome.limbs[2].child_slot, 0);
 
+    for record in &genome.limbs[..3] {
+      assert_eq!(record.growth_bias, 0.0);
+      assert_eq!(record.growth_rate, 0.25);
+    }
     for record in &genome.limbs[3..] {
       assert_eq!(record.part_type, PartType::Absent);
       assert_eq!(record.identity, [0.0; IDENTITY_DIM]);
@@ -149,18 +169,18 @@ mod tests {
 
   #[test]
   fn the_same_slot_and_seed_give_the_same_founder() {
-    let a = Genome::seed_plant(&shape(), 16, 5, 42);
-    let b = Genome::seed_plant(&shape(), 16, 5, 42);
+    let a = Genome::seed_plant(&shape(), 16, 5, 42, 0.25);
+    let b = Genome::seed_plant(&shape(), 16, 5, 42, 0.25);
     assert_eq!(a, b);
 
-    assert_ne!(Genome::seed_plant(&shape(), 16, 6, 42), a);
-    assert_ne!(Genome::seed_plant(&shape(), 16, 5, 43), a);
+    assert_ne!(Genome::seed_plant(&shape(), 16, 6, 42, 0.25), a);
+    assert_ne!(Genome::seed_plant(&shape(), 16, 5, 43, 0.25), a);
   }
 
   #[test]
   fn biases_are_zero_and_weights_scale_with_fan_in() {
     let shape = shape();
-    let genome = Genome::seed_plant(&shape, 16, 0, 7);
+    let genome = Genome::seed_plant(&shape, 16, 0, 7, 0.25);
     for slice in shape.slices() {
       let values = &genome.brain[slice.range.clone()];
       match slice.init {
@@ -184,7 +204,7 @@ mod tests {
 
   #[test]
   fn identity_vectors_differ_between_limbs() {
-    let genome = Genome::seed_plant(&shape(), 16, 3, 9);
+    let genome = Genome::seed_plant(&shape(), 16, 3, 9, 0.25);
     assert_ne!(genome.limbs[0].identity, genome.limbs[1].identity);
     assert_ne!(genome.limbs[1].identity, genome.limbs[2].identity);
     assert!(
@@ -209,7 +229,7 @@ mod tests {
     let client = CpuRuntime::client(&CpuDevice);
     let mut pop = Population::new(&client, &params, shape);
 
-    let genome = Genome::seed_plant(&shape, pop.max_limbs, 2, 11);
+    let genome = Genome::seed_plant(&shape, pop.max_limbs, 2, 11, 0.25);
     pop.write_genome(2, &genome);
 
     assert_eq!(pop.brain_row(2), genome.brain.as_slice());

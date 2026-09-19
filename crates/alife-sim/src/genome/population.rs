@@ -115,6 +115,18 @@ define_soa! {
         grow_angle: f32,
         /// Per-limb identity, so the brain can tell identical limbs apart.
         identity: [f32; IDENTITY_DIM],
+        /// This limb's logit in the softmax that splits the organism's growth
+        /// spend across its growing limbs: a bias is only meaningful relative
+        /// to its siblings, so a founder's is 0 and mutation moves it.
+        growth_bias: f32,
+        /// Energy this limb can absorb in one life tick — its own tempo, and
+        /// the cap its softmax share is clamped at. Founders and structural
+        /// adds start at `--growth-rate`.
+        ///
+        /// Declared last, with `growth_bias`: the population file's field
+        /// order is this declaration order, so a field appended here is a
+        /// field an older file simply lacks (`crate::popdump`).
+        growth_rate: f32,
     }
 }
 
@@ -168,6 +180,8 @@ pub struct LimbArgs {
   pub child_slot: Box<[u32]>,
   pub grow_angle: Box<[f32]>,
   pub identity: Box<[f32]>,
+  pub growth_bias: Box<[f32]>,
+  pub growth_rate: Box<[f32]>,
 }
 
 /// Launch arguments are consumed by a launch, so every launch site builds its
@@ -182,6 +196,8 @@ pub fn limb_args<R: Runtime>(limbs: &LimbDevice) -> LimbArgsLaunch<R> {
     whole(&limbs.child_slot, n),
     whole(&limbs.grow_angle, n),
     whole(&limbs.identity, n * IDENTITY_DIM),
+    whole(&limbs.growth_bias, n),
+    whole(&limbs.growth_rate, n),
   )
 }
 
@@ -198,6 +214,8 @@ pub struct LimbRecord {
   pub child_slot: u8,
   pub grow_angle: f32,
   pub identity: [f32; IDENTITY_DIM],
+  pub growth_bias: f32,
+  pub growth_rate: f32,
 }
 
 /// One organism's genome: `max_limbs` records and one brain row.
@@ -364,6 +382,8 @@ impl Population {
       self.limbs.child_slot[i] = record.child_slot;
       self.limbs.grow_angle[i] = record.grow_angle;
       self.limbs.identity[i] = record.identity;
+      self.limbs.growth_bias[i] = record.growth_bias;
+      self.limbs.growth_rate[i] = record.growth_rate;
     }
     self.brain_row_mut(organism).copy_from_slice(&genome.brain);
     let init = self.shape.latent_init();
@@ -508,6 +528,8 @@ mod tests {
       pop.limbs.parent[i] = (i % 5) as u8;
       pop.limbs.child_slot[i] = (i % 3) as u8;
       pop.limbs.grow_angle[i] = i as f32 * 0.25;
+      pop.limbs.growth_bias[i] = i as f32 * -0.5;
+      pop.limbs.growth_rate[i] = i as f32 * 0.125;
       pop.limbs.identity[i] = [i as f32, -1.0, 0.5, i as f32 * 2.0];
     }
     for i in 0..pop.organisms.len() {

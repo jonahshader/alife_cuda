@@ -79,7 +79,7 @@ mod tests {
     for slot in 0..4 {
       // The same founder in every slot, so a test changes exactly what it
       // means to change.
-      pop.write_genome(slot, &Genome::seed_plant(&shape, MAX_LIMBS, 0, 4));
+      pop.write_genome(slot, &Genome::seed_plant(&shape, MAX_LIMBS, 0, 4, 0.05));
     }
     pop
   }
