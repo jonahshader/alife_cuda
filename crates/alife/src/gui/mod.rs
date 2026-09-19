@@ -41,10 +41,18 @@ pub fn run(
     );
   }
 
+  // eframe's default device request takes `wgpu::Limits::default()`, which
+  // caps a compute stage at eight storage buffers; the kernels bind up to
+  // sixteen. Ask for the device the sim needs, since the sim runs on it.
+  let mut wgpu_options = egui_wgpu::WgpuConfiguration::default();
+  if let egui_wgpu::WgpuSetup::CreateNew(create) = &mut wgpu_options.wgpu_setup {
+    create.device_descriptor = Arc::new(alife_sim::wgpu_backend::device_descriptor);
+  }
   let options = eframe::NativeOptions {
     viewport: egui::ViewportBuilder::default()
       .with_title("ALife")
       .with_inner_size([1600.0, 900.0]),
+    wgpu_options,
     ..Default::default()
   };
 

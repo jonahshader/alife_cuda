@@ -59,33 +59,39 @@ pub fn headless_setup(
   setup_from_adapter(instance, adapter)
 }
 
-/// Request a device from an adapter the same way `cubecl_wgpu`'s own
-/// `request_device` does, so the device we hand CubeCL has everything its own
-/// path would have asked for.
+/// The device request `cubecl_wgpu`'s own `request_device` makes, so a device
+/// we create — headless here, or through eframe in the GUI — has everything
+/// CubeCL's own path would have asked for. The kernels bind up to sixteen
+/// storage buffers per launch, twice what `wgpu::Limits::default()` allows:
+/// every device the sim runs on must come from this descriptor, not a
+/// framework's default one.
+pub fn device_descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+  wgpu::DeviceDescriptor {
+    label: Some("alife device"),
+    required_features: adapter
+      .features()
+      .difference(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS),
+    required_limits: adapter.limits(),
+    memory_hints: wgpu::MemoryHints::MemoryUsage,
+    trace: wgpu::Trace::Off,
+    experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
+  }
+}
+
+/// Request a device from an adapter with [`device_descriptor`].
 pub fn setup_from_adapter(
   instance: wgpu::Instance,
   adapter: wgpu::Adapter,
 ) -> anyhow::Result<WgpuSetup> {
   let info = adapter.get_info();
   let backend = info.backend;
-  let (device, queue) = pollster::block_on(
-    adapter.request_device(&wgpu::DeviceDescriptor {
-      label: Some("alife device"),
-      required_features: adapter
-        .features()
-        .difference(wgpu::Features::MAPPABLE_PRIMARY_BUFFERS),
-      required_limits: adapter.limits(),
-      memory_hints: wgpu::MemoryHints::MemoryUsage,
-      trace: wgpu::Trace::Off,
-      experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
-    }),
-  )
-  .map_err(|err| {
-    anyhow::anyhow!(
-      "requesting a device from wgpu adapter {:?}: {err}",
-      info.name
-    )
-  })?;
+  let (device, queue) = pollster::block_on(adapter.request_device(&device_descriptor(&adapter)))
+    .map_err(|err| {
+      anyhow::anyhow!(
+        "requesting a device from wgpu adapter {:?}: {err}",
+        info.name
+      )
+    })?;
 
   Ok(WgpuSetup {
     instance,
