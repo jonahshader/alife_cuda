@@ -568,7 +568,9 @@ pub fn mutate_ref(
         let rate = pop.limbs.growth_rate[cbase + l]
           + knobs[K_GROWTH_SIGMA as usize]
             * draw_gaussian_ref(child, step_word, seed_word, STREAM_GROWTH, 2 * l as u32 + 1);
-        pop.limbs.growth_rate[cbase + l] = rate.max(0.0);
+        // The kernel's comparison, not `max`: they differ on NaN, and the
+        // twin has to compute what the kernel computes.
+        pop.limbs.growth_rate[cbase + l] = if rate < 0.0 { 0.0 } else { rate };
         for k in 0..dim {
           let index = (l * dim + k) as u32;
           pop.limbs.identity[cbase + l][k] += knobs[K_IDENTITY_SIGMA as usize]

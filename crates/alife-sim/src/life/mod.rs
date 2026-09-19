@@ -194,9 +194,9 @@ impl<R: Runtime> Sim<R> {
         continue;
       }
 
-      // Charged whole, before the batch: `grow_limbs` drops a limb off the
-      // end of a batch when the particle capacity is short, and this pays
-      // for one that was dropped. The capacity is
+      // Charged before the batch: `grow_limbs` drops a limb off the end of
+      // a batch when the particle capacity is short, and this pays for one
+      // that was dropped. The capacity is
       // `max_organisms x max_limbs x max_particles_per_limb`, so it is only
       // short when every slot already holds a full body — at which point an
       // over-charged tick is the least of it.
@@ -427,6 +427,10 @@ impl<R: Runtime> Sim<R> {
 /// share above a limb's own `growth_rate` is capped there and redistributed
 /// once over the limbs that were not capped.
 ///
+/// What is charged is what was converted: a share the parent clamp, the
+/// record's length or a second-order rate cap cut short is not spent, so no
+/// energy vanishes into growth that never happened.
+///
 /// Writes nothing: the new lengths go to `lengthened` and the limbs that
 /// crossed a whole segment — so the map owes them a particle — to `growth`.
 fn allocate_growth(
@@ -520,6 +524,7 @@ fn allocate_growth(
     }
   }
 
+  let mut charged = 0.0f32;
   for (i, limb) in growing.iter().enumerate() {
     let target = full(*limb);
     let mut length = grown(*limb) + share[i] * params.length_per_energy;
@@ -533,6 +538,7 @@ fn allocate_growth(
     if length <= grown(*limb) {
       continue;
     }
+    charged += (length - grown(*limb)) / params.length_per_energy;
     lengthened.push((cfg.limb_index(organism, *limb), length));
     let held = bodies.limb_len(organism, *limb);
     let wants = length.ceil() as usize;
@@ -544,7 +550,7 @@ fn allocate_growth(
       });
     }
   }
-  spend
+  charged.min(spend)
 }
 
 /// The limb that is its own parent. Mutation never removes or retypes the
@@ -669,11 +675,23 @@ mod tests {
     bodies.grown[0] = 0.5;
     pop.limbs.growth_bias[1] = 5.0;
 
-    let (_, lengths, _) = allocate(&pop, &bodies, &params, 2.0);
+    let (charged, lengths, _) = allocate(&pop, &bodies, &params, 2.0);
     let stem = lengths.iter().find(|(r, _)| *r == 1).unwrap().1;
     // The root's progress is 0.25, so the stem stops at a quarter of its own
     // three segments.
     assert!((stem - 0.75).abs() < 1e-5, "the stem reached {stem}");
+    // And what the clamp cut off was not paid for: the charge is exactly
+    // the length the two limbs gained, at the conversion rate.
+    let root = lengths.iter().find(|(r, _)| *r == 0).unwrap().1;
+    let converted = ((stem - 0.0) + (root - 0.5)) / params.length_per_energy;
+    assert!(
+      (charged - converted).abs() < 1e-6,
+      "charged {charged} for {converted}"
+    );
+    assert!(
+      charged < 2.0 * params.growth_rate,
+      "the cut share was charged"
+    );
   }
 
   /// A particle is owed only when the limb crosses a whole segment; inside

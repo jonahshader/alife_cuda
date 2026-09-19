@@ -204,7 +204,8 @@ ones still open.
   limb's `growth_rate` is capped and the excess redistributed once, by the
   same softmax, over the uncapped limbs. Energy converts at
   `length_per_energy` segments per unit until chunk 2 replaces it with
-  volume. The spend is charged; `sprout_cost` is gone.
+  volume. What was converted is charged — a share cut short by the parent
+  clamp or the record's length is not spent; `sprout_cost` is gone.
 - *Particles* are claimed when `ceil(grown)` rises, placed at the
   predecessor plus the rest offset along the limb's direction, by the
   existing growth kernel over a list of `(organism, limb, first index,

@@ -354,6 +354,22 @@ pub fn grow_bodies<R: Runtime>(sim: &mut crate::sim::Sim<R>, organisms: &[usize]
     }
     placed += n;
   }
+  // `grow_limbs` reconciles only the limbs a pass admitted. A limb whose
+  // parent never got its first particle — the pool ran dry — was admitted by
+  // no pass, and its `grown` would otherwise stay at the full length over an
+  // empty slice.
+  {
+    let access = sim.body_access();
+    let cfg = access.bodies.cfg;
+    for o in organisms {
+      for limb in 0..max_limbs {
+        let held = access.bodies.limb_len(*o, limb) as f32;
+        let grown = &mut access.bodies.grown[cfg.limb_index(*o, limb)];
+        *grown = grown.min(held);
+      }
+    }
+    access.bodies.upload(access.client);
+  }
   placed
 }
 
