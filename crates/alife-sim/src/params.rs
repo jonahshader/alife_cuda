@@ -185,6 +185,8 @@ sim_params! {
         "Stiffness of a limb's base-joint angle constraint, in [0, 1]";
     bend_stiffness: f32 = 0.3, "organism.bend_stiffness", "bend-stiffness",
         "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
+    species_threshold: f32 = 0.25, "organism.species_threshold", "species-threshold",
+        "Genome distance under which the metrics count two organisms as one species";
 }
 
 impl SimParams {
@@ -315,6 +317,12 @@ impl SimParams {
       if !(0.0..=1.0).contains(&value) {
         return Err(format!("--{name} must be in [0, 1], got {value}"));
       }
+    }
+    if self.species_threshold < 0.0 || !self.species_threshold.is_finite() {
+      return Err(format!(
+        "--species-threshold must be a non-negative finite number, got {}",
+        self.species_threshold
+      ));
     }
     if self.constraint_iterations < 0 {
       return Err(format!(

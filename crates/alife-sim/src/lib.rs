@@ -9,6 +9,7 @@ pub mod bodies;
 pub mod dump;
 pub mod genome;
 pub mod kernels;
+pub mod metrics;
 pub mod params;
 pub mod particles;
 pub mod rng;

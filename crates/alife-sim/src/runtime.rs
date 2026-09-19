@@ -154,6 +154,15 @@ impl AnySim {
     dispatch!(self, sim => sim.organism_count())
   }
 
+  /// Write one row of the metrics time series; see [`crate::metrics`].
+  pub fn sample_metrics(&self, sampler: &mut crate::metrics::Sampler) -> std::io::Result<()> {
+    dispatch!(self, sim => sampler.sample(sim))
+  }
+
+  pub fn counters(&self) -> crate::sim::Counters {
+    dispatch!(self, sim => sim.counters())
+  }
+
   pub fn population(&self) -> &crate::genome::Population {
     dispatch!(self, sim => sim.population())
   }
