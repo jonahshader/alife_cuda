@@ -18,6 +18,13 @@
 //! the constraint pass projects against (`crate::kernels::constraints`).
 //! The root limb's first particle has no predecessor and draws nothing.
 //! The body discs stay, at the segment's half-width, so joints are round.
+//!
+//! **A segment is as wide as its limb is thick.** The half-width is half the
+//! limb's live thickness — `target_thickness * sqrt(grown / length)`, the
+//! sim's own rule (`alife_sim::bodies::limb_thickness`) recomputed here from
+//! the limb records and `grown` rather than shipped as a fourth per-limb
+//! buffer — so a plant visibly thickens as it grows. A seed in flight is in
+//! no limb and stays a dot at the particle radius.
 
 use std::sync::Arc;
 
@@ -79,8 +86,30 @@ struct View {
 // The body map and the limb records it is indexed by.
 @group(0) @binding(8) var<storage, read> limb_particles: array<u32>;
 @group(0) @binding(9) var<storage, read> limb_parent: array<u32>;
+@group(0) @binding(10) var<storage, read> limb_length: array<u32>;
+@group(0) @binding(11) var<storage, read> limb_target_thickness: array<f32>;
+@group(0) @binding(12) var<storage, read> limb_grown: array<f32>;
+// Which limb a body particle belongs to, so a disc can be drawn at that
+// limb's thickness.
+@group(0) @binding(13) var<storage, read> particle_organism: array<u32>;
+@group(0) @binding(14) var<storage, read> particle_limb: array<u32>;
+@group(0) @binding(15) var<storage, read> particle_index_in_limb: array<u32>;
 
 const NO_PARTICLE: u32 = 0xffffffffu;
+const NO_ORGANISM: u32 = 0xffffffffu;
+
+// A limb's live thickness, from its record and how far it has grown:
+// `target_thickness * sqrt(grown / length)` over the record's length capped
+// as growth caps it (`alife_sim::bodies::limb_thickness`).
+fn limb_thickness(record: u32) -> f32 {
+  // `target` is a reserved word in WGSL.
+  let full = min(f32(limb_length[record]), f32(view.per_limb));
+  if (full <= 0.0) {
+    return 0.0;
+  }
+  let progress = clamp(limb_grown[record] / full, 0.0, 1.0);
+  return limb_target_thickness[record] * sqrt(progress);
+}
 
 fn to_clip(world: vec2<f32>) -> vec4<f32> {
   return vec4<f32>(world * view.scale + view.offset, 0.0, 1.0);
@@ -181,6 +210,18 @@ fn particle_vs(@builtin(vertex_index) vi: u32) -> ParticleOut {
   } else if (kind == 2u) {
     color = vec4<f32>(part_type_to_color(part_type[id]), 1.0);
     radius = radius * 1.5;
+    // A body particle held by a limb is a joint between that limb's
+    // segments, so it is drawn at the same half-width they are. A seed in
+    // flight holds no map entry and keeps the dot.
+    let o = particle_organism[id];
+    if (o != NO_ORGANISM) {
+      let entry = o * view.max_limbs * view.per_limb
+        + particle_limb[id] * view.per_limb
+        + particle_index_in_limb[id];
+      if (limb_particles[entry] == id) {
+        radius = 0.5 * limb_thickness(o * view.max_limbs + particle_limb[id]);
+      }
+    }
   } else if (view.debug_evap == 1u) {
     color = vec4<f32>(evap_prob_to_color(evap_prob[id]), 1.0);
   }
@@ -283,7 +324,7 @@ fn segment_vs(@builtin(vertex_index) vi: u32) -> SegmentOut {
     dir = along / len;
   }
   let normal = vec2<f32>(-dir.y, dir.x);
-  let half_width = view.particle_radius * 1.5;
+  let half_width = 0.5 * limb_thickness(record);
   let point = pb + dir * (len * corner.x) + normal * ((corner.y * 2.0 - 1.0) * half_width);
 
   out.clip = to_clip(point);
@@ -332,7 +373,7 @@ impl Pipelines {
       },
       count: None,
     }];
-    entries.extend((1..=9).map(storage));
+    entries.extend((1..=15).map(storage));
 
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
       label: Some("alife sim bindings"),
@@ -441,6 +482,12 @@ impl CallbackTrait for SimCallback {
       &self.sph.part_type,
       &self.bodies.limb_particles,
       &self.limbs.parent,
+      &self.limbs.length,
+      &self.limbs.target_thickness,
+      &self.bodies.grown,
+      &self.sph.organism,
+      &self.sph.limb,
+      &self.sph.index_in_limb,
     ]
     .into_iter()
     .map(|handle| shared_buffer(&self.client, handle))

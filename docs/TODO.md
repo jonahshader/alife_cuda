@@ -21,10 +21,6 @@ Growth, the remaining chunks of `organism.md`'s *Growth* section, in order:
   whether the growth reserve is `seed_cost` at all. Changing the growth
   constants does not touch it — the conversion rate, then
   `--length-per-energy` 2 through 16, was the same run.
-- **Growth 2 — thickness and volume, what is left of it.** The genome, the
-  volume-priced growth and the volume upkeep have landed; the renderer
-  still draws every segment at the particle radius rather than at its
-  limb's thickness.
 - **Growth 3 — breaking.** Joint angular error over the interval in the
   packed life buffer; a limb past its thickness-scaled threshold sheds
   itself and its descendants as organic matter and regrows from zero.
