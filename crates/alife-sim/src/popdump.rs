@@ -164,17 +164,31 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
 
   // Length first, as `dump.rs` does: a corrupt count would otherwise ask for
   // gigabytes and abort instead of failing cleanly.
-  let records = max_organisms * max_limbs;
-  let expected = HEADER_BYTES
-    + (max_organisms * OrganismHost::RAW_BYTES) as u64
-    + (records * LimbHost::RAW_BYTES) as u64
-    + (max_organisms * param_count * size_of::<f32>()) as u64
-    + (max_organisms * latent_len * size_of::<f32>()) as u64
-    + (max_organisms * 2 * size_of::<f32>()) as u64;
+  // In checked u64 arithmetic: the header words are untrusted, and a
+  // corrupt pair near u32::MAX would otherwise wrap the product into a
+  // small number that passes the check.
   let actual = input.get_ref().metadata()?.len();
-  if actual < expected {
-    return Err(PopDumpError::Truncated { expected, actual });
+  let o = max_organisms as u64;
+  let expected = (|| {
+    let records = o.checked_mul(max_limbs as u64)?;
+    HEADER_BYTES
+      .checked_add(o.checked_mul(OrganismHost::RAW_BYTES as u64)?)?
+      .checked_add(records.checked_mul(LimbHost::RAW_BYTES as u64)?)?
+      .checked_add(o.checked_mul(param_count as u64)?.checked_mul(4)?)?
+      .checked_add(o.checked_mul(latent_len as u64)?.checked_mul(4)?)?
+      .checked_add(o.checked_mul(8)?)
+  })();
+  match expected {
+    Some(expected) if actual >= expected => {}
+    Some(expected) => return Err(PopDumpError::Truncated { expected, actual }),
+    None => {
+      return Err(PopDumpError::Truncated {
+        expected: u64::MAX,
+        actual,
+      });
+    }
   }
+  let records = max_organisms * max_limbs;
 
   let organisms = OrganismHost::read_fields(&mut input, max_organisms)?;
   let limbs = LimbHost::read_fields(&mut input, records)?;

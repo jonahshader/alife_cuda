@@ -215,10 +215,6 @@ impl SoilGrid {
     }
   }
 
-  pub fn mode(&self) -> TerrainMode {
-    self.spec.mode
-  }
-
   /// The stretches of world the per-column metrics bin organisms into.
   ///
   /// The capillary layout's six soil columns, in ascending x; for every other

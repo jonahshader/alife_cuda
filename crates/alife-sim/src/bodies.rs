@@ -542,11 +542,16 @@ pub fn transplant_anchors(
   }
 
   let cell = soil.cell_size;
+  // Every move reads the anchors as they were before any move: two moves
+  // that share a source column would otherwise compute the second one's
+  // relative position from anchors the first had already rewritten. When
+  // they overlap, the later move wins.
+  let before: Vec<Vec2> = anchors.to_vec();
   let mut moved = Vec::with_capacity(plan.len());
   for (source, destination, slots) in plan {
     for o in &slots {
       let span = (source.width() as f32 * cell).max(f32::MIN_POSITIVE);
-      let relative = ((anchors[*o].x - source.x0 as f32 * cell) / span).clamp(0.0, 1.0);
+      let relative = ((before[*o].x - source.x0 as f32 * cell) / span).clamp(0.0, 1.0);
       let x0 = destination.x0 as f32 * cell;
       // Half a cell short of the right edge, so a plant at the far end of a
       // wider source column still lands inside the destination rather than in
