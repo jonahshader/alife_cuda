@@ -193,6 +193,91 @@ soil alone drives a split, and the controls must separate causes:
 3. **Soil as actionable state.** The digger type, so terrain is written by
    creatures as well as by erosion.
 
+## Implementation layout (milestone 1)
+
+What the chunks in `TODO.md` share, pinned so they can be built in parallel.
+Sizes are sim params with these defaults; a flag changes them.
+
+**Particle system.** `ParticleKind` gains `Body` and `Free`. A `Free` slot
+is unallocated: every kernel skips it, its position is parked outside the
+grid. Capacity is fixed at start: fluid particles plus `max_organisms ×
+max_limbs × max_particles_per_limb` (defaults 256 × 16 × 8); the comptime
+particle count is that capacity. Per particle: `organism` (u32,
+`u32::MAX` for none), `limb` (u8), `index_in_limb` (u8). Body particles are
+SPH boundary particles: they carry mass and contribute density to their
+neighbors, and they integrate with the same forces as liquid (gravity,
+pressure, viscosity, soil friction). After integration a **constraint
+pass** projects them, one unit per organism, serial over that organism's
+particles, a fixed number of Gauss-Seidel iterations (default 4): distance
+to the previous particle in the limb (rest length ≤ cell size), the angle
+at each limb's base joint against the parent segment's direction (target
+from the limb record for plants, from the brain for actuated limbs later),
+and the root's first particle pinned to its soil cell. Velocity is
+recomputed from the projected displacement, position-based-dynamics style.
+Slot allocation is deterministic: births claim `Free` particle slots and
+free organism slots in order via a prefix scan over the free flags, never
+via atomics.
+
+**Genome buffers**, population SoA with capacity `max_organisms`:
+
+- Discrete, `[max_organisms × max_limbs]`: `part_type` (u8, 0 = absent;
+  1 root, 2 stem, 3 leaf, 4 seed, 5–7 reserved), `length` (u8, particles),
+  `parent` (u8 limb index; the root limb is its own parent), `child_slot`
+  (u8), `grow_angle` (f32, the rest angle at the base joint), `identity`
+  (`[f32; 4]`).
+- Continuous, `[max_organisms × BrainShape::param_count()]` f32 on the
+  host as the master copy, uploaded per organism on birth; the fp16 device
+  shadow is the brain chunk's concern.
+- Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor), plus
+  the runtime `alive` flag, `energy`, and the latent state
+  `[max_organisms × n_latents × d_latent]`, which is state, not genome.
+- Mutation is a kernel over newborn organisms, Threefry-keyed by child slot
+  and step: Gaussian perturbation of the brain tensor (`mutation_sigma`),
+  and with probability `structural_rate` one structural edit: add a limb
+  (random present parent, first absent record, random type and length,
+  child slot = next free), remove a limb (mark absent, cascade to its
+  children), or retype; identity and grow angle get their own small
+  Gaussian. Species distance is over the discrete section: number of
+  differing part types plus normalized identity distance, computed on the
+  host for metrics.
+
+**Brain shape** (`BrainShape`, owned by the genome chunk, consumed by the
+brain chunk). Defaults: `d_token` 32, `d_latent` 32, `n_latents` 8,
+`trunk_hidden` 64, `n_types` 8, identity 4, sensors 5 (light, water,
+soil solid fraction, contact, energy). Token features are the
+concatenation of spatial (2), rotation as cos/sin (2), depth (1), child
+slot (1), identity (4), sensors (5) = 15, projected to `d_token` and added
+to the part-type embedding. Parameter slices, in this order, each a named
+range so both chunks index the same tensor:
+
+| slice | shape |
+|---|---|
+| `type_embed` | `n_types × d_token` |
+| `tok_proj`, `tok_bias` | `15 × d_token`, `d_token` |
+| `in_q`, `in_k`, `in_v`, `in_o` | `d_latent × d_latent`, `d_token × d_latent`, `d_token × d_latent`, `d_latent × d_latent` |
+| `self_q`, `self_k`, `self_v`, `self_o` | four `d_latent × d_latent` |
+| `mlp_w1`, `mlp_b1`, `mlp_w2`, `mlp_b2` | `d_latent × trunk_hidden`, `trunk_hidden`, `trunk_hidden × d_latent`, `d_latent` |
+| `gate_w`, `gate_b` | `d_latent × d_latent`, `d_latent` |
+| `out_q`, `out_k`, `out_v`, `out_o` | `d_token × d_latent`, `d_latent × d_latent`, `d_latent × d_latent`, `d_latent × d_token` |
+| `head_sprout`, `sprout_b` | `d_token × n_types`, `n_types` (logits over child type, 0 = none) |
+| `head_actuator`, `actuator_b` | `d_token × 2`, `2` (target angle, reserved) |
+| `latent_init` | `n_latents × d_latent` |
+
+About 18.9k parameters at the defaults. Initialization is Gaussian with
+sigma `1/sqrt(fan_in)` per slice. One tick of the brain: tokens from limb
+geometry and sensors; input cross-attention latents→tokens; latent
+self-attention; MLP; gated update of the persistent latents; output
+cross-attention tokens→latents; heads per limb. Single-head attention,
+fp32 accumulate, one pass per tick.
+
+**Step order** once organisms exist: grid build (all non-`Free`) → density
+→ evap probability → accel → evaporate → move liquid → move vapor →
+sense (token features per limb) → brain forward → apply heads (sprout,
+actuator targets) → constraint pass → energy and life cycle. The bodies
+chunk owns the constraint pass and publishes limb geometry (root-relative
+position, segment angle, depth) for the token features; the brain chunk
+owns sense → forward → apply.
+
 ## Decisions & dead ends
 
 - 2026-09-18 — **Single organism representation** for plants and creatures.
