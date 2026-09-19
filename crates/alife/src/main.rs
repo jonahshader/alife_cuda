@@ -49,6 +49,14 @@ struct Cli {
   #[arg(long, default_value_t = 0, value_name = "N")]
   founders: usize,
 
+  /// Write the evolutionary metrics time series to a CSV file (headless only)
+  #[arg(long, value_name = "PATH")]
+  metrics: Option<PathBuf>,
+
+  /// Steps between metrics samples
+  #[arg(long, default_value_t = 100, value_name = "K")]
+  metrics_every: u32,
+
   /// Compute backend (default: cuda if available, else wgpu, else cpu)
   #[arg(long, value_enum)]
   runtime: Option<RuntimeKind>,
@@ -175,6 +183,19 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
       .context("installing the interrupt handler")?;
   }
 
+  let mut metrics = match &cli.metrics {
+    Some(path) => Some(
+      alife_sim::metrics::Sampler::create(
+        path,
+        cli.metrics_every,
+        sim.params().species_threshold,
+        sim.soil(),
+      )
+      .with_context(|| format!("creating {}", path.display()))?,
+    ),
+    None => None,
+  };
+
   let mut step = 0u32;
   while !stop.load(Ordering::Relaxed) {
     sim.step();
@@ -185,6 +206,11 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
     if step == 1 {
       sim.sync();
       sim.enable_timing();
+    }
+    if let Some(sampler) = &mut metrics
+      && sampler.is_sample_step(sim.step_count())
+    {
+      sim.sample_metrics(sampler).context("sampling metrics")?;
     }
     if cli.iterations > 0 && step >= cli.iterations {
       break;
@@ -207,6 +233,23 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
     );
   }
 
+  // The final step earns a row whether or not it landed on the cadence, so
+  // the summary's "last row" is the state the run actually ended in.
+  if let Some(sampler) = &mut metrics {
+    if !sampler.is_sample_step(sim.step_count()) {
+      sim.sample_metrics(sampler).context("sampling metrics")?;
+    }
+    sampler.flush().context("writing the metrics file")?;
+    println!(
+      "Wrote metrics: {} ({} samples)",
+      sampler.path().display(),
+      sampler.samples().len()
+    );
+  }
+
   print!("{}", sim.timings().report());
+  if let Some(sampler) = &metrics {
+    print!("{}", sampler.summary());
+  }
   Ok(())
 }
