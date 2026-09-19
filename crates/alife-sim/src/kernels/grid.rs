@@ -24,7 +24,7 @@ use cubecl_runtime::server::Handle;
 
 use super::scan;
 use super::{
-  Cfg, P_CELL_SIZE, SCAN_THREADS, SphArgs, cube_count, particle_to_cid, sph_args, whole,
+  Cfg, GridArgs, P_CELL_SIZE, SCAN_THREADS, SphArgs, cube_count, particle_to_cid, sph_args, whole,
 };
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 
@@ -275,6 +275,133 @@ pub fn build_ref(particles: &SphHost, cell_size: f32, cfg: &Cfg) -> GridRef {
     cell_start,
     sorted_ids,
   }
+}
+
+// --- Reading the grid: the 3x3 neighbourhood every gather kernel walks ---
+
+/// One cell of the 3x3 neighbourhood, as the three things a gather needs from
+/// it: where its slice of `sorted_ids` starts, how many entries to read, and
+/// the shift that unwraps a neighbour reached across the world's x seam.
+#[derive(CubeType, Clone, Copy)]
+pub struct NeighbourCell {
+  pub start: u32,
+  pub count: u32,
+  /// Added to a neighbour's x before differencing. Zero for the eight of nine
+  /// visits that do not cross the seam.
+  pub x_shift: f32,
+}
+
+/// The cell `(dx - 1, dy - 1)` away from `(cell_x, cell_y)`, with `dx` and `dy`
+/// each in `0..3`.
+///
+/// x wraps; y is clipped at the world floor and ceiling, and a row outside the
+/// world yields an empty cell rather than an index. The count is clamped to
+/// `max_per_cell`, which is exactly what the C++ `min(...,
+/// max_particles_per_cell)` does — unlike the C++ this grid drops nothing when
+/// a cell is crowded, so the clamp is where the two agree again.
+///
+/// The callers keep the 3x3 as two nested loops and pass `dx` and `dy` rather
+/// than flattening it to one `0..9`: flattened, wgpu spends 14% longer in
+/// `calculate_accel` (0.263 ms against 0.230 ms, measured both ways twice).
+/// The nesting is also the row-then-column order the C++ gathers in, which is
+/// their float summation order, so it is not free to change either.
+#[cube]
+pub fn neighbour_cell(
+  grid: &GridArgs,
+  cell_x: i32,
+  cell_y: i32,
+  dx: u32,
+  dy: u32,
+  bounds_x: f32,
+  #[comptime] cfg: Cfg,
+) -> NeighbourCell {
+  let yi = cell_y + dy as i32 - 1;
+  let xi = cell_x + dx as i32 - 1;
+
+  // wrap x if out of horizontal bounds
+  let mut x_shift = 0.0f32;
+  if xi < 0 {
+    x_shift = -bounds_x;
+  } else if xi >= cfg.grid_w {
+    x_shift = bounds_x;
+  }
+
+  let mut start = 0u32;
+  let mut count = 0u32;
+  // skip if cell is out of vertical bounds
+  if yi >= 0 && yi < cfg.grid_h {
+    let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
+    let index = (yi * cfg.grid_w + wrapped_x) as usize;
+    start = grid.cell_start[index];
+    count = grid.cell_counts[index];
+    if count > cfg.max_per_cell {
+      count = cfg.max_per_cell;
+    }
+  }
+
+  NeighbourCell {
+    start,
+    count,
+    x_shift,
+  }
+}
+
+/// Move a neighbour's x across the world's seam, if that is where it was
+/// reached from.
+///
+/// The branch is not an optimisation. An unconditional `x + x_shift` is the
+/// same number for the eight cells whose shift is zero, but it moves the CUDA
+/// backend's float contraction: the gathers then differ in their low bits from
+/// what the hand-written loops computed — measured against their dumps, one
+/// step, 4157 of 51200 densities off by up to 4 ulp. The host twin needs no
+/// such guard.
+#[cube]
+pub fn unwrap_x(x: f32, x_shift: f32) -> f32 {
+  let mut out = x;
+  if x_shift != 0.0f32 {
+    out += x_shift;
+  }
+  out
+}
+
+/// Host twin of [`neighbour_cell`]: every neighbour particle of a cell, paired
+/// with the x shift that unwraps it, in the same order the kernels visit them.
+pub fn neighbours<'a>(
+  grid: &'a GridRef,
+  cell_x: i32,
+  cell_y: i32,
+  bounds_x: f32,
+  cfg: &'a Cfg,
+) -> impl Iterator<Item = (usize, f32)> + 'a {
+  (0..3i32).flat_map(move |dy| {
+    (0..3i32).flat_map(move |dx| {
+      let yi = cell_y + dy - 1;
+      let xi = cell_x + dx - 1;
+
+      let x_shift = if xi < 0 {
+        -bounds_x
+      } else if xi >= cfg.grid_w {
+        bounds_x
+      } else {
+        0.0
+      };
+
+      let (start, count) = if yi >= 0 && yi < cfg.grid_h {
+        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
+        let index = (yi * cfg.grid_w + wrapped_x) as usize;
+        (
+          grid.cell_start[index] as usize,
+          grid.cell_counts[index].min(cfg.max_per_cell) as usize,
+        )
+      } else {
+        (0, 0)
+      };
+
+      grid.sorted_ids[start..start + count]
+        .iter()
+        .map(move |id| (*id as usize, x_shift))
+    })
+  })
 }
 
 #[cfg(test)]

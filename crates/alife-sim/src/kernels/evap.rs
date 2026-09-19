@@ -3,7 +3,7 @@
 
 use cubecl::prelude::*;
 
-use super::grid::GridDevice;
+use super::grid::{GridDevice, neighbour_cell, neighbours, unwrap_x};
 use super::soil_sample::{presence_at_pos, presence_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, SoilArgs, SphArgs,
@@ -51,34 +51,17 @@ pub fn calculate_evap_prob(
   let mut drho_dy = 0.0f32;
 
   for dy in 0..3u32 {
-    let yi = cell_y + dy as i32 - 1;
-    if yi >= 0 && yi < cfg.grid_h {
-      for dx in 0..3u32 {
-        let xi = cell_x + dx as i32 - 1;
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let ni = (yi * cfg.grid_w + wrapped_x) as usize;
-
-        let start = grid.cell_start[ni] as usize;
-        let mut np = grid.cell_counts[ni];
-        if np > cfg.max_per_cell {
-          np = cfg.max_per_cell;
-        }
-
-        for k in 0..np {
-          let pid = grid.sorted_ids[start + k as usize] as usize;
-          let mut other_x = sph.pos[2 * pid];
-          let other_y = sph.pos[2 * pid + 1];
-          if xi < 0 {
-            other_x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other_x += bounds_x;
-          }
-          let diff_x = pos_x - other_x;
-          let diff_y = pos_y - other_y;
-          let dst = f32::sqrt(diff_x * diff_x + diff_y * diff_y);
-          let grad_y = density_kernel_gradient_component(smoothing_radius, diff_y, dst);
-          drho_dy += sph.mass[pid] * grad_y;
-        }
+    for dx in 0..3u32 {
+      let cell = neighbour_cell(grid, cell_x, cell_y, dx, dy, bounds_x, cfg);
+      for k in 0..cell.count {
+        let pid = grid.sorted_ids[cell.start as usize + k as usize] as usize;
+        let other_x = unwrap_x(sph.pos[2 * pid], cell.x_shift);
+        let other_y = sph.pos[2 * pid + 1];
+        let diff_x = pos_x - other_x;
+        let diff_y = pos_y - other_y;
+        let dst = f32::sqrt(diff_x * diff_x + diff_y * diff_y);
+        let grad_y = density_kernel_gradient_component(smoothing_radius, diff_y, dst);
+        drho_dy += sph.mass[pid] * grad_y;
       }
     }
   }
@@ -121,32 +104,13 @@ pub fn calculate_evap_prob_ref(
     let cell_y = (grid_index / cfg.grid_w as u32) as i32;
 
     let mut drho_dy = 0.0f32;
-    for dy in 0..3i32 {
-      let yi = cell_y + dy - 1;
-      if yi < 0 || yi >= cfg.grid_h {
-        continue;
-      }
-      for dx in 0..3i32 {
-        let xi = cell_x + dx - 1;
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let ni = (yi * cfg.grid_w + wrapped_x) as usize;
-        let start = grid.cell_start[ni] as usize;
-        let count = grid.cell_counts[ni].min(cfg.max_per_cell);
-
-        for k in 0..count as usize {
-          let pid = grid.sorted_ids[start + k] as usize;
-          let mut other = particles.pos[pid];
-          if xi < 0 {
-            other.x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other.x += bounds_x;
-          }
-          let diff = pos - other;
-          let grad_y =
-            density_kernel_gradient_component_ref(params.smoothing_radius, diff.y, diff.length());
-          drho_dy += particles.mass[pid] * grad_y;
-        }
-      }
+    for (pid, x_shift) in neighbours(grid, cell_x, cell_y, bounds_x, cfg) {
+      let mut other = particles.pos[pid];
+      other.x += x_shift;
+      let diff = pos - other;
+      let grad_y =
+        density_kernel_gradient_component_ref(params.smoothing_radius, diff.y, diff.length());
+      drho_dy += particles.mass[pid] * grad_y;
     }
 
     let normalized_grad = -drho_dy / particles.density[i].max(1e-6);

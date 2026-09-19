@@ -3,7 +3,7 @@
 
 use cubecl::prelude::*;
 
-use super::grid::GridDevice;
+use super::grid::{GridDevice, neighbour_cell, neighbours, unwrap_x};
 use super::soil_sample::{friction, properties_at_pos, properties_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CAPILLARY_MULT, P_CELL_SIZE, P_DT, P_GRAVITY, P_NEAR_PRESSURE_MULT,
@@ -91,55 +91,36 @@ pub fn calculate_accel(
 
   // iterate through cell neighborhood
   for dy in 0..3u32 {
-    let yi = cell_y + dy as i32 - 1;
-    // skip if cell is out of vertical bounds
-    if yi >= 0 && yi < cfg.grid_h {
-      for dx in 0..3u32 {
-        let xi = cell_x + dx as i32 - 1;
-        // wrap x if out of horizontal bounds
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let neighbour_index = (yi * cfg.grid_w + wrapped_x) as usize;
+    for dx in 0..3u32 {
+      let cell = neighbour_cell(grid, cell_x, cell_y, dx, dy, bounds_x, cfg);
+      // iterate through particles within the cell
+      for k in 0..cell.count {
+        let particle_id = grid.sorted_ids[cell.start as usize + k as usize] as usize;
+        let other_x = unwrap_x(sph.pos[2 * particle_id], cell.x_shift);
+        let other_y = sph.pos[2 * particle_id + 1];
+        let other_density = sph.density[particle_id];
+        let other_pressure = pressure_mult * (other_density - target_density);
+        let other_near_pressure = near_pressure_mult * sph.near_density[particle_id];
+        let other_mass = sph.mass[particle_id];
 
-        let start = grid.cell_start[neighbour_index] as usize;
-        let mut num_particles = grid.cell_counts[neighbour_index];
-        if num_particles > cfg.max_per_cell {
-          num_particles = cfg.max_per_cell;
-        }
+        let offset_x = pos_x - other_x;
+        let offset_y = pos_y - other_y;
+        let dst2 = offset_x * offset_x + offset_y * offset_y;
+        let dst = f32::sqrt(dst2);
 
-        // iterate through particles within the cell
-        for k in 0..num_particles {
-          let particle_id = grid.sorted_ids[start + k as usize] as usize;
-          let mut other_x = sph.pos[2 * particle_id];
-          let other_y = sph.pos[2 * particle_id + 1];
-          if xi < 0 {
-            other_x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other_x += bounds_x;
-          }
-          let other_density = sph.density[particle_id];
-          let other_pressure = pressure_mult * (other_density - target_density);
-          let other_near_pressure = near_pressure_mult * sph.near_density[particle_id];
-          let other_mass = sph.mass[particle_id];
+        let coefficient = other_mass
+          * ((total_pressure + other_pressure + other_near_pressure) / (4.0f32 * other_density));
+        pressure_force_x -=
+          coefficient * density_kernel_gradient_component(smoothing_radius, offset_x, dst);
+        pressure_force_y -=
+          coefficient * density_kernel_gradient_component(smoothing_radius, offset_y, dst);
 
-          let offset_x = pos_x - other_x;
-          let offset_y = pos_y - other_y;
-          let dst2 = offset_x * offset_x + offset_y * offset_y;
-          let dst = f32::sqrt(dst2);
-
-          let coefficient = other_mass
-            * ((total_pressure + other_pressure + other_near_pressure) / (4.0f32 * other_density));
-          pressure_force_x -=
-            coefficient * density_kernel_gradient_component(smoothing_radius, offset_x, dst);
-          pressure_force_y -=
-            coefficient * density_kernel_gradient_component(smoothing_radius, offset_y, dst);
-
-          // viscosity
-          if particle_id != pid {
-            let influence = viscosity_kernel(smoothing_radius, dst2);
-            // scale with mass?
-            viscosity_force_x += influence * (sph.vel[2 * particle_id] - vel_x);
-            viscosity_force_y += influence * (sph.vel[2 * particle_id + 1] - vel_y);
-          }
+        // viscosity
+        if particle_id != pid {
+          let influence = viscosity_kernel(smoothing_radius, dst2);
+          // scale with mass?
+          viscosity_force_x += influence * (sph.vel[2 * particle_id] - vel_x);
+          viscosity_force_y += influence * (sph.vel[2 * particle_id + 1] - vel_y);
         }
       }
     }
@@ -211,49 +192,28 @@ pub fn calculate_accel_ref(
     let mut pressure_force = glam::Vec2::ZERO;
     let mut viscosity_force = glam::Vec2::ZERO;
 
-    for dy in 0..3i32 {
-      let yi = cell_y + dy - 1;
-      if yi < 0 || yi >= cfg.grid_h {
-        continue;
-      }
-      for dx in 0..3i32 {
-        let xi = cell_x + dx - 1;
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let neighbour_index = (yi * cfg.grid_w + wrapped_x) as usize;
-        let start = grid.cell_start[neighbour_index] as usize;
-        let count = grid.cell_counts[neighbour_index].min(cfg.max_per_cell);
+    for (particle_id, x_shift) in neighbours(grid, cell_x, cell_y, bounds_x, cfg) {
+      let mut other = positions[particle_id];
+      other.x += x_shift;
+      let other_density = particles.density[particle_id];
+      let other_pressure = params.pressure_mult * (other_density - params.target_density);
+      let other_near_pressure = params.near_pressure_mult * particles.near_density[particle_id];
+      let other_mass = particles.mass[particle_id];
 
-        for k in 0..count as usize {
-          let particle_id = grid.sorted_ids[start + k] as usize;
-          let mut other = positions[particle_id];
-          if xi < 0 {
-            other.x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other.x += bounds_x;
-          }
-          let other_density = particles.density[particle_id];
-          let other_pressure = params.pressure_mult * (other_density - params.target_density);
-          let other_near_pressure = params.near_pressure_mult * particles.near_density[particle_id];
-          let other_mass = particles.mass[particle_id];
+      let offset = pos - other;
+      let dst2 = offset.length_squared();
+      let dst = dst2.sqrt();
 
-          let offset = pos - other;
-          let dst2 = offset.length_squared();
-          let dst = dst2.sqrt();
+      let coefficient = other_mass
+        * ((total_pressure + other_pressure + other_near_pressure) / (4.0 * other_density));
+      pressure_force -= glam::Vec2::new(
+        coefficient * density_kernel_gradient_component_ref(params.smoothing_radius, offset.x, dst),
+        coefficient * density_kernel_gradient_component_ref(params.smoothing_radius, offset.y, dst),
+      );
 
-          let coefficient = other_mass
-            * ((total_pressure + other_pressure + other_near_pressure) / (4.0 * other_density));
-          pressure_force -= glam::Vec2::new(
-            coefficient
-              * density_kernel_gradient_component_ref(params.smoothing_radius, offset.x, dst),
-            coefficient
-              * density_kernel_gradient_component_ref(params.smoothing_radius, offset.y, dst),
-          );
-
-          if particle_id != pid {
-            let influence = viscosity_kernel_ref(params.smoothing_radius, dst2);
-            viscosity_force += (velocities[particle_id] - vel) * influence;
-          }
-        }
+      if particle_id != pid {
+        let influence = viscosity_kernel_ref(params.smoothing_radius, dst2);
+        viscosity_force += (velocities[particle_id] - vel) * influence;
       }
     }
 

@@ -3,7 +3,7 @@
 
 use cubecl::prelude::*;
 
-use super::grid::GridDevice;
+use super::grid::{GridDevice, neighbour_cell, neighbours, unwrap_x};
 use super::soil_sample::{solid_density_at_pos, solid_density_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, P_TARGET_DENSITY,
@@ -46,38 +46,19 @@ pub fn calculate_particle_density(
 
   // iterate through cell neighborhood
   for dy in 0..3u32 {
-    let yi = cell_y + dy as i32 - 1;
-    // skip if cell is out of vertical bounds
-    if yi >= 0 && yi < cfg.grid_h {
-      for dx in 0..3u32 {
-        let xi = cell_x + dx as i32 - 1;
-        // wrap x if out of horizontal bounds
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let neighbour_index = (yi * cfg.grid_w + wrapped_x) as usize;
-
-        let start = grid.cell_start[neighbour_index] as usize;
-        let mut num_particles = grid.cell_counts[neighbour_index];
-        if num_particles > cfg.max_per_cell {
-          num_particles = cfg.max_per_cell;
-        }
-
-        // iterate through particles within the cell
-        for k in 0..num_particles {
-          let particle_id = grid.sorted_ids[start + k as usize] as usize;
-          let mut other_x = sph.pos[2 * particle_id];
-          let other_y = sph.pos[2 * particle_id + 1];
-          if xi < 0 {
-            other_x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other_x += bounds_x;
-          }
-          let diff_x = px - other_x;
-          let diff_y = py - other_y;
-          let distance = f32::sqrt(diff_x * diff_x + diff_y * diff_y);
-          let mass = sph.mass[particle_id];
-          density += mass * density_kernel(smoothing_radius, distance);
-          near_density += mass * near_density_kernel(smoothing_radius, distance);
-        }
+    for dx in 0..3u32 {
+      let cell = neighbour_cell(grid, cell_x, cell_y, dx, dy, bounds_x, cfg);
+      // iterate through particles within the cell
+      for k in 0..cell.count {
+        let particle_id = grid.sorted_ids[cell.start as usize + k as usize] as usize;
+        let other_x = unwrap_x(sph.pos[2 * particle_id], cell.x_shift);
+        let other_y = sph.pos[2 * particle_id + 1];
+        let diff_x = px - other_x;
+        let diff_y = py - other_y;
+        let distance = f32::sqrt(diff_x * diff_x + diff_y * diff_y);
+        let mass = sph.mass[particle_id];
+        density += mass * density_kernel(smoothing_radius, distance);
+        near_density += mass * near_density_kernel(smoothing_radius, distance);
       }
     }
   }
@@ -118,32 +99,13 @@ pub fn calculate_particle_density_ref(
     let mut density = 0.0f32;
     let mut near_density = 0.0f32;
 
-    for dy in 0..3i32 {
-      let yi = cell_y + dy - 1;
-      if yi < 0 || yi >= cfg.grid_h {
-        continue;
-      }
-      for dx in 0..3i32 {
-        let xi = cell_x + dx - 1;
-        let wrapped_x = (xi + cfg.grid_w) % cfg.grid_w;
-        let neighbour_index = (yi * cfg.grid_w + wrapped_x) as usize;
-        let start = grid.cell_start[neighbour_index] as usize;
-        let count = grid.cell_counts[neighbour_index].min(cfg.max_per_cell);
-
-        for k in 0..count as usize {
-          let pid = grid.sorted_ids[start + k] as usize;
-          let mut other = particles.pos[pid];
-          if xi < 0 {
-            other.x -= bounds_x;
-          } else if xi >= cfg.grid_w {
-            other.x += bounds_x;
-          }
-          let distance = (pos - other).length();
-          let mass = particles.mass[pid];
-          density += mass * density_kernel_ref(params.smoothing_radius, distance);
-          near_density += mass * near_density_kernel_ref(params.smoothing_radius, distance);
-        }
-      }
+    for (pid, x_shift) in neighbours(grid, cell_x, cell_y, bounds_x, cfg) {
+      let mut other = particles.pos[pid];
+      other.x += x_shift;
+      let distance = (pos - other).length();
+      let mass = particles.mass[pid];
+      density += mass * density_kernel_ref(params.smoothing_radius, distance);
+      near_density += mass * near_density_kernel_ref(params.smoothing_radius, distance);
     }
 
     particles.density[i] = density
