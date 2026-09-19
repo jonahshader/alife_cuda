@@ -67,6 +67,43 @@ About **0.45 ms of GPU time per simulation step**, 98% of it in the three
 neighbor-gather kernels. The GUI reports ~1.95 ms per frame including
 rendering and the density-grid pass.
 
+### Neighbor kernels after the grid-tiling fix (2026-09-18)
+
+Same machine, same default config as the table above. Commits: `6a2e26c`
+(before), `2233423` (grid tiles the width exactly, seam widening gone),
+`f668795` (`viscosity_kernel` takes `dst2`).
+
+```
+./build/alife_cuda --headless --iterations 200
+nsys profile -o /tmp/hl --stats=false --force-overwrite=true \
+  ./build/alife_cuda --headless --iterations 20
+nsys stats --report cuda_gpu_kern_sum /tmp/hl.nsys-rep
+```
+
+Nsight kernel averages over 20 steps, each measurement repeated (µs):
+
+| Kernel                       | 6a2e26c     | 2233423            | f668795            |
+|------------------------------|------------:|-------------------:|-------------------:|
+| `calculate_accel`            | 235.2 238.9 | 227.2 230.3 229.2  | 230.1 227.4 226.3  |
+| `calculate_evap_prob`        | 108.8 108.4 | 103.7 104.0        | 103.6 104.2        |
+| `calculate_particle_density` | 107.6 106.7 | 103.3 103.2        | 103.4 103.8        |
+
+`TimingProfiler` averages over 200 steps (ms) agree on the grid fix —
+`calculate_accel` 0.233 → 0.229–0.231, `calculate_evap_prob` 0.111 → 0.102,
+`calculate_particle_density` 0.109 → 0.103 — so dropping the fourth seam
+column is worth **~3–5%** on each neighbor kernel. The viscosity change is
+**within noise**: nsys sees no difference and the event profiler reads ~1.5%
+*slower* on `calculate_accel` (0.231 → 0.234), i.e. the duplicate `length()`
+was already being folded into the one inside `density_kernel_gradient`.
+
+Sim behavior is unchanged by both: at `--seed 42`, 50 steps, mean and max
+density, mean speed and vapor count match before and after to 7 significant
+figures. Per-particle trajectories do **not** match, and cannot: the same
+binary run twice at one seed already diverges the same way (max abs density
+diff 0.03–2.2 at 50 steps, 1.2e-4 after 1 step), because `atomicAdd` in
+`populate_grid_indices` decides the per-cell particle order and with it the
+float summation order.
+
 ### CubeCL spike, grid build + density on every runtime (2026-09-18, commit 2a56cb0)
 
 ```

@@ -131,12 +131,13 @@ the port's own crate exists. Builds are `cargo +1.98.1` (see `perf.md`).
   reference implementation (the only kernel-debugging path). Headless
   mode, sim params as one declaration each (the X-macro's job, via a
   derive), per-kernel timing via timestamp queries, `cargo fmt` and
-  `clippy` targets. Two open physics questions in the C++ carry across
-  unchanged, marked for Jonah: `calculate_density_at_pos` widens the x
-  neighborhood to 4 cells at the world edges under a `// TEMP` comment
-  even though x wraps (asymmetric, probably unintended), and
-  `viscosity_kernel` squares a distance that was already a square root
-  (`// TODO` at the top of the file).
+  `clippy` targets. The two open physics questions in the C++ (the seam
+  widening in the neighbor loops, `viscosity_kernel` taking a square root it
+  then squares) are settled there — the grid now tiles the world width
+  exactly and the kernel takes `dst2` — so the port follows the fixed
+  behavior. Same-seed checks against the C++ binary compare aggregates, not
+  trajectories: neither build is bit-reproducible run to run, because the
+  atomic grid insertion order decides the SPH summation order.
 - **Windowing and UI**: winit + egui replace SDL + ImGui; rendering is
   wgpu, so the CUDA-GL interop disappears.
 - **Determinism**: counter-based RNG as today; the CPU runtime is the
