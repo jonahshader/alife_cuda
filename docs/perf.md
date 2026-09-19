@@ -27,16 +27,19 @@ ran.
 
 ## dev box — RTX 5090 (sm_120) / 16-core / 76 GB
 
-Toolchain (2026-09-18): CUDA 13.3 toolkit, driver 595.91.07, CMake 4.2,
-GCC host. **The driver reports CUDA 13.2 and rejects PTX from the 13.3
-toolchain.** The C++ tree never notices because nvcc emits SASS ahead of
-time; anything that JITs from PTX (the CubeCL CUDA runtime does, via nvrtc)
-must load the 13.2 libraries: `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64`.
-Otherwise the failure is `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`.
+Toolchain (2026-09-19): CUDA 13.3 toolkit, driver 610.57.04 (Ubuntu's
+`nvidia-driver-610-open`, CUDA 13.3), CMake 4.2, GCC host. **The driver and
+the default toolkit must agree on the CUDA version**: the C++ tree never
+notices a mismatch because nvcc emits SASS ahead of time, but the CubeCL
+CUDA runtime JITs from PTX via nvrtc, and a driver older than the toolkit
+rejects it with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. That was the case
+until 2026-09-19 (driver 595 at CUDA 13.2 against the 13.3 toolkit), and
+every CUDA run needed `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64` to load
+the older nvrtc; the fix was the driver bump, not the path. A toolkit
+newer than the driver again means the same choice: bump the driver.
 
-Rust tree: CubeCL 0.11.0-pre.3 needs rustc ≥ 1.95; the default stable here
-is 1.93.1, so a named toolchain is installed (`rustup toolchain install
-1.98.1`) and builds use `cargo +1.98.1`. The CPU runtime downloads a
+Rust tree: CubeCL 0.11.0-pre.3 needs rustc ≥ 1.95; the default toolchain
+is 1.98.1. The CPU runtime downloads a
 prebuilt LLVM 22.1.4 (36 MB, cached under `~/.cache/tracel`) and ignores
 the system LLVM. Clean release build of the whole workspace with the bundle
 cached: **1 m 32 s at `-j16`**.
@@ -107,8 +110,8 @@ float summation order.
 ### CubeCL spike, grid build + density on every runtime (2026-09-18, commit 2a56cb0)
 
 ```
-cargo +1.98.1 build --release -j16
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./target/release/spike all
+cargo build --release -j16
+./target/release/spike all
 ```
 
 Same 51,200 particles and 160×80 grid, soil-free density kernel (not
@@ -135,11 +138,10 @@ The port reached parity here; these replace the spike's numbers above, which
 measured a soil-free kernel on a throwaway harness.
 
 ```
-cargo +1.98.1 build --release -j16
+cargo build --release -j16
 # per-kernel timings, printed on exit; the first step is a warm-up and is not
 # counted, because every kernel is JIT-compiled on its first launch
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
-  ./target/release/alife --headless --seed 42 --runtime cuda --iterations 201
+./target/release/alife --headless --seed 42 --runtime cuda --iterations 201
 ./target/release/alife --headless --seed 42 --runtime wgpu --iterations 201
 ./target/release/alife --headless --seed 42 --runtime cpu  --iterations 21
 ```
@@ -166,7 +168,7 @@ overstates every cheap kernel; the C++ event profiler has its own ~5 µs
 floor. Use Nsight for a like-for-like CUDA comparison:
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 nsys profile -o /tmp/hl \
+nsys profile -o /tmp/hl \
   --stats=false --force-overwrite=true \
   ./target/release/alife --headless --seed 42 --runtime cuda --iterations 21
 nsys stats --report cuda_gpu_kern_sum /tmp/hl.nsys-rep
@@ -252,8 +254,7 @@ Default config, CUDA, the per-kernel printout (wall time around a sync, so
 every cheap kernel carries its ~11 µs floor):
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
-  ./target/release/alife --headless --seed 42 --runtime cuda \
+./target/release/alife --headless --seed 42 --runtime cuda \
   --iterations 501 --founders <N>
 ```
 
@@ -289,7 +290,7 @@ identical.
 ### The metrics sampler (2026-09-19, commit after d466745)
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./target/release/alife --headless \
+./target/release/alife --headless \
   --seed 42 --runtime cuda --founders 64 --terrain-mode 1 --iterations 1000 \
   [--metrics /tmp/m.csv]
 ```
@@ -310,9 +311,8 @@ One brain tick per step: sense, tokens, and the 22 launches of
 `brain::forward`. Same default world as above, 83,968 particle slots.
 
 ```
-cargo +1.98.1 build --release -j16
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
-  ./target/release/alife --headless --seed 42 --runtime cuda \
+cargo build --release -j16
+./target/release/alife --headless --seed 42 --runtime cuda \
   --iterations 501 --founders <N> [--brain-fp16 1]
 ./target/release/alife --headless --seed 42 --runtime wgpu \
   --iterations 501 --founders <N> [--brain-fp16 1]
@@ -354,7 +354,7 @@ Nsight over 21 steps is the real CUDA number, and it is an order of
 magnitude below what the event profiler reports:
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 nsys profile -o /tmp/hl \
+nsys profile -o /tmp/hl \
   --stats=false --force-overwrite=true \
   ./target/release/alife --headless --seed 42 --runtime cuda \
   --iterations 21 --founders 256
@@ -418,9 +418,8 @@ Two kernels and one packed readback every `life_interval` = 10 steps, plus
 whatever that tick decides to grow, place, free or mutate.
 
 ```
-cargo +1.98.1 build --release -j16
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
-  ./target/release/alife --headless --runtime cuda --seed 42 \
+cargo build --release -j16
+./target/release/alife --headless --runtime cuda --seed 42 \
   --iterations 3001 --founders <N> [--life-interval 100000]
 ```
 
@@ -456,7 +455,7 @@ so this is the cost of having a life cycle, not of one fixed workload.
 ### The population, 3000 steps (2026-09-19, commit after c5d9f00)
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./target/release/alife --headless \
+./target/release/alife --headless \
   --runtime <cuda|wgpu|cpu> --seed 42 --terrain-mode 0 --founders 64 \
   --iterations <3000|500> --metrics m.csv --dump d.bin
 ```
@@ -490,7 +489,7 @@ deaths and every slot full against 78 deaths and 93 of 256 slots.
 ### The soil-specialization experiment (2026-09-19, commit after 4b19bcb)
 
 ```
-LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./scripts/soil_experiment.sh 60000
+./scripts/soil_experiment.sh 60000
 ```
 
 Eleven runs on CUDA at `--terrain-mode 2 --founders 60 --max-organisms 1024

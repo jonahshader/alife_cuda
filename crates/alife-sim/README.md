@@ -10,15 +10,15 @@ the reference until the port is trusted.
 ## Running the tests
 
 ```
-cargo +1.98.1 test -p alife-sim --release -j16
+cargo test -p alife-sim --release -j16
 ```
 
 The unit tests run each kernel against its plain-Rust twin over one fixed small
 world, on the CPU runtime. `tests/parity.rs` additionally checks this port
 against the C++ binary, and checks that a same-seed run is bit-reproducible on
-every backend the box has. The CUDA backend needs
-`LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64` on the dev box (`docs/perf.md`
-says why); without it, `available(Cuda)` is false and that backend is skipped.
+every backend the box has. When the CUDA driver cannot take the toolkit's
+PTX (`docs/perf.md`), `available(Cuda)` is false and that backend is
+silently skipped — check the test output names it.
 
 ## Regenerating the parity references
 

@@ -69,9 +69,10 @@ Jonah's call. Everything an agent can do without that call is done.
 
 ## Machine and process notes
 
-- Dev box as before: `cargo +1.98.1`, `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64`
-  for the CUDA runtime (still required; re-verified), `Cargo.lock` is
-  authoritative.
+- Dev box (2026-09-19, after the overnight run): default toolchain is
+  1.98.1 and the driver is 610 (CUDA 13.3), so plain `cargo` and plain
+  `./target/release/alife --runtime cuda` work; no `+1.98.1`, no
+  `LD_LIBRARY_PATH`. `Cargo.lock` is authoritative.
 - The `code-review-find` workflow hung three times out of seven at the
   post-finder stage with one finder never returning; the candidates are
   recoverable from `journal.jsonl` under the workflow's transcript dir,

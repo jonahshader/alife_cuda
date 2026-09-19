@@ -22,15 +22,8 @@ RUNTIME=${RUNTIME:-cuda}
 ALIFE=${ALIFE:-./target/release/alife}
 OUT=runs/soil
 
-# The CUDA runtime JITs from PTX and needs the 13.2 libraries on this box
-# (`docs/perf.md` says why). Only set if the caller has not.
-CUDA_LIBS=/usr/local/cuda-13.2/lib64
-if [ -d "$CUDA_LIBS" ] && [ -z "${LD_LIBRARY_PATH:-}" ]; then
-  export LD_LIBRARY_PATH=$CUDA_LIBS
-fi
-
 if [ ! -x "$ALIFE" ]; then
-  echo "no binary at $ALIFE — cargo +1.98.1 build --release -j16" >&2
+  echo "no binary at $ALIFE — cargo build --release -j16" >&2
   exit 1
 fi
 mkdir -p "$OUT"

@@ -91,14 +91,14 @@ The fluid and soil sim is **Rust + CubeCL** (`crates/alife-sim`, the
 buildable so the port can be checked against it, and it is what the
 L-system trees still live in. New sim work goes in the Rust tree.
 
-- Build: `cargo +1.98.1 build --release -j16`. The pinned CubeCL needs a
-  newer rustc than the default stable, hence the named toolchain;
-  `Cargo.lock` is authoritative, **don't regenerate it** (`cargo add` is
-  fine). Before committing: `cargo +1.98.1 fmt` and `cargo +1.98.1 clippy
-  --all-targets`, both clean.
-- **The CUDA runtime needs `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64`** on
-  the dev box (`docs/perf.md` says why). Without it `--runtime cuda` is not
-  offered and the default falls through to wgpu.
+- Build: `cargo build --release -j16`. The pinned CubeCL needs rustc ≥ 1.95
+  (`docs/perf.md` has the box's toolchain); `Cargo.lock` is authoritative,
+  **don't regenerate it** (`cargo add` is fine). Before committing:
+  `cargo fmt` and `cargo clippy --all-targets`, both clean.
+- **The CUDA runtime JITs from PTX**, so the driver must accept the
+  toolkit's PTX version (`docs/perf.md`). When it doesn't, `--runtime cuda`
+  is not offered and the default falls through to wgpu — check `Runtime:`
+  on the first line of a headless run.
 - **Headless is the agent's default surface**: `./target/release/alife
   --headless --iterations N` steps the sim without a window and prints
   per-kernel timings on exit. `--runtime cpu|cuda|wgpu` picks the backend
@@ -126,7 +126,7 @@ L-system trees still live in. New sim work goes in the Rust tree.
   another.
 - **Same-seed runs are bit-reproducible** on a given backend, unlike the
   C++, so a change to sim code can be checked by diffing dumps.
-  `cargo +1.98.1 test` runs each kernel against its plain-Rust reference and,
+  `cargo test` runs each kernel against its plain-Rust reference and,
   when the C++ reference dumps are present, against the C++ binary itself
   (`crates/alife-sim/README.md` regenerates them).
 - **Never leave a GUI run open on the user's desktop.** The app has no frame
