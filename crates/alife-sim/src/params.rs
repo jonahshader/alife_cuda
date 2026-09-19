@@ -155,7 +155,7 @@ sim_params! {
         "Global multiplier for capillary suction force";
     terrain_mode: i32 = 0, "world.terrain_mode", "terrain-mode",
         "Terrain mode (0=normal, 1=capillary test, 2=capillary field)";
-    column_top: f32 = 0.55, "world.column_top", "column-top",
+    column_top: f32 = 0.25, "world.column_top", "column-top",
         "Fraction of the world height the terrain-mode-2 soil columns rise to";
     soil_permutation: i64 = 0, "world.soil_permutation", "soil-permutation",
         "Seed permuting which soil sits in which terrain-mode-2 column (0 = identity)";

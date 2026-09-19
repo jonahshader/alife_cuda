@@ -464,6 +464,11 @@ pub fn capillary_test(width: usize, height: usize) -> SoilHost {
 /// world height and everything above them is air, so a plant anchored on a
 /// column's surface has somewhere to grow (`docs/organism.md`, decisions).
 ///
+/// How far above the pool the columns end is what decides whether anything
+/// lives on them: a root only earns from water the column's capillary suction
+/// has lifted to it, and the default 0.25 — 0.8 m of column above a pool top
+/// at 0.2 — is the measured edge of that (`organism.md`, decisions).
+///
 /// The pool below and the gaps between are mode 1's, cell for cell — the only
 /// differences are where the soil stops and, when a control is on, which
 /// composition stands in which column.
@@ -872,7 +877,8 @@ mod tests {
     let grid = field(width, height, spec);
     let reference = capillary_test(width, height);
     let top = (height as f32 * spec.column_top) as usize;
-    assert_eq!(top, 88);
+    // Eight rows of column standing above the 32-row pool.
+    assert_eq!(top, 40);
 
     for y in 0..height {
       for x in 0..width {
