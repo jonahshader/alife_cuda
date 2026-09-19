@@ -94,8 +94,11 @@ dev box (`docs/perf.md` says why). `cargo fmt` before each commit.
   (`--help` lists them; `src/main.cu` is the authoritative flag list).
 - **Headless is the agent's default surface**: `./build/alife_cuda --headless
   --iterations N` steps the sim without a window and prints per-kernel
-  profiler stats to stdout on exit. That output is currently the only numeric
-  inspection path; richer metrics are an open design question
+  profiler stats to stdout on exit. `--dump <path>` additionally writes the
+  final particle SoA as a flat binary (format documented above the writer in
+  `src/main.cu`) — the way to diff two builds' sim state. Note the sim is not
+  bit-reproducible run to run (atomic grid insertion order), so compare
+  aggregates, not trajectories. Richer metrics are an open design question
   (`docs/TODO.md`).
 - **Never leave a GUI run open on the user's desktop.** The app has no frame
   cap flag yet, so an uncapped window pegs the GPU. An agent starts a GUI run

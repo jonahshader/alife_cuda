@@ -20,6 +20,8 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdint>
+#include <fstream>
 #include <iostream>
 
 #include <CLI/CLI.hpp>
@@ -156,12 +158,59 @@ static void print_profiler_stats() {
   }
 }
 
+// Dump the particle SoA to a flat little-endian binary file. Layout:
+//
+//   char[8]  magic "ALIFEDMP"
+//   uint32   version (1)
+//   uint32   particle count N
+//   uint32   step count
+//   uint64   resolved seed
+//   then one contiguous array per FOR_SPH field, in declaration order:
+//   pos[N], ppos[N], vel[N], acc[N] (float2 = two floats each),
+//   mass[N], density[N], near_density[N] (float),
+//   sym_break[N], state[N] (uint8), evap_prob[N] (float)
+//
+// Field order and sizes follow FOR_SPH, so adding a field to the macro
+// extends the dump automatically.
+static void write_particle_dump(const std::string &path, p2::ParticleFluidState &fluid,
+                                uint32_t step_count, uint64_t seed) {
+  // pull the device SoA back to the host mirror
+  copy(fluid.particles, fluid.particles_device);
+
+  std::ofstream out(path, std::ios::binary);
+  if (!out) {
+    std::cerr << "Failed to open dump file: " << path << std::endl;
+    return;
+  }
+
+  const uint32_t version = 1;
+  const auto count = static_cast<uint32_t>(fluid.particles.pos.size());
+  out.write("ALIFEDMP", 8);
+  out.write(reinterpret_cast<const char *>(&version), sizeof(version));
+  out.write(reinterpret_cast<const char *>(&count), sizeof(count));
+  out.write(reinterpret_cast<const char *>(&step_count), sizeof(step_count));
+  out.write(reinterpret_cast<const char *>(&seed), sizeof(seed));
+
+#define DUMP_SPH_FIELD(type, name, ...)                                                            \
+  {                                                                                                \
+    auto &field = fluid.particles.name;                                                            \
+    out.write(reinterpret_cast<const char *>(raw_ptr(field)),                                      \
+              static_cast<std::streamsize>(field.size() * sizeof(type)));                          \
+  }
+  FOR_SPH(DUMP_SPH_FIELD, DUMP_SPH_FIELD)
+#undef DUMP_SPH_FIELD
+
+  out.close();
+  std::cout << "Wrote dump: " << path << " (" << count << " particles)" << std::endl;
+}
+
 int main(int argc, char *argv[]) {
   // --- Pass 1: pre-parse for config file and write-config ---
   std::string config_file = "config.toml";
   bool write_config = false;
   bool headless = false;
   int iterations = 0; // 0 = run until Ctrl+C (headless) or window close (GUI)
+  std::string dump_path;
   SimParams sim_params;
 
   {
@@ -189,6 +238,8 @@ int main(int argc, char *argv[]) {
     CLI::App app{"ALife CUDA"};
     app.add_flag("--headless", headless, "Run without graphics");
     app.add_option("--iterations", iterations, "Number of simulation steps to run (0 = unlimited)");
+    app.add_option("--dump", dump_path,
+                   "Write the particle state to a binary file at the end of a headless run");
     register_sim_params_cli(app, sim_params);
     CLI11_PARSE(app, argc, argv);
   }
@@ -228,6 +279,8 @@ int main(int argc, char *argv[]) {
     }
 
     std::cout << "Completed " << step << " steps" << std::endl;
+    if (!dump_path.empty())
+      write_particle_dump(dump_path, fluid, static_cast<uint32_t>(step), resolved_seed);
     print_profiler_stats();
     return 0;
   }
