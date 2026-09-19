@@ -3,10 +3,11 @@
 The settled design for organisms: one representation for plants and
 creatures, a fixed-shape genome, a brain over body-part tokens, bodies made
 of particles in the fluid's particle system, and selection by ecology rather
-than a fitness function. **Status: milestone 1 runs — the genome, the
-particle bodies, the brain's forward pass, and energy with a life cycle
-that turns the population over on its own. What is left of the milestone
-is the soil-specialization experiment and its controls.** The open work is
+than a fitness function. **Status: milestone 1 is built and has been run —
+the genome, the particle bodies, the brain's forward pass, energy with a
+life cycle that turns the population over on its own, and the
+soil-specialization experiment with its three controls, which can be run and
+scored from `scripts/`.** The open work is
 in `TODO.md`; this file is the spec builders build from. When
 implementation diverges from it, update this file in the same commit.
 
@@ -193,7 +194,10 @@ divergence, settling) gate only fluid optimization and are secondary.
 every column. The traits are reported per soil column, because the
 experiment below asks whether they split by soil — the terrain publishes its
 extents as `SoilGrid::columns()`, and an organism is binned by the column its
-anchor sits in, so one anchored in a gap counts in `alive` and in no column.
+anchor sits in: `alive`, `root_frac`, `height`, `leaf_count`, `energy_mean`
+and `species` per column. A germinated plant anchored in a gap counts in
+`alive` and in no column, and so does a seed in flight, which holds a slot
+but has no anchor until it lands.
 Species are greedy clusters: each organism joins the first cluster whose
 representative it is within `species_threshold` (default 0.25) of by
 `species_distance`, else starts one. Phylogenetic depth is the `generation`
@@ -203,7 +207,7 @@ one without.
 
 ### The first experiment: soil specialization
 
-Run plants in the capillary test terrain (`--terrain-mode 1`), where sand,
+Run plants in the capillary field terrain (`--terrain-mode 2`), where sand,
 silt, and clay columns stand side by side with gaps between them, and watch
 whether trait distributions split by column. Skepticism is warranted that
 soil alone drives a split, and the controls must separate causes:
@@ -218,6 +222,46 @@ soil alone drives a split, and the controls must separate causes:
 - **Transplant test.** Take a lineage from one column, seed it into another,
   and compare its energy trajectory against the resident lineage. A true
   specialist does worse away from home.
+
+**The terrain.** `--terrain-mode 2` (`TerrainMode::CapillaryField`,
+`crates/alife-sim/src/soil.rs`) is mode 1 with a ceiling: the same pool below
+20% of the world height, the same six columns at the same x extents, the same
+gaps, but the soil stops at `--column-top` of the world height and everything
+above is air. Mode 1 fills the columns to the top of the world and is
+therefore uninhabitable (decisions, 2026-09-19); it is also what every
+`resources/parity/*.bin` was generated from, so it is frozen rather than
+fixed. How far above the pool the columns end decides whether anything lives
+on them at all — see the `--column-top` decision entry.
+
+**The controls**, both mode 2 only; the validator rejects them on any other
+mode, and `SoilGrid::columns()` is what the metrics bin by, so a control that
+moves soil around moves the metrics with it.
+
+- `--soil-permutation <seed>` (default 0 = identity, the absence of the
+  control) deals the six compositions out to the six positions by a
+  Fisher–Yates shuffle over a SplitMix64 stream seeded with `<seed>` and
+  nothing else. A column's *label* travels with its composition, so the
+  per-column metrics still call the sand column `sand` wherever it stands,
+  and the CSV's column order is still ascending x.
+- `--uniform-soil sand|silt|clay` (default `none`) fills every column with
+  one pure composition, leaving only the gaps to separate them. With no
+  composition left to name a column after, the labels become `col0..col5` by
+  position.
+- The transplant is `--save-pop`, `--load-pop` and `--transplant <from>:<to>`
+  (by column label, repeatable, every move applied at once from the
+  membership before any of them, so `sand:clay` with `clay:sand` swaps the
+  two). A transplanted organism keeps its relative x within the column and
+  re-anchors on the destination's soil surface
+  (`bodies::transplant_anchors`). The population file's format is documented
+  above the writer in `crates/alife-sim/src/popdump.rs`: it carries the
+  genomes, the lineage fields, the energies, the latent state and the
+  anchors, and a load re-grows the bodies from those and drops seeds in
+  flight.
+
+**Running it.** `scripts/soil_experiment.sh [N]` runs the eleven headless
+runs — main, isolation and position controls over three seeds, plus the
+transplant and its no-transplant twin — into `runs/soil/`, and
+`scripts/soil_score.py` scores them.
 
 ## Milestones
 
@@ -463,6 +507,36 @@ never uploads the whole population.
   step and diverging visibly by 50. Same-seed reproducibility on one
   backend cannot see either; only a byte-for-byte diff against the
   previous binary's dump can.
+- 2026-09-19 — **Mode 1 is frozen; the experiment's terrain is mode 2.** The
+  fix for the entry below is a new `TerrainMode::CapillaryField` rather than a
+  change to `capillary_test`, because mode 1 is what every
+  `resources/parity/*.bin` was generated from and `tests/parity.rs` measures
+  this port against the C++ binary through it. Mode 2 reuses
+  `capillary_columns` for the x layout, so `SoilGrid::columns()` and every
+  per-column metric work unchanged, and stops the soil at `--column-top`.
+- 2026-09-19 — **`--column-top` is 0.25, not the 0.55 the brief specified,
+  and above ~0.28 nothing lives.** Measured, `--terrain-mode 2 --founders 60
+  --seed 42`, 4000 steps on CUDA, one run per value (the pool top is 0.2):
+  0.25 leaves 120 alive and 57 lineages with 30 births against 32 deaths;
+  0.27 leaves 44 alive; 0.28 leaves 29; 0.30 and 0.55 leave nothing at all —
+  60 deaths, no births, and at 0.55 every founder is dead inside the first
+  100 steps. A founder's six particles cost 0.018 a step and its one leaf in
+  open light earns 0.012, so it lives on what its two root particles draw,
+  and that is only the water the column's capillary suction has lifted to
+  them. A column standing 5.6 m above the pool lifts nothing that high
+  whatever it is made of, so at 0.55 every column is equally dry and the soil
+  difference the experiment is about cannot express itself. At 0.25 — 0.8 m
+  of column above the pool, 12 m of air above that — it plainly can: after
+  4000 steps mean energy is 1.54 in the clay column against 0.18 in the sand
+  one, which is the ordering of the capillary constants.
+- 2026-09-19 — **Founders are spaced along the soil, not along the world.**
+  `--founders N` put them at even x across the world, so on a capillary
+  terrain about one in eight landed in a gap, where `soil_surface` falls back
+  to the world floor — the bottom of the pool, with unlimited water. Those
+  few were the only survivors of the first runs and would have been a tenth
+  of the experiment's sample. They are now spread over the union of
+  `SoilGrid::columns()`; a terrain whose single column spans the world is
+  bit-identical to what it was.
 - 2026-09-19 — **`--terrain-mode 1` has no room for a plant.** The
   capillary test fills every soil column from 20% height to the very top of
   the world and leaves the gaps between columns empty, so a founder
@@ -470,11 +544,8 @@ never uploads the whole population.
   grow, and one in a gap anchors on the floor. Measured: at `--founders 64
   --terrain-mode 1 --iterations 500`, 114 of 384 body particles sit exactly
   at `y = bounds.y` and the worst segment is 73% short of its rest length;
-  the same run on the noise terrain is 0.08%. The soil-specialization
-  experiment needs `capillary_test` to leave headroom above the columns
-  before plants can live in it — that is the experiment chunk's to fix, not
-  the bodies chunk's, because it changes the terrain every existing parity
-  reference was generated from.
+  the same run on the noise terrain is 0.08%. Terrain mode 2 is the answer,
+  above; mode 1 keeps this property and is only for the parity references.
 - 2026-09-19 — **The brain's latents need a normalization the slice table
   does not have.** One tick makes three residual adds onto the latent stream
   — the input cross-attention, the self-attention and the MLP — and the

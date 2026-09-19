@@ -55,6 +55,11 @@ The C++ dump carries the world's step count, and `--load` resumes the RNG
 counter from it. A dump loaded without that would replay the random stream from
 zero and evaporate a different set of particles.
 
+A population travels in its own file instead: `--save-pop` / `--load-pop`,
+documented above the writer in `src/popdump.rs`. It carries the genomes, the
+lineage fields, the energies, the latent state and the anchors, and a load
+re-grows every body from its genome and drops the seeds that were in flight.
+
 Those references are **version 1** dumps, the C++ SoA at 50 bytes a particle.
 This tree writes version 2, which appends the four organism fields, and reads
 both — a version-1 dump loads with the organism fields at their defaults

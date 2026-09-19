@@ -115,6 +115,15 @@ L-system trees still live in. New sim work goes in the Rust tree.
   CWD and `--write-config` emits the defaults; every sim param is also a CLI flag
   (`--help` lists them; `crates/alife-sim/src/params.rs` is the
   authoritative list).
+- **The soil-specialization experiment** is `scripts/soil_experiment.sh [N]`
+  (eleven headless runs into the gitignored `runs/soil/`, ~25 min at the
+  default N=60000) scored by `scripts/soil_score.py [runs/soil]`. Both are
+  re-runnable on their own; `docs/organism.md`, *The first experiment*, says
+  what the conditions are.
+- `--save-pop <path>` / `--load-pop <path>` carry a population between runs
+  (genomes, lineage, energy, anchors; bodies are re-grown, seeds dropped),
+  and `--transplant <from>:<to>` moves a soil column's organisms into
+  another.
 - **Same-seed runs are bit-reproducible** on a given backend, unlike the
   C++, so a change to sim code can be checked by diffing dumps.
   `cargo +1.98.1 test` runs each kernel against its plain-Rust reference and,

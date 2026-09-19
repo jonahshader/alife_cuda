@@ -8,13 +8,33 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-- **Soil-specialization experiment** in `--terrain-mode 1`, with the three
-  controls in the spec (identical-soil isolation control, soil-position
-  permutation, transplant test). It must leave air above the columns: today
-  they run to the top of the world, so a plant anchored on a column's
-  surface stands at the ceiling (`organism.md`, decisions). Changing the
-  terrain regenerates every parity reference, so it belongs to this chunk
-  rather than an earlier one.
+Left open by the soil-specialization experiment:
+
+- **A plant lives only in a 0.8 m band above the pool.** `--column-top`
+  0.25 works, 0.30 is total extinction, and the difference is whether
+  capillary suction lifts water to a root at the column's surface
+  (`organism.md`, decisions). Every column the experiment can use is
+  therefore short, and a plant that grows a taller stem is growing away
+  from the only thing paying for it. Widening that band — deeper roots
+  worth more, a leaf that earns more, a wetter world — is what a terrain
+  with real vertical structure needs, and it is a change to the energy
+  balance rather than to the terrain.
+- **Once every organism slot is full, `energy_mean` stops meaning
+  fitness.** A plant over `seed_threshold` with no free slot to seed into
+  keeps its energy, so a saturated column's mean energy measures how long
+  it has been saturated. The per-column traits are unaffected; the energy
+  comparison in `soil_score.py` is the one to distrust on a saturated run.
+- **The transplant's destination column mixes.** Over the N/4 window new
+  seeds germinate in the column the moved organisms were put in, so its
+  `energy_mean` is the incomers plus whatever germinated beside them. An
+  honest "moved versus resident" needs the metrics to split a column by
+  lineage of origin, which is a column in the time series, not a design
+  question.
+- **`--load-pop` starts the fluid from scratch at step 0.** The saved
+  step count and seed are provenance; a population comes back into a
+  freshly initialised world rather than the one it left. Resuming both at
+  once needs `--dump` and `--save-pop` to agree about a run, which nothing
+  needs yet.
 
 Left open by the bodies chunk:
 
@@ -31,18 +51,20 @@ Left open by the metrics chunk:
   while plants are anchored; a mobile creature needs binning by where it
   currently is.
 - **`alive` counts seeds in flight**, because a seed holds an organism slot
-  (`organism.md`, *Genome buffers*). The per-column figures do not: a seed
-  has no anchor yet. Splitting the two in the time series is a column, not
-  a design question — do it when a run turns on how many of the population
-  are in the air.
+  (`organism.md`, *Genome buffers*), and the per-column figures do not.
+  Splitting the two in the time series is a column, not a design question —
+  do it when a run turns on how many of the population are in the air. The
+  experiment's runs already do: a saturated `alive` is mostly seeds.
 
 Left open by the life-cycle chunk:
 
-- **A run left to itself fills every organism slot after a few thousand
-  steps** (`organism.md`, decisions, 2026-09-19). The binding constraint is
-  `max_organisms`, not light or space, because plants at the founder body
-  size do not shade each other enough in a 32 m world. The
-  soil-specialization terrain work is where that gets tested properly.
+- **A run left to itself either fills every organism slot or goes extinct,
+  and which one is the seed** (`organism.md`, decisions, 2026-09-19, and
+  `REVIEW.md`). The soil-specialization runs tested this on the experiment's
+  own terrain at `--max-organisms 1024`: some seeds saturate, some lose the
+  whole population, and nothing settles in between. The binding constraint
+  is still `max_organisms` rather than light or space, and most of a
+  saturated population is seeds in flight rather than plants.
 - **The `stage` field is not in the dump**, because the population tensors
   are not: `--load` resumes the fluid and reserves body capacity on top
   (`crates/alife-sim/README.md`). A run cannot be checkpointed and resumed

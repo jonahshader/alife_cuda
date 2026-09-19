@@ -486,3 +486,41 @@ the CPU runtime at 20, terrain modes 0 and 1, all six identical.
 The energy constants are `organism.md`'s decision entry; the run that
 chose them is the 0.001-versus-0.003 pair of `upkeep_per_particle`, 3
 deaths and every slot full against 78 deaths and 93 of 256 slots.
+
+### The soil-specialization experiment (2026-09-19, commit after 4b19bcb)
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./scripts/soil_experiment.sh 60000
+```
+
+Eleven runs on CUDA at `--terrain-mode 2 --founders 60 --max-organisms 1024
+--metrics-every 100`: nine of 60,000 steps and two of 15,000. Wall time per
+run, as the script prints it:
+
+| run | steps | s |
+|---|---:|---:|
+| `main_1` | 60,000 | 103 |
+| `isolation_1` | 60,000 | 114 |
+| `permuted_1` | 60,000 | 105 |
+| `main_2` | 60,000 | 88 |
+| `isolation_2` | 60,000 | 69 |
+| `permuted_2` | 60,000 | 109 |
+| `main_3` | 60,000 | 116 |
+| `isolation_3` | 60,000 | 116 |
+| `permuted_3` | 60,000 | 84 |
+| `transplant_3` | 15,000 | 54 |
+| `resident_3` | 15,000 | 54 |
+| **whole script** | | **1012** |
+
+1.4–1.9 ms a step, against the 2.0 ms of the `--founders 64
+--max-organisms 256` life-cycle run above: four times the organism slots
+costs well under twice the step, because the per-particle kernels are
+launched over the claimed body slots rather than over the capacity and the
+per-organism passes are a single cube either way. The spread between runs is
+the population they carry — the two that went extinct early are the two
+fastest — not anything about the configuration.
+
+A saved population is `max_organisms x param_count` fp32 and nothing else of
+consequence: **78 MB** at these settings, written in well under a second.
+
+What the runs found is in `REVIEW.md`.
