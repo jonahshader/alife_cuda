@@ -73,6 +73,14 @@ ignore.
 
 ## Build, test & run
 
+The sim is moving to Rust + CubeCL (`docs/organism.md` decisions,
+`docs/TODO.md` *Substrate*). Until the port reaches parity the C++ tree
+below is the reference and stays buildable. Rust tree: `cargo +1.98.1
+build --release -j16` (the pinned CubeCL needs a newer rustc than the
+default stable; `Cargo.lock` is authoritative, don't regenerate it), and
+the CUDA runtime needs `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64` on the
+dev box (`docs/perf.md` says why). `cargo fmt` before each commit.
+
 - Configure once: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`. Build:
   `cmake --build build -j<N>` with the **measured** per-machine job count
   from `docs/perf.md`. Before committing: `cmake --build build --target

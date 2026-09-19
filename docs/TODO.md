@@ -120,21 +120,23 @@ pre-release and bumped deliberately. The C++/CUDA tree stays as the
 reference until the port reaches parity, then is deleted. The C++
 maintenance items below are therefore **not** done in C++.
 
-- **Spike first, port second.** One kernel (SPH density or grid populate)
-  running identically on the CPU, CUDA, and wgpu/Vulkan runtimes, in a
-  Cargo workspace at the repo root (`crates/`). The spike exists to answer
-  the unknowns, not to be kept: (1) can the CubeCL wgpu runtime share a
-  device and buffers with a rendering `wgpu` instance and egui, so
-  compute output renders without a copy; (2) what the CPU runtime's LLVM
-  dependency (`cubecl-llvm`) needs on a fresh machine and whether a
-  GPU-less laptop can build it; (3) does the CUDA runtime work on the
-  dev box's sm_120 with CUDA 13.3; (4) is a CubeCL kernel steppable in a
-  debugger on the CPU runtime. Record the answers in `perf.md` and the
-  decisions log.
+The spike (`crates/spike`, answers in its README, durable parts in
+`perf.md` and the `organism.md` decisions log) is done and is deleted once
+the port's own crate exists. Builds are `cargo +1.98.1` (see `perf.md`).
+
 - **Port fluid and soil** (~1.5k lines; the L-system trees do not come
-  along). Same SPH design and constants. Headless mode, sim params as one
-  declaration each (the X-macro's job, via a derive or macro_rules),
-  per-kernel timing via timestamp queries, format and lint targets.
+  along). Same SPH design and constants, ported faithfully first and
+  checked against the C++ binary at the same seed before any cleanup;
+  host code idiomatic from the start. Every kernel gets a plain-Rust
+  reference implementation (the only kernel-debugging path). Headless
+  mode, sim params as one declaration each (the X-macro's job, via a
+  derive), per-kernel timing via timestamp queries, `cargo fmt` and
+  `clippy` targets. Two open physics questions in the C++ carry across
+  unchanged, marked for Jonah: `calculate_density_at_pos` widens the x
+  neighborhood to 4 cells at the world edges under a `// TEMP` comment
+  even though x wraps (asymmetric, probably unintended), and
+  `viscosity_kernel` squares a distance that was already a square root
+  (`// TODO` at the top of the file).
 - **Windowing and UI**: winit + egui replace SDL + ImGui; rendering is
   wgpu, so the CUDA-GL interop disappears.
 - **Determinism**: counter-based RNG as today; the CPU runtime is the

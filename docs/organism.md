@@ -220,6 +220,20 @@ soil alone drives a split, and the controls must separate causes:
   becomes GEMM-shaped. It is alpha with breaking changes between minor
   versions; the mitigation is an exact version pin bumped deliberately.
   The C++/CUDA tree is the reference until parity, then deleted.
+- 2026-09-18 — **Spike outcome (`crates/spike`, commit 2a56cb0).** The
+  CubeCL wgpu runtime adopts an existing `wgpu::Device` via `WgpuSetup` +
+  `init_device`, and a kernel's buffer binds in a render pass with no
+  copy; egui-wgpu 0.36 and cubecl-wgpu 0.11.0-pre.3 share one `wgpu 30`.
+  Two rules for the renderer: a CubeCL handle is a slice of a pooled
+  buffer (bind with its offset, never as the entire buffer), and CubeCL
+  buffers lack `VERTEX` usage, so draw from storage buffers indexed by
+  vertex id. **CPU kernels are not debuggable**: the LLVM JIT emits no
+  symbols or line tables, so `gdb` never sees the kernel. The debugging
+  path is a plain-Rust reference implementation per kernel plus
+  `CUBECL_DEBUG_PLIRON` IR dumps. **The pin must cover transitive deps**:
+  the published crate does not resolve on its own (`pliron` 0.17 pulls an
+  incompatible `pliron-derive` 0.18), so `Cargo.lock` is committed and
+  authoritative.
 - 2026-09-18 — **Fluid solver swap (FLIP/PIC) is on hold.** Fluid fidelity
   is not on the path to emergence. SPH kernel optimization stays relevant
   because bodies ride on the same per-particle cost.
