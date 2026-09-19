@@ -6,6 +6,7 @@
 //! until this port reaches parity.
 
 pub mod dump;
+pub mod kernels;
 pub mod params;
 pub mod particles;
 pub mod rng;
