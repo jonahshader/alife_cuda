@@ -8,10 +8,6 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-- **Particle bodies.** Limbs as particle chains in the fluid's particle
-  system with distance and base-joint angle constraints (rest length capped
-  at the smoothing radius); root pinning in soil; part types root, stem,
-  leaf, seed. Particles need a per-particle organism id and limb index.
 - **Brain forward pass.** Perceiver-IO over limb tokens: embeddings
   (type, spatial, rotation, depth, child slot, identity), persistent gated
   latents, input and output cross-attention, fixed trunk, sprout head. One
@@ -29,7 +25,11 @@ the spec, don't re-derive it.
 - **Soil-specialization experiment** in `--terrain-mode 1`, with the three
   controls in the spec (identical-soil isolation control, soil-position
   permutation, transplant test). The capillary test reset must publish its
-  column extents so per-column metrics can be computed.
+  column extents so per-column metrics can be computed, and it must leave
+  air above the columns: today they run to the top of the world, so a plant
+  anchored on a column's surface stands at the ceiling (`organism.md`,
+  decisions). Changing the terrain regenerates every parity reference, so
+  it belongs to this chunk rather than an earlier one.
 
 Left open by the genome chunk, for the chunk that first steps organisms:
 
@@ -44,6 +44,25 @@ Left open by the genome chunk, for the chunk that first steps organisms:
   device-resident count, so the life-cycle chunk never has to read a count
   back to the host; it does have to give the launcher a host-side upper
   bound on the list length.
+
+Left open by the bodies chunk:
+
+- **Spawning is host-side.** `bodies::spawn` and `bodies::grow_limb` read
+  `ppos` back and claim slots with a scan plus two small reads per call, and
+  `Sim::step` decides whether to run the organism passes from a host-side
+  count of `alive`. That is fine for `--founders` at startup and for a
+  sprout head called rarely, and wrong for a device-driven life cycle: the
+  life-cycle chunk owns moving the layout into a kernel over a newborn list,
+  the way `mutate` already is.
+- `bodies::BodyState::high_water` only grows, so a death that frees the
+  highest body slots does not shrink what the per-particle kernels are
+  launched over. Recomputing it from the occupancy scan is the fix if long
+  runs ever leave a high mark with nothing under it.
+- `project_constraints` is one unit per organism and so one cube at the
+  default `max_organisms` of 256: 0.109 ms of the 0.772 ms step at
+  `--founders 64` (`perf.md`), on one SM. Splitting a unit per limb needs
+  the sweeps to become separate launches, which is only worth it if
+  organism counts stay this low.
 
 ## Inspection & verification
 

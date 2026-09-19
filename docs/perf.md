@@ -244,3 +244,45 @@ the FastNoiseLite samples, the column heights and the softmax composition all
 match, which `soil::tests::noise_terrain_matches_the_cpp` pins against values
 printed by a probe built on the C++ tree's own headers.
 
+### Particle bodies (2026-09-19, commit after 392d460)
+
+Organisms add `max_organisms × max_limbs × max_particles_per_limb` = 32,768
+body slots on top of the 51,200 fluid particles, and two passes per step.
+Default config, CUDA, the per-kernel printout (wall time around a sync, so
+every cheap kernel carries its ~11 µs floor):
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
+  ./target/release/alife --headless --seed 42 --runtime cuda \
+  --iterations 501 --founders <N>
+```
+
+| Kernel                       | main (1eca794) | `--founders 0` | `--founders 64` |
+|------------------------------|---------------:|---------------:|----------------:|
+| `calculate_accel`            |          0.260 |          0.261 |           0.264 |
+| `calculate_evap_prob`        |          0.129 |          0.130 |           0.131 |
+| `calculate_particle_density` |          0.126 |          0.127 |           0.128 |
+| grid build, all of it        |          0.089 |          0.088 |           0.088 |
+| `evaporate_particles`        |          0.013 |          0.012 |           0.013 |
+| `move_particles`             |          0.012 |          0.012 |           0.012 |
+| `move_vapor_particles`       |          0.012 |          0.012 |           0.012 |
+| `project_constraints`        |              — |              — |           0.109 |
+| `write_limb_geometry`        |              — |              — |           0.015 |
+| **per step**                 |      **0.641** |      **0.642** |       **0.772** |
+
+`--founders 0` is main's cost because the per-particle kernels are launched
+over the live prefix — the fluid plus the high-water mark of claimed body
+slots — not over the whole capacity; launching over the capacity cost the
+three neighbour kernels 6–9% each and the step 5.8%. The organism passes are
+skipped outright when nothing is alive, so they do not appear at all.
+
+`project_constraints` is one unit per organism over `max_organisms` = 256
+units, so it is a single cube on one SM regardless of how many organisms are
+alive: 0.109 ms whether 64 or 256 slots are filled. It is 14% of the step at
+`--founders 64` and is the obvious thing to split if organism counts grow.
+
+Byte-for-byte fluid parity at `--founders 0` against main, checked by
+dumping both binaries and comparing the fluid prefix field by field: CUDA
+and wgpu at 50 steps, the CPU runtime at 20, terrain modes 0 and 1, all
+identical.
+

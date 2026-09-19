@@ -103,8 +103,11 @@ L-system trees still live in. New sim work goes in the Rust tree.
   --headless --iterations N` steps the sim without a window and prints
   per-kernel timings on exit. `--runtime cpu|cuda|wgpu` picks the backend
   (default: CUDA if available, else wgpu, else CPU); `--dump <path>` writes
-  the particle SoA and `--load <path>` resumes from one, in the same format
-  the C++ `--dump` writes. `config.toml` is read from the CWD and
+  the particle SoA and `--load <path>` resumes from one — version 2 of the
+  C++ `--dump` format, and it still reads version 1
+  (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
+  soil surface; the default 0 leaves the world exactly as it was before
+  organisms existed. `config.toml` is read from the CWD and
   `--write-config` emits the defaults; every sim param is also a CLI flag
   (`--help` lists them; `crates/alife-sim/src/params.rs` is the
   authoritative list).

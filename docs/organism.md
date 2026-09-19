@@ -3,9 +3,10 @@
 The settled design for organisms: one representation for plants and
 creatures, a fixed-shape genome, a brain over body-part tokens, bodies made
 of particles in the fluid's particle system, and selection by ecology rather
-than a fitness function. **Status: specified, not yet implemented.** The
-open work is in `TODO.md`; this file is the spec builders build from. When
-implementation diverges from it, update this file in the same commit.
+than a fitness function. **Status: the genome and the particle bodies are
+built; the brain, energy and the life cycle are not.** The open work is in
+`TODO.md`; this file is the spec builders build from. When implementation
+diverges from it, update this file in the same commit.
 
 ## Why this shape
 
@@ -202,21 +203,44 @@ Sizes are sim params with these defaults; a flag changes them.
 is unallocated: every kernel skips it, its position is parked outside the
 grid. Capacity is fixed at start: fluid particles plus `max_organisms ×
 max_limbs × max_particles_per_limb` (defaults 256 × 16 × 8); the comptime
-particle count is that capacity. Per particle: `organism` (u32,
-`u32::MAX` for none), `limb` (u8), `index_in_limb` (u8). Body particles are
+particle count is that capacity, but the per-particle kernels are launched
+only over the live prefix — the fluid plus the high-water mark of claimed
+body slots — because slots are claimed ascending and everything above the
+mark is `Free`. Per particle: `organism` (u32, `u32::MAX` for none), `limb`
+(u8), `index_in_limb` (u8) and `part_type` (u8, the owning limb's type, so
+the renderer and the energy pass need no genome lookup). Body particles are
 SPH boundary particles: they carry mass and contribute density to their
 neighbors, and they integrate with the same forces as liquid (gravity,
 pressure, viscosity, soil friction). After integration a **constraint
-pass** projects them, one unit per organism, serial over that organism's
-particles, a fixed number of Gauss-Seidel iterations (default 4): distance
-to the previous particle in the limb (rest length ≤ cell size), the angle
-at each limb's base joint against the parent segment's direction (target
-from the limb record for plants, from the brain for actuated limbs later),
-and the root's first particle pinned to its soil cell. Velocity is
-recomputed from the projected displacement, position-based-dynamics style.
-Slot allocation is deterministic: births claim `Free` particle slots and
-free organism slots in order via a prefix scan over the free flags, never
-via atomics.
+pass** projects them (`kernels::constraints`), one unit per organism, serial
+over that organism's particles, `constraint_iterations` Gauss-Seidel sweeps
+(default 4). Per sweep, in order: the root's first particle pinned to its
+anchor; distance at `limb_segment_length` (default 0.15, validated ≤ the
+grid cell size); the angle at each limb's base joint against the parent
+segment's direction (target from the limb record for plants, from the brain
+for actuated limbs later, stiffness `joint_stiffness`); bend, keeping a
+limb's consecutive segments in line (`bend_stiffness`), or a limb is a rope;
+and the world bounds, x wrapping and y clamping. Velocity is recomputed from
+the projected displacement, position-based-dynamics style. Slot allocation
+is deterministic: births claim `Free` particle slots and free organism slots
+in order via a prefix scan over the free flags, never via atomics.
+
+A limb's chain, for both the distance and the angle constraints, is its
+parent's last particle followed by its own: the base joint sits on the
+parent, which is what gives a one-particle limb an orientation. The root
+limb has no such particle, so its chain is its own and its first segment is
+`p0 → p1`, in the world frame. Differences between two body particles are
+taken as the minimum image across the world's x seam, so a body standing on
+the seam is not torn apart by its own distance constraints.
+
+Which particle a projection moves: a distance constraint moves both ends
+symmetrically, half the error each; an angle constraint moves only the
+child-side particle, because the parent side is either already projected
+this sweep or the pinned root.
+
+`bodies::BodyState` holds what the pass walks — the `(organism, limb,
+index) → particle slot` map, each organism's anchor, and the per-limb
+geometry the brain will read — beside the population tensors.
 
 **Genome buffers**, population SoA with capacity `max_organisms`:
 
@@ -287,10 +311,10 @@ fp32 accumulate, one pass per tick.
 **Step order** once organisms exist: grid build (all non-`Free`) → density
 → evap probability → accel → evaporate → move liquid → move vapor →
 sense (token features per limb) → brain forward → apply heads (sprout,
-actuator targets) → constraint pass → energy and life cycle. The bodies
-chunk owns the constraint pass and publishes limb geometry (root-relative
-position, segment angle, depth) for the token features; the brain chunk
-owns sense → forward → apply.
+actuator targets) → constraint pass → limb geometry → energy and life
+cycle. The bodies chunk owns the constraint pass and publishes limb
+geometry (root-relative position, segment angle, depth) for the token
+features; the brain chunk owns sense → forward → apply.
 
 ## Decisions & dead ends
 
@@ -372,6 +396,25 @@ owns sense → forward → apply.
   step and diverging visibly by 50. Same-seed reproducibility on one
   backend cannot see either; only a byte-for-byte diff against the
   previous binary's dump can.
+- 2026-09-19 — **`--terrain-mode 1` has no room for a plant.** The
+  capillary test fills every soil column from 20% height to the very top of
+  the world and leaves the gaps between columns empty, so a founder
+  anchored on its column's surface stands at the ceiling with nowhere to
+  grow, and one in a gap anchors on the floor. Measured: at `--founders 64
+  --terrain-mode 1 --iterations 500`, 114 of 384 body particles sit exactly
+  at `y = bounds.y` and the worst segment is 73% short of its rest length;
+  the same run on the noise terrain is 0.08%. The soil-specialization
+  experiment needs `capillary_test` to leave headroom above the columns
+  before plants can live in it — that is the experiment chunk's to fix, not
+  the bodies chunk's, because it changes the terrain every existing parity
+  reference was generated from.
+- 2026-09-19 — **A body's velocity is the integrated one plus the
+  projection's displacement**, not the projection's displacement alone.
+  `move_particles` has already integrated and possibly bounced the particle
+  by the time the constraint pass runs, so `(ppos_projected -
+  ppos_before_the_step) / dt` — the position-based-dynamics velocity —
+  equals `vel + (ppos_projected - ppos_after_move) / dt`. Taking only the
+  second term would throw a body's inertia away every step.
 - 2026-09-19 — **The GUI runs the sim on the wgpu runtime, always.** The
   renderer binds CubeCL's own buffers; a sim on the CUDA or CPU runtime
   would have to copy every buffer through the host each frame, which is the

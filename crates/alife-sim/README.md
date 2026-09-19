@@ -55,6 +55,13 @@ The C++ dump carries the world's step count, and `--load` resumes the RNG
 counter from it. A dump loaded without that would replay the random stream from
 zero and evaporate a different set of particles.
 
+Those references are **version 1** dumps, the C++ SoA at 50 bytes a particle.
+This tree writes version 2, which appends the four organism fields, and reads
+both — a version-1 dump loads with the organism fields at their defaults
+(`dump.rs`). `--load` keeps a dump's non-body particles as the fluid and
+reserves the body capacity on top of them, so a dump's organisms are not
+resumed: the population tensors are not in a dump.
+
 ## Why every kernel has a reference
 
 CubeCL kernels are not debuggable. The CPU runtime's LLVM JIT emits no symbols
