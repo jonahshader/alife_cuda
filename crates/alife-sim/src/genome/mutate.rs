@@ -7,7 +7,7 @@
 //! Two launches rather than one. The continuous section is one independent
 //! draw per parameter and parallelizes over `newborns x param_count`; the
 //! discrete section is a short serial walk over one organism's limb records,
-//! one unit per newborn. Splitting them keeps 18,890 parameters off a single
+//! one unit per newborn. Splitting them keeps 18,659 parameters off a single
 //! unit's serial loop.
 //!
 //! Every draw is Threefry keyed by `(child slot, step, stream, seed)` and

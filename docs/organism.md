@@ -482,7 +482,7 @@ geometry the brain will read — beside the population tensors.
   stream, so what a child gets depends on nothing but its slot and the
   step. One is a draw per brain parameter over `newborns × param_count`;
   the other is one unit per newborn, serial over that organism's limb
-  records — one unit for both would put 18,890 serial iterations on a
+  records — one unit for both would put 18,659 serial iterations on a
   single thread. Both copy the parent's section before perturbing it.
   Gaussian perturbation of the brain tensor (`mutation_sigma`), and with
   probability `structural_rate` one structural edit chosen uniformly: add a
