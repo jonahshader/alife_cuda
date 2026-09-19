@@ -583,3 +583,42 @@ the same command measured 1.67 ms on a cold card and 1.43 ms warm.)
 `--founders 0` is byte-identical to `267ba75`: 300 CUDA steps, whole dumps
 compared with `cmp`, and 0.611 ms a step against 0.613. Two same-seed runs
 of the new binary are byte-identical to each other.
+
+### The same run with limbs able to break (2026-09-19, Growth 3)
+
+```
+./target/release/alife --headless --runtime cuda --seed 42 \
+  --founders 64 --iterations 3000 --metrics m.csv
+```
+
+Against the same command on `456062a`, same box, same seed:
+
+| | 456062a | breaking |
+|---|---:|---:|
+| alive (slots held, seeds included) | 256 | 256 |
+| plants with an anchor | 171 | 160 |
+| births / deaths | 155 / 48 | 142 / 46 |
+| limbs broken | — | **129** |
+| lineages / species / generation max | 21 / 6 / 4 | 21 / 4 / 4 |
+| `root_frac` / height (m) | 0.5634 / 0.1939 | 0.5460 / 0.2063 |
+| mean energy | 2.269 | 2.280 |
+| per step (no `--metrics`, warm) | 1.468, 1.484 ms | 1.467, 1.474 ms |
+
+**The cost is nothing measurable.** `project_constraints` is 0.157 ms
+either way: the pass already had the base-joint target and the segment it
+aims, and the addition is one `atan2` and one compare per limb per sweep.
+The packed readback is the same width it was — the per-limb slice carried
+the sprout argmax and now carries the bend maximum — so nothing more
+crosses the bus either.
+
+**What the run does is break 129 limbs in 3000 steps** at `break_angle` 1.2
+and `break_thickness_ref` 0.02, roughly one limb shed per 23 steps against a
+population that reaches every one of the 256 slots either way. A grown limb
+is well past the reference thickness and only a large bend takes it, so what
+breaks is mostly young growth; the population absorbs it (11 fewer plants,
+13 fewer births) and the bodies that survive are slightly taller and
+slightly less root.
+
+`--founders 0` is byte-identical to `456062a`: 300 CUDA steps, whole dumps
+compared with `cmp`, and 0.612 ms a step against 0.612. Two same-seed
+`--founders 64` runs of the new binary are byte-identical to each other.
