@@ -402,7 +402,11 @@ fn launch_gemv<R: Runtime>(
   b_off: u32,
   cfg: GemvCfg,
 ) {
-  debug_assert!(
+  // A host-side check on a launch, so it holds in release builds too: a
+  // multi-job launch indexes bias and residual per job's rows, and a bias
+  // belongs to one slice. The same goes for the residual, which multi-job
+  // callers must point at the zeros buffer (`gemv` adds it unconditionally).
+  assert!(
     !cfg.bias || cfg.jobs == 1,
     "a bias belongs to one slice, so it cannot be shared by a multi-job launch"
   );
