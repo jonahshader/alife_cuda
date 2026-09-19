@@ -10,3 +10,6 @@ compile_commands.json
 
 # ImGui window-layout scratch, written on every GUI run
 resources/imgui.ini
+
+# harness agent worktrees
+.claude/worktrees/
