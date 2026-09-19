@@ -108,6 +108,13 @@ kernel_params! {
     "" P_JOINT_STIFFNESS = |p, _g| p.joint_stiffness;
     "" P_BEND_STIFFNESS = |p, _g| p.bend_stiffness;
     "" P_CONSTRAINT_ITERS = |p, _g| p.constraint_iterations as f32;
+    "" P_LIFE_INTERVAL = |p, _g| p.life_interval as f32;
+    "" P_LIGHT_TOP = |p, _g| p.light_top;
+    "" P_LIGHT_ATTENUATION = |p, _g| p.light_attenuation;
+    "" P_LIGHT_GAIN = |p, _g| p.light_gain;
+    "" P_WATER_GAIN = |p, _g| p.water_gain;
+    "" P_UPKEEP_PER_PARTICLE = |p, _g| p.upkeep_per_particle;
+    "" P_SEED_THRESHOLD = |p, _g| p.seed_threshold;
 }
 
 /// The particle SoA as kernel arguments. Field order matches `SphHost`.

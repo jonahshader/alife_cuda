@@ -10,6 +10,7 @@ pub mod brain;
 pub mod dump;
 pub mod genome;
 pub mod kernels;
+pub mod life;
 pub mod metrics;
 pub mod params;
 pub mod particles;

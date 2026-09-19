@@ -17,6 +17,7 @@ use crate::genome::Population;
 use crate::kernels::{
   self, accel, constraints, density, evap, grid::GridDevice, limb_geometry, motion,
 };
+use crate::life::light::LightGrid;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
 use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
@@ -24,31 +25,33 @@ use crate::timing::{KernelTimings, TimingMethod};
 use crate::world::{Cfg, WorldGeometry};
 
 pub struct Sim<R: Runtime> {
-  client: ComputeClient<R>,
-  params: SimParams,
-  geom: WorldGeometry,
-  cfg: Cfg,
-  sph: SphDevice,
+  pub(crate) client: ComputeClient<R>,
+  pub(crate) params: SimParams,
+  pub(crate) geom: WorldGeometry,
+  pub(crate) cfg: Cfg,
+  pub(crate) sph: SphDevice,
   /// Velocities `calculate_accel` writes; swapped with `sph.vel` afterwards.
-  vel_next: Handle,
-  soil_device: SoilDevice,
-  soil: SoilGrid,
-  grid: GridDevice,
+  pub(crate) vel_next: Handle,
+  pub(crate) soil_device: SoilDevice,
+  pub(crate) soil: SoilGrid,
+  pub(crate) grid: GridDevice,
   /// The genome population. Empty until something seeds it — `--founders`, or
   /// the life-cycle chunk once it owns births.
-  pop: Population,
+  pub(crate) pop: Population,
   /// Which particle holds which limb particle, plus the anchors.
-  bodies: BodyState,
-  body_cfg: BodyCfg,
+  pub(crate) bodies: BodyState,
+  pub(crate) body_cfg: BodyCfg,
   /// The brain's sensor buffer, its per-tick scratch and its outputs.
-  brain: BrainState,
-  params_buf: Handle,
-  rng_counter: RngCounter,
-  step_count: u32,
-  seed: u64,
-  counters: Counters,
-  timings: KernelTimings,
-  timing: TimingChoice,
+  pub(crate) brain: BrainState,
+  /// Light reaching each soil cell, rebuilt every `life_interval` steps.
+  pub(crate) light: LightGrid,
+  pub(crate) params_buf: Handle,
+  pub(crate) rng_counter: RngCounter,
+  pub(crate) step_count: u32,
+  pub(crate) seed: u64,
+  pub(crate) counters: Counters,
+  pub(crate) timings: KernelTimings,
+  pub(crate) timing: TimingChoice,
 }
 
 /// Life-cycle events since this `Sim` was created, for the metrics time
@@ -64,7 +67,7 @@ pub struct Counters {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TimingChoice {
+pub(crate) enum TimingChoice {
   /// Not measuring — the GUI path, where the launches should pipeline.
   Off,
   /// `ComputeClient::profile`, which uses device timestamps where it can.
@@ -128,6 +131,7 @@ impl<R: Runtime> Sim<R> {
     let bodies = BodyState::new(&client, &params, &geom);
     let body_cfg = bodies.cfg;
     let brain = BrainState::new(&client, BrainCfg::new(&shape, &params));
+    let light = LightGrid::new(&client, &soil, params.light_top);
     let params_buf = upload_params(&client, &params, &geom);
 
     Self {
@@ -144,6 +148,7 @@ impl<R: Runtime> Sim<R> {
       bodies,
       body_cfg,
       brain,
+      light,
       params_buf,
       // Two launches consume a counter value per step: `evaporate_particles`
       // and `move_vapor_particles`, exactly as the C++ increments twice.
@@ -451,6 +456,18 @@ impl<R: Runtime> Sim<R> {
     }
 
     self.step_count += 1;
+
+    // The life cycle runs on its own cadence, after the brain: the sprout
+    // head it reads was written by the tick that just finished. Skipped
+    // outright when nothing is alive, so a run without organisms costs
+    // exactly what it did before they existed.
+    if organisms > 0
+      && self
+        .step_count
+        .is_multiple_of(self.params.life_interval.max(1) as u32)
+    {
+      self.life_tick();
+    }
   }
 }
 
@@ -462,7 +479,7 @@ fn upload_params<R: Runtime>(
   client.create_from_slice(bytemuck::cast_slice(&kernels::pack_params(params, geom)))
 }
 
-fn run_timed<R: Runtime>(
+pub(crate) fn run_timed<R: Runtime>(
   client: &ComputeClient<R>,
   choice: TimingChoice,
   timings: &mut KernelTimings,

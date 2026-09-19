@@ -189,6 +189,32 @@ sim_params! {
         "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
     species_threshold: f32 = 0.25, "organism.species_threshold", "species-threshold",
         "Genome distance under which the metrics count two organisms as one species";
+    life_interval: i32 = 10, "life.interval", "life-interval",
+        "Steps between light, energy and life-cycle ticks";
+    light_top: f32 = 1.0, "life.light_top", "light-top",
+        "Light arriving at the top of the world";
+    light_attenuation: f32 = 0.7, "life.light_attenuation", "light-attenuation",
+        "Light left after passing one stem or leaf particle";
+    light_gain: f32 = 0.012, "life.light_gain", "light-gain",
+        "Energy a leaf particle gains per step at full light";
+    water_gain: f32 = 0.004, "life.water_gain", "water-gain",
+        "Energy a root particle gains per step per unit of wetness";
+    upkeep_per_particle: f32 = 0.001, "life.upkeep_per_particle", "upkeep-per-particle",
+        "Energy a body particle costs its organism per step";
+    sprout_cost: f32 = 0.05, "life.sprout_cost", "sprout-cost",
+        "Energy a sprouted limb costs, and the energy a sprout needs";
+    seed_threshold: f32 = 2.0, "life.seed_threshold", "seed-threshold",
+        "Energy above which an organism emits a seed";
+    seed_cost: f32 = 1.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
+    seed_energy: f32 = 0.5, "life.seed_energy", "seed-energy",
+        "Energy a seed germinates with, and the energy a founder starts with";
+    germinate_speed: f32 = 0.05, "life.germinate_speed", "germinate-speed",
+        "Speed below which a landed seed germinates";
+    seed_lifetime: i32 = 6000, "life.seed_lifetime", "seed-lifetime",
+        "Steps a seed may drift before it dies ungerminated";
+    organic_matter_per_particle: f32 = 0.01, "life.organic_matter_per_particle",
+        "organic-matter-per-particle",
+        "Organic matter a dead body particle leaves in its soil cell";
 }
 
 impl SimParams {
@@ -330,6 +356,56 @@ impl SimParams {
       return Err(format!(
         "--constraint-iterations must be >= 0, got {}",
         self.constraint_iterations
+      ));
+    }
+    if self.life_interval < 1 {
+      return Err(format!(
+        "--life-interval must be >= 1, got {}",
+        self.life_interval
+      ));
+    }
+    // Attenuation is a per-particle transmittance, so above 1 a canopy would
+    // brighten the ground under it.
+    if !(0.0..=1.0).contains(&self.light_attenuation) {
+      return Err(format!(
+        "--light-attenuation must be in [0, 1], got {}",
+        self.light_attenuation
+      ));
+    }
+    let non_negative = [
+      ("light-top", self.light_top),
+      ("light-gain", self.light_gain),
+      ("water-gain", self.water_gain),
+      ("upkeep-per-particle", self.upkeep_per_particle),
+      ("sprout-cost", self.sprout_cost),
+      ("seed-cost", self.seed_cost),
+      ("seed-energy", self.seed_energy),
+      ("germinate-speed", self.germinate_speed),
+      (
+        "organic-matter-per-particle",
+        self.organic_matter_per_particle,
+      ),
+    ];
+    for (name, value) in non_negative {
+      if value < 0.0 || !value.is_finite() {
+        return Err(format!(
+          "--{name} must be a non-negative finite number, got {value}"
+        ));
+      }
+    }
+    // A seed that costs more than the threshold that triggers it would leave
+    // its parent with negative energy, which is death: reproducing would be
+    // suicide rather than a budget.
+    if !self.seed_threshold.is_finite() || self.seed_threshold < self.seed_cost {
+      return Err(format!(
+        "--seed-threshold must be finite and at least --seed-cost ({}), got {}",
+        self.seed_cost, self.seed_threshold
+      ));
+    }
+    if self.seed_lifetime < 0 {
+      return Err(format!(
+        "--seed-lifetime must be >= 0, got {}",
+        self.seed_lifetime
       ));
     }
     // A rest length longer than a grid cell would let water pass between two
