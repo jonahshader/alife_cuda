@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/spike", "crates/alife-sim", "crates/alife"]
+members = ["crates/alife-sim", "crates/alife"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,7 +10,7 @@ edition = "2024"
 # CubeCL is alpha and breaks between minor versions; the pin is exact and bumped
 # deliberately (docs/organism.md, substrate decision). Cargo.lock is committed
 # and authoritative — `cargo generate-lockfile` reintroduces the pliron
-# resolution breakage described in crates/spike/README.md.
+# resolution breakage recorded in docs/organism.md (spike outcome).
 cubecl = { version = "=0.11.0-pre.3", features = ["wgpu", "cuda", "cpu"] }
 cubecl-cpu = "=0.11.0-pre.3"
 cubecl-cuda = "=0.11.0-pre.3"

@@ -1,6 +1,6 @@
 //! wgpu device creation and adapter selection.
 //!
-//! Absorbed from `crates/spike/src/wgpu_setup.rs`, which proved that CubeCL
+//! Absorbed from the CubeCL spike, which proved that CubeCL
 //! adopts a `wgpu::Device` we create: pack instance/adapter/device/queue into a
 //! `WgpuSetup` and call `init_device`. That is what lets the GUI draw straight
 //! from CubeCL's own buffers, with no host round trip.

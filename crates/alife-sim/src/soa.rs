@@ -171,7 +171,7 @@ macro_rules! define_soa {
 
         /// Device-side mirror: one CubeCL buffer per field. A handle is a slice
         /// of a pooled buffer, so it is always bound with its own offset — see
-        /// `crates/spike/README.md`, answer 1.
+        /// the spike outcome in `docs/organism.md`.
         #[derive(Debug, Clone)]
         pub struct $device {
             pub $field0: ::cubecl_runtime::server::Handle,

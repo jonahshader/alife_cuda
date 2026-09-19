@@ -6,7 +6,7 @@
 //!
 //! The references exist because CubeCL kernels are not debuggable: the CPU
 //! runtime's LLVM JIT emits no symbols or line tables, so `gdb` never sees the
-//! kernel (`crates/spike/README.md`, answer 4). Every kernel therefore has a
+//! kernel (`docs/organism.md`, the spike outcome). Every kernel therefore has a
 //! sequential Rust twin plus a test that runs both over one fixed input.
 
 use cubecl::prelude::*;

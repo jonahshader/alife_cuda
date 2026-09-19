@@ -1,7 +1,7 @@
 //! Drawing the sim straight out of CubeCL's buffers.
 //!
-//! The spike settled the two rules this has to respect (`crates/spike/README.md`,
-//! answer 1): a CubeCL handle is a slice of a pooled buffer, so a binding must
+//! The CubeCL spike settled the two rules this has to respect (`docs/organism.md`,
+//! decisions): a CubeCL handle is a slice of a pooled buffer, so a binding must
 //! carry its offset and never use `as_entire_binding()`; and CubeCL allocates
 //! without `VERTEX` usage, so there is no vertex buffer to bind — the shaders
 //! read the same storage buffers the kernels wrote and index them by

@@ -41,47 +41,33 @@ the spec, don't re-derive it.
   divergence, kinetic-energy settling, capillary rise per column) are
   secondary to the evolutionary metrics above and gate only fluid solver
   work; add them to the same `--metrics` time series when that work starts.
-- **Test harness.** None exists. Pick one (Catch2 is what `mg-rl-rewrite`
-  uses) and start with behavior-property tests over headless runs rather than
-  goldens pinned to epsilon.
 - **Frame cap / `--fps` flag** for the GUI, plus a `--shot <png>` that
   renders one frame offscreen and exits — the minimum for an agent to look
-  at the sim without parking a window.
+  at the sim without parking a window. `egui_wgpu::capture` is the offscreen
+  path.
 
-## Code health (C++ tree — carry into the port, don't fix in place)
+## Code health (C++ tree — reference only; fix nothing in place)
 
-- CPU/GPU duality is subsumed by CubeCL's CPU runtime. `CopyLevel` is not
-  needed: renderers read device buffers directly. Determinism tests
-  (same-seed bitwise, CPU vs GPU) are part of the port.
+Everything here is either already handled in the port or dies with the C++
+tree. Listed so a future session recognises them rather than re-deriving
+them.
+
 - `World` as a top-level composition of all systems (soil + fluid +
-  organisms) with one init and one step shared by headless and GUI; the
-  C++ headless loop and the FluidSoil screen each build the systems by
-  hand.
-- The fluid file carries a soil-free duplicate of the density, accel, and
-  evap kernels and step function, reachable only from the commented-out
-  FluidTest2 screen. Port only the soil-coupled path.
-- `particle_to_cid` clamps x but not y (it is not given the grid height), so
-  any `pos.y >= bounds.y` indexes one row past the grid. The known producer
-  (`move_vapor_particles`) is fixed; the port's cell-id function takes both
-  dims and clamps both axes.
-- The ImGui smoothing-radius slider calls `init_fluid_grid`, which resizes
-  only the host grid; the device grid is never re-sized or re-copied while
-  kernels launch with the new dims (`fluid_render.cu`). GUI-only; the port's
-  grid has one owner.
-- `calculate_soil_saturation` is defined and never launched.
+  organisms) with one init and one step shared by headless and GUI. The
+  Rust `Sim` is that for fluid + soil; organisms join it.
 - `--extended-lambda` and `--expt-relaxed-constexpr` are set in
   `CMakeLists.txt` but nothing uses device lambdas or device-side
-  `constexpr`; drop them.
-- `FetchContent_Populate` is deprecated (CMake 4 warns) for glad,
-  artery_font, lodepng, FastNoiseLite, imgui; convert to
-  `FetchContent_MakeAvailable`.
-- `soil_render.cu` re-registers/unregisters its GL buffer every frame; the
-  other renderers register once.
-- `rect_tex_renderer.cu` creates a `cudaTextureObject_t` that no kernel
-  samples; `curand_kernel.h` is included in three files with every use
-  commented out. Remove both.
-- `screens/tree_test.cu` and `systems/trees.cu` carry large commented-out
-  blocks; delete or restore.
+  `constexpr`. `FetchContent_Populate` is deprecated (CMake 4 warns) for
+  glad, artery_font, lodepng, FastNoiseLite, imgui.
+- `soil_render.cu` re-registers/unregisters its GL buffer every frame;
+  `rect_tex_renderer.cu` creates a `cudaTextureObject_t` no kernel samples;
+  `curand_kernel.h` is included in three files with every use commented out;
+  `screens/tree_test.cu` and `systems/trees.cu` carry large commented-out
+  blocks.
+- `--write-config` emits repeated `[fluid]`/`[world]` section headers, which
+  its own loader rejects, and prints floats with `%f`, so the `dt` it writes
+  reads back 2e-4 off 1/600. The Rust writer groups sections and prints
+  round-trippable literals.
 
 ## Fluid simulation
 
@@ -89,13 +75,13 @@ the spec, don't re-derive it.
   the path to emergence; revisit only if fluid behavior itself blocks an
   organism milestone.
 - **Profile the SPH step.** Organism bodies are particles in this system,
-  so the per-particle cost of the three neighbor-gather kernels (98% of the
-  ~0.45 ms step for 51k particles, `docs/perf.md`) is now the cost of
-  bodies too. Start with `ncu` on
-  `calculate_accel`: occupancy, achieved bandwidth, and whether
-  `-rdc=true` is blocking inlining of the `__device__` helpers in the
-  neighbor loop. The `TimingProfiler` synchronizes after every section,
-  so it hides any launch overlap; use `nsys` for the timeline.
+  so the per-particle cost of the three neighbour-gather kernels (93% of the
+  ~0.49 ms step for 51k particles, `docs/perf.md`) is now the cost of
+  bodies too. Start with `ncu` on `calculate_accel`: occupancy, achieved
+  bandwidth, and what CubeCL's generated CUDA does with the neighbour loop —
+  it is 3% slower than the hand-written `__device__` version, and
+  `calculate_evap_prob` is 9%. The per-kernel timing synchronises after
+  every launch, so it hides any launch overlap; use `nsys` for the timeline.
 - Autotune kernel launch parameters (block size, particles per cell).
 - Spatial adaptive resolution — fewer particles where velocity is low.
 - Time-smoothed velocity (EMA) for stable erosion calculations.
@@ -124,30 +110,23 @@ the spec, don't re-derive it.
 
 ## Substrate: Rust + CubeCL (decided 2026-09-18, see `organism.md` decisions)
 
-The sim moves to Rust with kernels in CubeCL, pinned to an exact
-pre-release and bumped deliberately. The C++/CUDA tree stays as the
-reference until the port reaches parity, then is deleted. The C++
-maintenance items below are therefore **not** done in C++.
+The fluid and soil are ported and at parity (`perf.md`). What is left:
 
-The spike (`crates/spike`, answers in its README, durable parts in
-`perf.md` and the `organism.md` decisions log) is done and is deleted once
-the port's own crate exists. Builds are `cargo +1.98.1` (see `perf.md`).
-
-- **Port fluid and soil** (~1.5k lines; the L-system trees do not come
-  along). Same SPH design and constants, ported faithfully first and
-  checked against the C++ binary at the same seed before any cleanup;
-  host code idiomatic from the start. Every kernel gets a plain-Rust
-  reference implementation (the only kernel-debugging path). Headless
-  mode, sim params as one declaration each (the X-macro's job, via a
-  derive), per-kernel timing via timestamp queries, `cargo fmt` and
-  `clippy` targets. The two open physics questions in the C++ (the seam
-  widening in the neighbor loops, `viscosity_kernel` taking a square root it
-  then squares) are settled there — the grid now tiles the world width
-  exactly and the kernel takes `dst2` — so the port follows the fixed
-  behavior. Same-seed checks against the C++ binary compare aggregates, not
-  trajectories: neither build is bit-reproducible run to run, because the
-  atomic grid insertion order decides the SPH summation order.
-- **Windowing and UI**: winit + egui replace SDL + ImGui; rendering is
-  wgpu, so the CUDA-GL interop disappears.
-- **Determinism**: counter-based RNG as today; the CPU runtime is the
-  reference for a same-seed CPU-vs-GPU comparison test.
+- **Delete the C++ tree.** It is reference-only now. It still owns the
+  L-system trees, which the plant milestone supersedes, so it goes when
+  particle-body plants render — together with `src/`, `CMakeLists.txt`, the
+  SDL/ImGui/GL dependencies and the parity references that check against it.
+- **The GUI has never been looked at.** It builds and its shaders validate,
+  but nobody has opened the window. Check it before trusting it: soil
+  colors, particle size and the evap debug ramp against the C++ screen, and
+  whether pan/zoom feel right.
+- **Interaction is not ported.** The C++ screen's mouse grab/repel
+  (`attract_fluid`, the `+`/`-`/`[`/`]` keys) and the density-grid overlay
+  (`calculate_fluid_density_grid`) have no Rust equivalent yet.
+- **Soil has no update step.** `update_soil` is empty, as `update_soil_cuda`
+  was. `calculate_soil_saturation` was defined and never launched in the
+  C++, so it did not come along; the `saturation` field is still in the SoA
+  and still written by nothing.
+- The port's own open questions live with the code: `sort_cells` is 9.7 µs
+  of the 29.6 µs grid build and is one thread per cell; the prefix scan's
+  middle stage is one unit doing 256 serial adds.

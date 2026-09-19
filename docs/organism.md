@@ -220,7 +220,8 @@ soil alone drives a split, and the controls must separate causes:
   becomes GEMM-shaped. It is alpha with breaking changes between minor
   versions; the mitigation is an exact version pin bumped deliberately.
   The C++/CUDA tree is the reference until parity, then deleted.
-- 2026-09-18 — **Spike outcome (`crates/spike`, commit 2a56cb0).** The
+- 2026-09-18 — **Spike outcome (the deleted `crates/spike`, commit
+  2a56cb0).** The
   CubeCL wgpu runtime adopts an existing `wgpu::Device` via `WgpuSetup` +
   `init_device`, and a kernel's buffer binds in a render pass with no
   copy; egui-wgpu 0.36 and cubecl-wgpu 0.11.0-pre.3 share one `wgpu 30`.
@@ -237,3 +238,23 @@ soil alone drives a split, and the controls must separate causes:
 - 2026-09-18 — **Fluid solver swap (FLIP/PIC) is on hold.** Fluid fidelity
   is not on the path to emergence. SPH kernel optimization stays relevant
   because bodies ride on the same per-particle cost.
+- 2026-09-19 — **The port buys reproducibility with two divergences from
+  the C++, and they are not up for trade.** The neighbour grid is built by
+  a counting sort rather than one atomic slot grab per particle, and
+  `calculate_accel` writes a second velocity buffer that is swapped in
+  rather than writing `sph.vel` while its own viscosity term reads it. Both
+  are why a same-seed Rust run is bit-identical and a same-seed C++ run is
+  not. They cost ~9% of the step (`perf.md`); an optimisation that gives
+  either back is not an optimisation. The C++'s `sph.vel` read-write hazard
+  is a genuine race, not just a determinism nuisance.
+- 2026-09-19 — **Kernels stay barrier-free and shared-memory-free until
+  something needs them.** The grid build's prefix scan started as one cube
+  with two `sync_cube()` barriers, which cost the CPU runtime 280 ms per
+  step; three barrier-free launches cost the GPU backends a few µs and made
+  the CPU runtime usable. A cube-wide barrier is not a portable primitive
+  across this runtime set at this maturity.
+- 2026-09-19 — **The GUI runs the sim on the wgpu runtime, always.** The
+  renderer binds CubeCL's own buffers; a sim on the CUDA or CPU runtime
+  would have to copy every buffer through the host each frame, which is the
+  CUDA-GL interop the port set out to delete. `--runtime` is a headless
+  flag.

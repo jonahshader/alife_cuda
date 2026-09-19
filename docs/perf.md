@@ -128,3 +128,119 @@ differences are summation order from the atomic grid build. The native CPU
 runtime beats llvmpipe and beats a single-threaded Rust loop 5.6×, so it is
 the GPU-less path, not a fallback. First-launch JIT cost: CUDA ~200–350 ms,
 wgpu and CPU ~10–50 ms, cached across runs.
+
+### Rust port, every runtime (2026-09-19, commit a993941)
+
+The port reached parity here; these replace the spike's numbers above, which
+measured a soil-free kernel on a throwaway harness.
+
+```
+cargo +1.98.1 build --release -j16
+# per-kernel timings, printed on exit; the first step is a warm-up and is not
+# counted, because every kernel is JIT-compiled on its first launch
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
+  ./target/release/alife --headless --seed 42 --runtime cuda --iterations 201
+./target/release/alife --headless --seed 42 --runtime wgpu --iterations 201
+./target/release/alife --headless --seed 42 --runtime cpu  --iterations 21
+```
+
+Default config: world 32×16 m, smoothing radius 0.2, 160×80 cells, 51,200
+particles, noise terrain. Averages in ms per launch.
+
+| Kernel                       | C++ event profiler | Rust CUDA | Rust wgpu | Rust CPU |
+|------------------------------|-------------------:|----------:|----------:|---------:|
+| `calculate_accel`            |              0.227 |     0.245 |     0.231 |    4.660 |
+| `calculate_evap_prob`        |              0.105 |     0.123 |     0.107 |    2.054 |
+| `calculate_particle_density` |              0.105 |     0.121 |     0.105 |    2.183 |
+| grid build, all of it        |              0.031 |     0.087 |     0.080 |    0.460 |
+| `evaporate_particles`        |              0.006 |     0.013 |     0.003 |    0.104 |
+| `move_particles`             |              0.005 |     0.012 |     0.003 |    0.128 |
+| `move_vapor_particles`       |              0.005 |     0.013 |     0.003 |    0.083 |
+| **per step**                 |          **0.485** | **0.615** | **0.533** | **9.67** |
+
+The three columns are **not** measured the same way and only the wgpu one is
+device time. `ComputeClient::profile` reports device timestamps on wgpu and
+falls back to wall time around a sync on CUDA and CPU, which the printout
+names. Wall time carries a ~11 µs floor per launch, so the CUDA column
+overstates every cheap kernel; the C++ event profiler has its own ~5 µs
+floor. Use Nsight for a like-for-like CUDA comparison:
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 nsys profile -o /tmp/hl \
+  --stats=false --force-overwrite=true \
+  ./target/release/alife --headless --seed 42 --runtime cuda --iterations 21
+nsys stats --report cuda_gpu_kern_sum /tmp/hl.nsys-rep
+```
+
+Nsight averages over 21 steps (µs), against the C++ numbers in the table
+above:
+
+| Kernel                       | C++ (f668795) | Rust CUDA |
+|------------------------------|--------------:|----------:|
+| `calculate_accel`            |   226.3–230.1 |     235.6 |
+| `calculate_evap_prob`        |   103.6–104.2 |     112.9 |
+| `calculate_particle_density` |   103.4–103.8 |     110.9 |
+| grid build, all of it        |           2.9 |      29.6 |
+| **per step**                 |       **~450** |  **~492** |
+
+About **9% more GPU time per step**, and the neighbour kernels are 3–9%
+slower each. The grid build costs 10× what the C++ one does — 29.6 µs
+against 2.9 µs — which is what determinism is worth here: a counting sort
+with a prefix scan and a per-cell sort, instead of one atomic per particle.
+It is 6% of the step.
+
+The scan is three launches with no cube barrier. It started as one cube with
+two `sync_cube()` barriers, which cost the **CPU runtime 280 ms per step** —
+a barrier at that cube size is ~140 ms there. Rewriting it barrier-free took
+the CPU runtime from 292.7 ms to 9.7 ms per step and cost the GPU backends
+2.5 µs (CUDA) and 39 µs (wgpu) on the scan itself.
+
+### Rust port vs the C++, same state (2026-09-19, commit f288d7a)
+
+The C++ is not bit-reproducible run to run — `populate_grid_indices`'s
+atomics fix each cell's summation order, and `calculate_accel` reads
+`sph.vel` while writing it — so parity is stated against that binary's own
+floor. `crates/alife-sim/README.md` has the commands; `tests/parity.rs`
+runs the check.
+
+One step from `ref1.bin`, max absolute difference per field against a C++
+run of the same two steps, as a multiple of the spread across three C++
+runs:
+
+| Field          | C++ floor | Rust CUDA | Rust wgpu | Rust CPU |
+|----------------|----------:|----------:|----------:|---------:|
+| `pos`          |  3.815e-6 |     1.00× |     1.00× |    1.00× |
+| `ppos`         |  3.815e-6 |     1.00× |     1.00× |    1.00× |
+| `vel`          |  7.641e-5 |     1.00× |     1.00× |    1.00× |
+| `density`      |  4.944e-3 |     1.00× |     1.00× |    1.00× |
+| `near_density` |  1.837e-2 |     1.01× |     1.00× |    1.01× |
+| `evap_prob`    |  3.278e-5 |     0.99× |     3.16× |    1.00× |
+| `state`        |         0 |    exact |     exact |    exact |
+
+`evap_prob` sums gradient terms that nearly cancel, so its absolute error is
+not bounded by the floor the way the others are; wgpu's shader compiler
+contracts floats differently and lands at 3.2×. Terrain mode 0 measures the
+same, within a C++ floor that itself moves by 5× between pairs of runs.
+
+Aggregates 50 steps in, all four binaries resumed from `ref1.bin`, three
+runs each. Every Rust run is bit-identical to its own repeats, so one row per
+backend:
+
+| Run       | mean density | max density | mean near-density | mean speed | mean y    | vapor |
+|-----------|-------------:|------------:|------------------:|-----------:|----------:|------:|
+| C++ ×3    |    385.15814 |   531.84436 |         444.77954 | 0.91266389 | 3.9665165 |     4 |
+|           |    385.15814 |   531.84442 |         444.77960 | 0.91266386 | 3.9665160 |     4 |
+|           |    385.15814 |   531.84448 |         444.77954 | 0.91266382 | 3.9665160 |     4 |
+| Rust CUDA |    385.15814 |   531.84436 |         444.77954 | 0.91266396 | 3.9665165 |     4 |
+| Rust wgpu |    385.15814 |   531.84436 |         444.77954 | 0.91266396 | 3.9665160 |     4 |
+| Rust CPU  |    385.15814 |   531.84558 |         444.77954 | 0.91266404 | 3.9665160 |     4 |
+
+Seven to eight significant figures on every aggregate, and the vapor count
+matches exactly — the same particles evaporate, so the Threefry stream lines
+up with Random123's.
+
+The noise terrain reproduces the C++ **bit for bit**: the `mt19937_64` draws,
+the FastNoiseLite samples, the column heights and the softmax composition all
+match, which `soil::tests::noise_terrain_matches_the_cpp` pins against values
+printed by a probe built on the C++ tree's own headers.
+

@@ -58,7 +58,8 @@ zero and evaporate a different set of particles.
 ## Why every kernel has a reference
 
 CubeCL kernels are not debuggable. The CPU runtime's LLVM JIT emits no symbols
-and no line tables, so a debugger never sees the kernel
-(`crates/spike/README.md`, answer 4). The plain-Rust twin next to each kernel,
-plus a test that runs both over one input, is the debugging path. The other
-half is `CUBECL_DEBUG_PLIRON`, which dumps the IR after each compiler pass.
+and no line tables, so a debugger never sees the kernel — measured, not
+inferred; see the spike outcome in `docs/organism.md`. The plain-Rust twin next
+to each kernel, plus a test that runs both over one input, is the debugging
+path. The other half is `CUBECL_DEBUG_PLIRON`, which dumps the IR after each
+compiler pass.
