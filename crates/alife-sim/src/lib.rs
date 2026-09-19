@@ -6,6 +6,7 @@
 //! until this port reaches parity.
 
 pub mod dump;
+pub mod genome;
 pub mod kernels;
 pub mod params;
 pub mod particles;
@@ -18,5 +19,6 @@ pub mod timing;
 pub mod wgpu_backend;
 pub mod world;
 
+pub use genome::BrainShape;
 pub use params::{SimParams, SimParamsCli};
 pub use particles::{ParticleKind, SphDevice, SphHost};

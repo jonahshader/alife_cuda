@@ -155,6 +155,28 @@ sim_params! {
     condense_altitude_power: f32 = 2.0, "fluid.condense_altitude_power", "condense-alt-power",
         "Power curve for altitude-based condensation";
     seed: i64 = 0, "world.seed", "seed", "RNG seed (0 = random)";
+    max_organisms: i32 = 256, "organism.max_organisms", "max-organisms",
+        "Organism slots; the population tensors are sized from it";
+    max_limbs: i32 = 16, "organism.max_limbs", "max-limbs",
+        "Limb records per organism (a limb index is a u8, so at most 255)";
+    max_particles_per_limb: i32 = 8, "organism.max_particles_per_limb",
+        "max-particles-per-limb", "Particles in the longest limb a genome can ask for";
+    brain_d_token: i32 = 32, "organism.brain_d_token", "brain-d-token",
+        "Brain token width";
+    brain_d_latent: i32 = 32, "organism.brain_d_latent", "brain-d-latent",
+        "Brain latent width";
+    brain_n_latents: i32 = 8, "organism.brain_n_latents", "brain-n-latents",
+        "Number of persistent brain latents";
+    brain_trunk_hidden: i32 = 64, "organism.brain_trunk_hidden", "brain-trunk-hidden",
+        "Hidden width of the brain's latent MLP trunk";
+    mutation_sigma: f32 = 0.02, "organism.mutation_sigma", "mutation-sigma",
+        "Gaussian sigma applied to a newborn's brain row";
+    identity_sigma: f32 = 0.05, "organism.identity_sigma", "identity-sigma",
+        "Gaussian sigma applied to a newborn's per-limb identity vectors";
+    angle_sigma: f32 = 0.05, "organism.angle_sigma", "angle-sigma",
+        "Gaussian sigma in radians applied to a newborn's limb grow angles";
+    structural_rate: f32 = 0.1, "organism.structural_rate", "structural-rate",
+        "Probability that a birth also makes one structural edit";
 }
 
 impl SimParams {
@@ -235,6 +257,54 @@ impl SimParams {
         self.particles_per_cell, self.max_particles_per_cell
       ));
     }
+    self.validate_organism()
+  }
+
+  /// The organism half. A limb index, a limb length and a part type are each
+  /// one byte in the genome's discrete section, so the counts that index them
+  /// have hard ceilings rather than merely sensible ones.
+  fn validate_organism(&self) -> Result<(), String> {
+    let at_least_one = [
+      ("max-organisms", self.max_organisms),
+      ("max-limbs", self.max_limbs),
+      ("max-particles-per-limb", self.max_particles_per_limb),
+      ("brain-d-token", self.brain_d_token),
+      ("brain-d-latent", self.brain_d_latent),
+      ("brain-n-latents", self.brain_n_latents),
+      ("brain-trunk-hidden", self.brain_trunk_hidden),
+    ];
+    for (name, value) in at_least_one {
+      if value < 1 {
+        return Err(format!("--{name} must be >= 1, got {value}"));
+      }
+    }
+    let byte_capped = [
+      ("max-limbs", self.max_limbs),
+      ("max-particles-per-limb", self.max_particles_per_limb),
+    ];
+    for (name, value) in byte_capped {
+      if value > u8::MAX as i32 {
+        return Err(format!("--{name} must be <= 255, got {value}"));
+      }
+    }
+    let sigmas = [
+      ("mutation-sigma", self.mutation_sigma),
+      ("identity-sigma", self.identity_sigma),
+      ("angle-sigma", self.angle_sigma),
+    ];
+    for (name, value) in sigmas {
+      if value.is_nan() || value < 0.0 || !value.is_finite() {
+        return Err(format!(
+          "--{name} must be a non-negative finite number, got {value}"
+        ));
+      }
+    }
+    if !(0.0..=1.0).contains(&self.structural_rate) {
+      return Err(format!(
+        "--structural-rate must be a probability in [0, 1], got {}",
+        self.structural_rate
+      ));
+    }
     Ok(())
   }
 }
@@ -251,6 +321,24 @@ mod tests {
     };
     assert!(params.validate().is_err());
     assert!(SimParams::default().validate().is_ok());
+  }
+
+  #[test]
+  fn validate_rejects_a_limb_count_a_byte_cannot_index() {
+    let params = SimParams {
+      max_limbs: 256,
+      ..SimParams::default()
+    };
+    assert!(params.validate().is_err());
+  }
+
+  #[test]
+  fn validate_rejects_a_structural_rate_outside_zero_to_one() {
+    let params = SimParams {
+      structural_rate: 1.5,
+      ..SimParams::default()
+    };
+    assert!(params.validate().is_err());
   }
 
   #[test]
