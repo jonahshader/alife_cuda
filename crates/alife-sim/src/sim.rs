@@ -224,9 +224,9 @@ impl<R: Runtime> Sim<R> {
     });
     std::mem::swap(&mut sph.vel, vel_next);
 
-    let ctr = upload_counter(client, *rng_counter);
+    let ctr = *rng_counter;
     run_timed(client, timing, timings, "evaporate_particles", &mut || {
-      motion::launch_evaporate(client, sph, params_buf, &ctr, cfg);
+      motion::launch_evaporate(client, sph, params_buf, ctr, cfg);
     });
     rng_counter.incr();
 
@@ -234,9 +234,9 @@ impl<R: Runtime> Sim<R> {
       motion::launch_move(client, sph, params_buf, cfg);
     });
 
-    let ctr = upload_counter(client, *rng_counter);
+    let ctr = *rng_counter;
     run_timed(client, timing, timings, "move_vapor_particles", &mut || {
-      motion::launch_move_vapor(client, sph, params_buf, &ctr, cfg);
+      motion::launch_move_vapor(client, sph, params_buf, ctr, cfg);
     });
     rng_counter.incr();
 
@@ -250,10 +250,6 @@ fn upload_params<R: Runtime>(
   geom: &WorldGeometry,
 ) -> Handle {
   client.create_from_slice(bytemuck::cast_slice(&kernels::pack_params(params, geom)))
-}
-
-fn upload_counter<R: Runtime>(client: &ComputeClient<R>, ctr: RngCounter) -> Handle {
-  client.create_from_slice(bytemuck::cast_slice(&ctr.0))
 }
 
 fn run_timed<R: Runtime>(

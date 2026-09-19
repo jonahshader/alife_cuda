@@ -15,11 +15,18 @@ use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20, threefry4x32_20_ref, u01, u01_ref};
 
 /// Flip qualifying liquid particles to vapor state.
+///
+/// The Threefry counter arrives as four scalars rather than a buffer: it is
+/// 16 bytes that change every step, and a buffer for it meant an allocation
+/// and an upload per launch.
 #[cube(launch)]
 pub fn evaporate_particles(
   sph: &mut SphArgs,
   params: &[f32],
-  rng_ctr: &[u32],
+  ctr0: u32,
+  ctr1: u32,
+  ctr2: u32,
+  ctr3: u32,
   #[comptime] cfg: Cfg,
 ) {
   let i = ABSOLUTE_POS;
@@ -35,9 +42,7 @@ pub fn evaporate_particles(
     terminate!();
   }
 
-  let result = threefry4x32_20(
-    rng_ctr[0], rng_ctr[1], rng_ctr[2], rng_ctr[3], i as u32, 1u32, 0u32, 0u32,
-  );
+  let result = threefry4x32_20(ctr0, ctr1, ctr2, ctr3, i as u32, 1u32, 0u32, 0u32);
   let roll = u01(result.x0);
 
   if roll < prob {
@@ -105,7 +110,10 @@ pub fn move_particles(sph: &mut SphArgs, params: &[f32], #[comptime] cfg: Cfg) {
 pub fn move_vapor_particles(
   sph: &mut SphArgs,
   params: &[f32],
-  rng_ctr: &[u32],
+  ctr0: u32,
+  ctr1: u32,
+  ctr2: u32,
+  ctr3: u32,
   #[comptime] cfg: Cfg,
 ) {
   let i = ABSOLUTE_POS;
@@ -120,9 +128,7 @@ pub fn move_vapor_particles(
   let bounds_x = params[P_BOUNDS_X as usize];
   let bounds_y = params[P_BOUNDS_Y as usize];
 
-  let result = threefry4x32_20(
-    rng_ctr[0], rng_ctr[1], rng_ctr[2], rng_ctr[3], i as u32, 2u32, 0u32, 0u32,
-  );
+  let result = threefry4x32_20(ctr0, ctr1, ctr2, ctr3, i as u32, 2u32, 0u32, 0u32);
   let drift_x = (u01(result.x0) - 0.5f32) * 2.0f32 * params[P_VAPOR_DRIFT as usize];
   let condense_roll = u01(result.x1);
 
@@ -287,7 +293,7 @@ pub fn launch_evaporate<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   params: &Handle,
-  rng_ctr: &Handle,
+  ctr: RngCounter,
   cfg: Cfg,
 ) {
   evaporate_particles::launch::<R>(
@@ -296,7 +302,10 @@ pub fn launch_evaporate<R: Runtime>(
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(params, super::PARAM_COUNT),
-    super::whole(rng_ctr, 4),
+    ctr.0[0],
+    ctr.0[1],
+    ctr.0[2],
+    ctr.0[3],
     cfg,
   );
 }
@@ -321,7 +330,7 @@ pub fn launch_move_vapor<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   params: &Handle,
-  rng_ctr: &Handle,
+  ctr: RngCounter,
   cfg: Cfg,
 ) {
   move_vapor_particles::launch::<R>(
@@ -330,7 +339,10 @@ pub fn launch_move_vapor<R: Runtime>(
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(params, super::PARAM_COUNT),
-    super::whole(rng_ctr, 4),
+    ctr.0[0],
+    ctr.0[1],
+    ctr.0[2],
+    ctr.0[3],
     cfg,
   );
 }
@@ -359,13 +371,7 @@ mod tests {
     with_evap_signal(&mut h);
     let ctr = RngCounter([3, 0, 0, 0]);
 
-    super::launch_evaporate(
-      &h.client,
-      &h.sph,
-      &h.params_buf,
-      &h.upload_counter(ctr),
-      h.cfg,
-    );
+    super::launch_evaporate(&h.client, &h.sph, &h.params_buf, ctr, h.cfg);
     let actual = h.read_particles();
 
     let mut expected = h.particles.clone();
@@ -398,13 +404,7 @@ mod tests {
     let h = Harness::new();
     let ctr = RngCounter([11, 0, 0, 0]);
 
-    super::launch_move_vapor(
-      &h.client,
-      &h.sph,
-      &h.params_buf,
-      &h.upload_counter(ctr),
-      h.cfg,
-    );
+    super::launch_move_vapor(&h.client, &h.sph, &h.params_buf, ctr, h.cfg);
     let actual = h.read_particles();
 
     let mut expected = h.particles.clone();

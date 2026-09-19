@@ -14,7 +14,7 @@ use super::grid::{GridDevice, GridRef};
 use super::{Cfg, PARAM_COUNT, pack_params};
 use crate::SimParams;
 use crate::particles::{ParticleKind, SphDevice, SphHost};
-use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
+use crate::rng::{threefry4x32_20_ref, u01_ref};
 use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
 use crate::world::WorldGeometry;
 
@@ -121,10 +121,6 @@ impl Harness {
 
   pub fn read_particles(&self) -> SphHost {
     self.sph.download(&self.client)
-  }
-
-  pub fn upload_counter(&self, ctr: RngCounter) -> Handle {
-    self.client.create_from_slice(bytemuck::cast_slice(&ctr.0))
   }
 
   pub fn param_count(&self) -> usize {
