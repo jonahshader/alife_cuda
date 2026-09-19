@@ -459,7 +459,16 @@ pub fn claim_particles<R: Runtime>(access: &SimBodies<'_, R>, n: usize) -> Vec<u
 }
 
 /// Seed `count` founders: one [`Genome::seed_plant`] each, at evenly spaced
-/// x, anchored on the soil surface of its own column.
+/// x, anchored on the soil surface under it.
+///
+/// "Evenly spaced" means over the soil, not over the world: the founders are
+/// laid out along the union of [`crate::soil::SoilGrid::columns`], so a
+/// capillary terrain's gaps get none and each column gets founders in
+/// proportion to its width. A terrain whose only column spans the world — the
+/// noise one — is the same even spacing across the world it always was. The
+/// gaps matter because they have no soil surface at all: a founder in one
+/// would anchor on the world floor, at the bottom of the pool, which is not a
+/// habitat the experiment is asking about.
 ///
 /// Returns how many were actually seeded, which is capped by the organism
 /// slots. `--founders 0` does nothing at all, which is the default.
@@ -471,11 +480,10 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
   let seed = sim.seed();
   let shape = sim.population().shape;
   let max_limbs = sim.population().max_limbs;
-  let bounds = sim.geometry().bounds;
 
   let anchors: Vec<Vec2> = (0..count)
     .map(|i| {
-      let x = (i as f32 + 0.5) * bounds.x / count as f32;
+      let x = founder_x(sim.soil(), i, count);
       Vec2::new(x, soil_surface(sim.soil(), x))
     })
     .collect();
@@ -509,6 +517,26 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
   let slots: Vec<usize> = (0..count).collect();
   grow_bodies(sim, &slots);
   count
+}
+
+/// Where founder `i` of `count` stands: the point `(i + 0.5) / count` of the
+/// way along the soil, measured across the columns in order.
+fn founder_x(soil: &SoilGrid, i: usize, count: usize) -> f32 {
+  let cell = soil.cell_size;
+  let columns = soil.columns();
+  let total: f32 = columns.iter().map(|c| c.width() as f32 * cell).sum();
+  let target = (i as f32 + 0.5) * total / count as f32;
+
+  let mut passed = 0.0f32;
+  for column in &columns {
+    let span = column.width() as f32 * cell;
+    if target < passed + span {
+      return column.x0 as f32 * cell + (target - passed);
+    }
+    passed += span;
+  }
+  // Past the end of the last column, which only rounding can reach.
+  columns.last().map_or(0.0, |c| (c.x1 as f32 - 0.5) * cell)
 }
 
 /// The y of the first soil cell from the top of `x`'s column that holds any
@@ -564,9 +592,12 @@ mod tests {
 
     for o in 0..2usize {
       let anchor = sim.bodies().anchors[o];
-      // Evenly spaced across the world, on the surface of that column.
+      // Evenly spaced across the world, on the surface of that column. Exact,
+      // not approximate: the noise terrain's single column spans the world, so
+      // spacing the founders along the soil is the same arithmetic as spacing
+      // them along the world and has to stay bit-identical to it.
       let expected_x = (o as f32 + 0.5) * sim.geometry().bounds.x / 2.0;
-      assert!((anchor.x - expected_x).abs() < 1e-6);
+      assert_eq!(anchor.x, expected_x);
       assert_eq!(anchor.y, soil_surface(sim.soil(), anchor.x));
 
       let root = sim.bodies().particle(o, 0, 0) as usize;
@@ -651,6 +682,47 @@ mod tests {
     let mut sim = small_world();
     assert_eq!(spawn_founders(&mut sim, 99), 4);
     assert_eq!(sim.organism_count(), 4);
+  }
+  /// The gaps between the capillary columns get no founders: every one stands
+  /// on soil, and the columns share them out by width.
+  #[test]
+  fn founders_go_on_the_soil_and_not_in_the_gaps() {
+    let params = SimParams {
+      terrain_mode: 2,
+      max_organisms: 60,
+      ..SimParams::default()
+    };
+    let mut sim = Sim::new(CpuRuntime::client(&CpuDevice), params, 42, None);
+    assert_eq!(spawn_founders(&mut sim, 60), 60);
+
+    let columns = sim.soil().columns();
+    // At the default width the columns really do leave gaps, so this is not a
+    // vacuous check.
+    assert!(columns.windows(2).any(|p| p[0].x1 < p[1].x0));
+    let mut per_column = vec![0usize; columns.len()];
+    for o in 0..60usize {
+      let anchor = sim.bodies().anchors[o];
+      let cell = sim.soil().cell_column(anchor.x);
+      let c = columns
+        .iter()
+        .position(|column| column.contains(cell))
+        .unwrap_or_else(|| panic!("founder {o} at x={} is in a gap", anchor.x));
+      per_column[c] += 1;
+      assert_eq!(anchor.y, soil_surface(sim.soil(), anchor.x));
+      // On a column, "the soil surface" is the top of the column rather than
+      // the floor of the pool.
+      assert!(
+        anchor.y > sim.geometry().bounds.y * 0.2,
+        "founder {o} is in the pool"
+      );
+    }
+    // Six columns of nearly equal width, so ten founders each, give or take
+    // the rounding of the gaps.
+    assert_eq!(per_column.iter().sum::<usize>(), 60);
+    assert!(
+      per_column.iter().all(|n| (9..=11).contains(n)),
+      "{per_column:?}"
+    );
   }
 
   #[test]
