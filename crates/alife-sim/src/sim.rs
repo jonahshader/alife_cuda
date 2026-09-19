@@ -12,6 +12,7 @@ use glam::Vec2;
 use crate::BrainShape;
 use crate::SimParams;
 use crate::bodies::{BodyCfg, BodyState, SimBodies};
+use crate::brain::{BrainCfg, BrainState};
 use crate::genome::Population;
 use crate::kernels::{
   self, accel, constraints, density, evap, grid::GridDevice, limb_geometry, motion,
@@ -39,6 +40,8 @@ pub struct Sim<R: Runtime> {
   /// Which particle holds which limb particle, plus the anchors.
   bodies: BodyState,
   body_cfg: BodyCfg,
+  /// The brain's sensor buffer, its per-tick scratch and its outputs.
+  brain: BrainState,
   params_buf: Handle,
   rng_counter: RngCounter,
   step_count: u32,
@@ -120,9 +123,11 @@ impl<R: Runtime> Sim<R> {
       client.create_from_slice(bytemuck::cast_slice(&vec![0.0f32; particles.len() * 2]));
     let soil_device = SoilDevice::upload(&client, &soil.cells);
     let grid = GridDevice::alloc(&client, &cfg);
-    let pop = Population::new(&client, &params, BrainShape::from_params(&params));
+    let shape = BrainShape::from_params(&params);
+    let pop = Population::new(&client, &params, shape);
     let bodies = BodyState::new(&client, &params, &geom);
     let body_cfg = bodies.cfg;
+    let brain = BrainState::new(&client, BrainCfg::new(&shape, &params));
     let params_buf = upload_params(&client, &params, &geom);
 
     Self {
@@ -138,6 +143,7 @@ impl<R: Runtime> Sim<R> {
       pop,
       bodies,
       body_cfg,
+      brain,
       params_buf,
       // Two launches consume a counter value per step: `evaporate_particles`
       // and `move_vapor_particles`, exactly as the C++ increments twice.
@@ -211,6 +217,35 @@ impl<R: Runtime> Sim<R> {
 
   pub fn body_cfg(&self) -> BodyCfg {
     self.body_cfg
+  }
+
+  pub fn brain(&self) -> &BrainState {
+    &self.brain
+  }
+
+  /// The brain's per-limb outputs, read back to the host:
+  /// `[max_organisms x max_limbs x HEAD_DIM]`, the sprout logits over child
+  /// types followed by the two actuator outputs. Zero for an absent limb or a
+  /// free organism slot.
+  pub fn brain_outputs(&self) -> Vec<f32> {
+    self.brain.read_heads(&self.client)
+  }
+
+  /// The limb geometry the last constraint pass published, read back to the
+  /// host. The token features are built from it, so a reference
+  /// implementation needs it as the device left it.
+  pub fn read_limb_geometry(&self) -> crate::bodies::LimbGeometryHost {
+    self.bodies.device.geometry.download(&self.client)
+  }
+
+  /// The persistent latent state, read back to the host:
+  /// `[max_organisms x n_latents x d_latent]`.
+  pub fn brain_latents(&self) -> Vec<f32> {
+    crate::genome::population::read_f32(
+      &self.client,
+      &self.pop.device.latents,
+      self.pop.max_organisms * self.pop.shape.latent_state_len(),
+    )
   }
 
   /// Particle slots the per-particle kernels are launched over: the fluid
@@ -297,6 +332,7 @@ impl<R: Runtime> Sim<R> {
       pop,
       bodies,
       body_cfg,
+      brain,
       params_buf,
       cfg,
       timings,
@@ -373,6 +409,45 @@ impl<R: Runtime> Sim<R> {
           cfg.num_particles as usize,
         );
       });
+
+      // Sense, then one brain tick. Nothing applies a head yet: the
+      // life-cycle chunk reads the sprout logits and the actuator targets out
+      // of `Sim::brain_outputs`.
+      run_timed(client, timing, timings, "brain_sense", &mut || {
+        crate::brain::sense::launch(
+          client,
+          sph,
+          soil_device,
+          bodies,
+          pop,
+          &brain.device,
+          params_buf,
+          brain.cfg,
+          cfg,
+        );
+      });
+      let weights = pop.weights();
+      run_timed(client, timing, timings, "brain_tokens", &mut || {
+        crate::brain::tokens::launch(
+          client,
+          &weights,
+          bodies,
+          pop,
+          &brain.device,
+          &pop.shape,
+          brain.cfg,
+        );
+      });
+      let shape = pop.shape;
+      crate::brain::forward::launch(
+        client,
+        &weights,
+        &brain.device,
+        pop,
+        &shape,
+        brain.cfg,
+        &mut |name, f| run_timed(client, timing, timings, name, f),
+      );
     }
 
     self.step_count += 1;

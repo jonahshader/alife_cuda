@@ -171,6 +171,31 @@ impl AnySim {
     dispatch!(self, sim => sim.bodies())
   }
 
+  /// The brain's per-limb outputs; see [`Sim::brain_outputs`].
+  pub fn brain_outputs(&self) -> Vec<f32> {
+    dispatch!(self, sim => sim.brain_outputs())
+  }
+
+  /// The persistent latent state; see [`Sim::brain_latents`].
+  pub fn brain_latents(&self) -> Vec<f32> {
+    dispatch!(self, sim => sim.brain_latents())
+  }
+
+  pub fn brain(&self) -> &crate::brain::BrainState {
+    dispatch!(self, sim => sim.brain())
+  }
+
+  /// The brain's sensor buffer, read back to the host.
+  pub fn brain_sensors(&self) -> Vec<f32> {
+    dispatch!(self, sim => sim.brain().read_sensors(sim.client()))
+  }
+
+  /// The limb geometry the last constraint pass published; see
+  /// [`Sim::read_limb_geometry`].
+  pub fn read_limb_geometry(&self) -> crate::bodies::LimbGeometryHost {
+    dispatch!(self, sim => sim.read_limb_geometry())
+  }
+
   pub fn sync(&self) {
     dispatch!(self, sim => sim.sync())
   }
