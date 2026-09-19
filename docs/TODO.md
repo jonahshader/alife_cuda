@@ -17,19 +17,13 @@ the spec, don't re-derive it.
   gain, root water draw from soil saturation, per-particle upkeep, death to
   soil organic matter, seed particle emission with a mutated genome,
   germination on landing in soil.
-- **Evolutionary metrics.** Headless `--metrics <path>` writes a sampled
-  time series (population, births, deaths, energy flux, lineage count,
-  phylogenetic depth, trait distributions per soil type) plus a summary at
-  exit derived from the same samples. This is the scoring path for every
-  later agent-driven run.
 - **Soil-specialization experiment** in `--terrain-mode 1`, with the three
   controls in the spec (identical-soil isolation control, soil-position
-  permutation, transplant test). The capillary test reset must publish its
-  column extents so per-column metrics can be computed, and it must leave
-  air above the columns: today they run to the top of the world, so a plant
-  anchored on a column's surface stands at the ceiling (`organism.md`,
-  decisions). Changing the terrain regenerates every parity reference, so
-  it belongs to this chunk rather than an earlier one.
+  permutation, transplant test). It must leave air above the columns: today
+  they run to the top of the world, so a plant anchored on a column's
+  surface stands at the ceiling (`organism.md`, decisions). Changing the
+  terrain regenerates every parity reference, so it belongs to this chunk
+  rather than an earlier one.
 
 Left open by the genome chunk, for the chunk that first steps organisms:
 
@@ -37,9 +31,10 @@ Left open by the genome chunk, for the chunk that first steps organisms:
   `sim.rs` touches it. The life-cycle chunk owns wiring it: founders into
   slots at startup, `slots::claim_free_slots` then `mutate::mutate` on
   birth, and advancing the `step` word the mutation kernels key on. It also
-  owns setting a newborn's `alive`, `parent_id`, `birth_step` and
-  `lineage_id`, and copying its `latent_init` slice into latent state —
-  mutation writes only the genome.
+  owns setting a newborn's `alive`, `parent_id`, `birth_step`, `lineage_id`
+  and `generation` (parent's plus one), and copying its `latent_init` slice
+  into latent state — mutation writes only the genome. `spawn_founders`
+  already does the founder half of that, generation 0.
 - `mutate::MutateInputs` takes the newborn list as device buffers with a
   device-resident count, so the life-cycle chunk never has to read a count
   back to the host; it does have to give the launcher a host-side upper
@@ -70,6 +65,25 @@ Left open by the bodies chunk:
   `--founders 64` (`perf.md`), on one SM. Splitting a unit per limb needs
   the sweeps to become separate launches, which is only worth it if
   organism counts stay this low.
+
+Left open by the metrics chunk:
+
+- **`Sim::record_births` / `record_deaths` are hooks nothing calls**, so
+  `births` and `deaths` are 0 for a whole run. The life-cycle chunk calls
+  them where it creates and kills organisms.
+- **The sampler reads the population's host mirrors**, which are the master
+  copy only while births are host-side. Once the life cycle writes `alive`,
+  `energy` or the lineage fields from a kernel, `metrics::measure` needs
+  them downloaded first — cheap for the organism and limb SoAs, not for the
+  brain tensor, so it wants a partial download rather than
+  `Population::download`.
+- **Energy is in the time series but nothing writes it**, so
+  `energy_mean/min/max` are 0 and the "energy flux" the spec asks for is a
+  delta the life-cycle chunk makes meaningful.
+- **Per-column traits are binned by anchor**, so an organism anchored in the
+  gap between two columns counts in `alive` and in no column. That is right
+  while plants are anchored; a mobile creature needs binning by where it
+  currently is.
 
 ## Inspection & verification
 

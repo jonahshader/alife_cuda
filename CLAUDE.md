@@ -107,8 +107,10 @@ L-system trees still live in. New sim work goes in the Rust tree.
   C++ `--dump` format, and it still reads version 1
   (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
   soil surface; the default 0 leaves the world exactly as it was before
-  organisms existed. `config.toml` is read from the CWD and
-  `--write-config` emits the defaults; every sim param is also a CLI flag
+  organisms existed. `--metrics <path>` writes the evolutionary time series
+  as CSV every `--metrics-every K` steps (default 100) and prints a summary
+  at exit (`docs/organism.md`, *Metrics*). `config.toml` is read from the
+  CWD and `--write-config` emits the defaults; every sim param is also a CLI flag
   (`--help` lists them; `crates/alife-sim/src/params.rs` is the
   authoritative list).
 - **Same-seed runs are bit-reproducible** on a given backend, unlike the

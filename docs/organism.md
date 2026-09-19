@@ -162,6 +162,19 @@ Written by headless runs as a sampled time series to a file, with a summary
 derived from the same samples at exit. Fluid metrics (density error,
 divergence, settling) gate only fluid optimization and are secondary.
 
+`--metrics <path> --metrics-every K` (default 100) is that time series:
+`crates/alife-sim/src/metrics/`, one CSV row per sample, its header naming
+every column. The traits are reported per soil column, because the
+experiment below asks whether they split by soil — the terrain publishes its
+extents as `SoilGrid::columns()`, and an organism is binned by the column its
+anchor sits in, so one anchored in a gap counts in `alive` and in no column.
+Species are greedy clusters: each organism joins the first cluster whose
+representative it is within `species_threshold` (default 0.25) of by
+`species_distance`, else starts one. Phylogenetic depth is the `generation`
+field of the organism SoA: a founder is 0 and a child is its parent's plus
+one. Sampling only reads, so a run with `--metrics` steps the same world as
+one without.
+
 ### The first experiment: soil specialization
 
 Run plants in the capillary test terrain (`--terrain-mode 1`), where sand,
@@ -254,7 +267,8 @@ geometry the brain will read — beside the population tensors.
 - Continuous, `[max_organisms × BrainShape::param_count()]` f32 on the
   host as the master copy, uploaded per organism on birth; the fp16 device
   shadow is the brain chunk's concern.
-- Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor), plus
+- Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor),
+  `generation` (hops from the founder; mutation never touches it), plus
   the runtime `alive` flag, `energy`, and the latent state
   `[max_organisms × n_latents × d_latent]`, which is state, not genome.
 - Mutation is two kernels over newborn organisms, Threefry-keyed by

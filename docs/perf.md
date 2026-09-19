@@ -286,3 +286,20 @@ dumping both binaries and comparing the fluid prefix field by field: CUDA
 and wgpu at 50 steps, the CPU runtime at 20, terrain modes 0 and 1, all
 identical.
 
+### The metrics sampler (2026-09-19, commit after d466745)
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./target/release/alife --headless \
+  --seed 42 --runtime cuda --founders 64 --terrain-mode 1 --iterations 1000 \
+  [--metrics /tmp/m.csv]
+```
+
+Process wall time, three runs each: **3.80 / 3.84 / 3.85 s** without
+`--metrics` against **3.835 / 3.835 / 3.837 s** with it, at the default
+`--metrics-every 100`. The sampler's own readback — five particle fields
+(`state`, `density`, `organism`, `part_type`, `ppos`) over the live prefix —
+is **0.25 ms per sample**, 2.5 ms across the ten samples of that run, so at
+K=100 it is under 0.1% of the step budget and the difference above is noise.
+Dumps at `--founders 0` and `--founders 16` are byte-identical with and
+without the flag: the sampler only reads.
+
