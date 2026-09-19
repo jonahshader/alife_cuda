@@ -61,6 +61,42 @@ pub fn pore_capacity(soil: &SoilArgs, i: usize, target_density: f32) -> f32 {
   porosity(soil, i) * target_density
 }
 
+/// The fraction of a cell's volume that is solid mineral: zero in air, and
+/// `1 - porosity` of whichever mix fills a soil cell.
+///
+/// Not [`solid_density`] over `target_density`. That one reads `1` in air,
+/// because an empty cell has no porosity to subtract — which is what the
+/// fluid wants (it is a density offset that makes a particle in free air
+/// neutral) and the opposite of what a limb's contact sensor wants. Each
+/// mineral contributes its own solid fraction, so air contributes nothing and
+/// the value also tells sand (0.62) from clay (0.50).
+#[cube]
+pub fn solid_fraction(soil: &SoilArgs, i: usize) -> f32 {
+  soil.sand_density[i] * (1.0f32 - SAND_POROSITY)
+    + soil.silt_density[i] * (1.0f32 - SILT_POROSITY)
+    + soil.clay_density[i] * (1.0f32 - CLAY_POROSITY)
+}
+
+/// [`solid_fraction`] interpolated at a position, for the brain's soil sensor.
+#[cube]
+pub fn solid_fraction_at_pos(
+  pos_x: f32,
+  pos_y: f32,
+  soil: &SoilArgs,
+  soil_size: f32,
+  #[comptime] cfg: Cfg,
+) -> f32 {
+  let c = corners_at(pos_x, pos_y, soil_size, cfg);
+  smooth_bilinear(
+    solid_fraction(soil, c.i00),
+    solid_fraction(soil, c.i01),
+    solid_fraction(soil, c.i10),
+    solid_fraction(soil, c.i11),
+    smoothstep01(c.dx),
+    smoothstep01(c.dy),
+  )
+}
+
 #[cube]
 pub fn capillary_strength(soil: &SoilArgs, i: usize) -> f32 {
   soil.sand_density[i] * SAND_CAPILLARY
@@ -307,6 +343,31 @@ pub fn solid_density_at_pos_ref(
     sd(c.i01),
     sd(c.i10),
     sd(c.i11),
+    smoothstep01_ref(c.dx),
+    smoothstep01_ref(c.dy),
+  )
+}
+
+/// Host twin of [`solid_fraction`].
+pub fn solid_fraction_ref(soil: &SoilHost, i: usize) -> f32 {
+  soil.sand_density[i] * (1.0 - SAND_POROSITY)
+    + soil.silt_density[i] * (1.0 - SILT_POROSITY)
+    + soil.clay_density[i] * (1.0 - CLAY_POROSITY)
+}
+
+/// Host twin of [`solid_fraction_at_pos`].
+pub fn solid_fraction_at_pos_ref(
+  pos: glam::Vec2,
+  soil: &SoilHost,
+  soil_size: f32,
+  cfg: &Cfg,
+) -> f32 {
+  let c = corners_at_ref(pos, soil_size, cfg);
+  smooth_bilinear_ref(
+    solid_fraction_ref(soil, c.i00),
+    solid_fraction_ref(soil, c.i01),
+    solid_fraction_ref(soil, c.i10),
+    solid_fraction_ref(soil, c.i11),
     smoothstep01_ref(c.dx),
     smoothstep01_ref(c.dy),
   )
