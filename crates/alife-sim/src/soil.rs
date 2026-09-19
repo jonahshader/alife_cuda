@@ -53,12 +53,39 @@ impl TerrainMode {
   }
 }
 
+/// A stretch of the world the per-column metrics are aggregated over, in soil
+/// grid cells. `x0` is inclusive, `x1` exclusive.
+///
+/// The capillary test terrain publishes its six soil columns this way
+/// ([`SoilGrid::columns`]) so the soil-specialization experiment can bin
+/// organisms by the soil they are anchored in. The cells between two columns
+/// are air and belong to no extent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ColumnExtent {
+  pub x0: usize,
+  pub x1: usize,
+  /// Short identifier, used as a CSV column-name suffix, so it stays
+  /// `[a-z_]`.
+  pub label: &'static str,
+}
+
+impl ColumnExtent {
+  pub fn contains(&self, x: usize) -> bool {
+    x >= self.x0 && x < self.x1
+  }
+
+  pub fn width(&self) -> usize {
+    self.x1.saturating_sub(self.x0)
+  }
+}
+
 /// Soil grid dimensions and contents.
 #[derive(Debug, Clone)]
 pub struct SoilGrid {
   pub width: usize,
   pub height: usize,
   pub cell_size: f32,
+  pub mode: TerrainMode,
   pub cells: SoilHost,
 }
 
@@ -72,8 +99,33 @@ impl SoilGrid {
       width,
       height,
       cell_size,
+      mode,
       cells,
     }
+  }
+
+  /// The stretches of world the per-column metrics bin organisms into.
+  ///
+  /// The capillary test's six soil columns; for every other terrain, one
+  /// column spanning the world, because there is no soil layout to split it
+  /// by.
+  pub fn columns(&self) -> Vec<ColumnExtent> {
+    match self.mode {
+      TerrainMode::CapillaryTest => capillary_columns(self.width)
+        .into_iter()
+        .map(|column| column.extent)
+        .collect(),
+      TerrainMode::Noise => vec![ColumnExtent {
+        x0: 0,
+        x1: self.width,
+        label: "world",
+      }],
+    }
+  }
+
+  /// The soil cell column a world x coordinate falls in.
+  pub fn cell_column(&self, x: f32) -> usize {
+    ((x / self.cell_size).max(0.0) as usize).min(self.width.saturating_sub(1))
   }
 
   pub fn len(&self) -> usize {
@@ -120,6 +172,86 @@ pub fn friction(soil: &SoilHost, i: usize) -> f32 {
 
 // --- Terrain generators ---
 
+/// The soil a capillary-test column is made of: the composition at its left
+/// edge and at its right edge. A pure column has the same at both, a gradient
+/// column interpolates between them across its width.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoilMix {
+  pub sand: f32,
+  pub silt: f32,
+  pub clay: f32,
+}
+
+const SAND: SoilMix = SoilMix {
+  sand: 1.0,
+  silt: 0.0,
+  clay: 0.0,
+};
+const SILT: SoilMix = SoilMix {
+  sand: 0.0,
+  silt: 1.0,
+  clay: 0.0,
+};
+const CLAY: SoilMix = SoilMix {
+  sand: 0.0,
+  silt: 0.0,
+  clay: 1.0,
+};
+
+/// One column of the capillary test: where it sits and what it is made of.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CapillaryColumn {
+  pub extent: ColumnExtent,
+  pub left: SoilMix,
+  pub right: SoilMix,
+}
+
+/// The capillary test's six soil columns, in cells.
+///
+/// The one arithmetic behind both the terrain generator and
+/// [`SoilGrid::columns`], so the extents the metrics bin by cannot drift from
+/// the densities the generator writes.
+pub fn capillary_columns(width: usize) -> [CapillaryColumn; 6] {
+  let gap = width / 40;
+  let half_w = width / 2;
+
+  // -- Left half: three pure columns with gaps --
+  let pure_col_w = (half_w.saturating_sub(2 * gap)) / 3;
+  // -- Right half: three gradient columns with gaps --
+  let grad_x0 = half_w + gap;
+  let grad_col_w = width.saturating_sub(grad_x0 + 2 * gap) / 3;
+
+  let column = |x0: usize, x1: usize, label, left, right| CapillaryColumn {
+    extent: ColumnExtent {
+      x0,
+      x1: x1.max(x0),
+      label,
+    },
+    left,
+    right,
+  };
+  [
+    column(0, pure_col_w, "sand", SAND, SAND),
+    column(pure_col_w + gap, 2 * pure_col_w + gap, "silt", SILT, SILT),
+    column(2 * pure_col_w + 2 * gap, half_w, "clay", CLAY, CLAY),
+    column(grad_x0, grad_x0 + grad_col_w, "sand_silt", SAND, SILT),
+    column(
+      grad_x0 + grad_col_w + gap,
+      grad_x0 + 2 * grad_col_w + gap,
+      "silt_clay",
+      SILT,
+      CLAY,
+    ),
+    column(
+      grad_x0 + 2 * grad_col_w + 2 * gap,
+      width,
+      "sand_clay",
+      SAND,
+      CLAY,
+    ),
+  ]
+}
+
 /// Capillary tube test: shared water pool at the bottom, separate soil columns
 /// above. Bottom 20%: empty (no soil) — water pool. Above 20%: soil columns
 /// with air gaps between them. Left half: pure sand | silt | clay. Right half:
@@ -129,58 +261,20 @@ pub fn capillary_test(width: usize, height: usize) -> SoilHost {
 
   let pool_h = (height as f32 * 0.2) as usize; // bottom 20% is open water pool
   let terrain_h = height;
-  let gap = width / 40;
-  let half_w = width / 2;
-
-  // -- Left half: three pure columns with gaps --
-  let pure_col_w = (half_w - 2 * gap) / 3;
-  let pure_x = [
-    (0, pure_col_w),
-    (pure_col_w + gap, 2 * pure_col_w + gap),
-    (2 * pure_col_w + 2 * gap, half_w),
-  ];
 
   for y in pool_h..terrain_h {
     let row = y * width;
-    for x in pure_x[0].0..pure_x[0].1 {
-      soil.sand_density[x + row] = 1.0;
-    }
-    for x in pure_x[1].0..pure_x[1].1 {
-      soil.silt_density[x + row] = 1.0;
-    }
-    for x in pure_x[2].0..pure_x[2].1 {
-      soil.clay_density[x + row] = 1.0;
-    }
-  }
-
-  // -- Right half: three gradient columns with gaps --
-  let grad_x0 = half_w + gap;
-  let grad_col_w = (width - grad_x0 - 2 * gap) / 3;
-  let grad_x = [
-    (grad_x0, grad_x0 + grad_col_w),
-    (grad_x0 + grad_col_w + gap, grad_x0 + 2 * grad_col_w + gap),
-    (grad_x0 + 2 * grad_col_w + 2 * gap, width),
-  ];
-
-  for y in pool_h..terrain_h {
-    let row = y * width;
-    // sand -> silt gradient
-    for x in grad_x[0].0..grad_x[0].1 {
-      let t = (x - grad_x[0].0) as f32 / (grad_x[0].1 - grad_x[0].0) as f32;
-      soil.sand_density[x + row] = 1.0 - t;
-      soil.silt_density[x + row] = t;
-    }
-    // silt -> clay gradient
-    for x in grad_x[1].0..grad_x[1].1 {
-      let t = (x - grad_x[1].0) as f32 / (grad_x[1].1 - grad_x[1].0) as f32;
-      soil.silt_density[x + row] = 1.0 - t;
-      soil.clay_density[x + row] = t;
-    }
-    // sand -> clay gradient
-    for x in grad_x[2].0..grad_x[2].1 {
-      let t = (x - grad_x[2].0) as f32 / (grad_x[2].1 - grad_x[2].0) as f32;
-      soil.sand_density[x + row] = 1.0 - t;
-      soil.clay_density[x + row] = t;
+    for column in capillary_columns(width) {
+      let extent = column.extent;
+      for x in extent.x0..extent.x1 {
+        // `t` never reaches 1: the last cell of a gradient is one step short
+        // of the right-hand mix, as the original three separate loops were.
+        let t = (x - extent.x0) as f32 / extent.width() as f32;
+        let lerp = |a: f32, b: f32| a + (b - a) * t;
+        soil.sand_density[x + row] = lerp(column.left.sand, column.right.sand);
+        soil.silt_density[x + row] = lerp(column.left.silt, column.right.silt);
+        soil.clay_density[x + row] = lerp(column.left.clay, column.right.clay);
+      }
     }
   }
 
@@ -412,5 +506,119 @@ mod tests {
     assert_eq!(soil.clay_density[112 + 100 * 320], 1.0);
     // ph keeps its declared initial value everywhere.
     assert_eq!(soil.ph[0], 6.5);
+  }
+
+  /// The published extents are the layout: every non-gap cell belongs to
+  /// exactly one column, every gap cell to none, and the densities inside a
+  /// column are the ones its mix asks for.
+  #[test]
+  fn the_six_column_extents_tile_the_soil_the_layout_writes() {
+    let (width, height) = (320usize, 160usize);
+    let grid = SoilGrid::new(width, height, 0.1, TerrainMode::CapillaryTest, 0);
+    let columns = grid.columns();
+    assert_eq!(columns.len(), 6);
+    assert_eq!(
+      columns.iter().map(|c| c.label).collect::<Vec<_>>(),
+      [
+        "sand",
+        "silt",
+        "clay",
+        "sand_silt",
+        "silt_clay",
+        "sand_clay"
+      ]
+    );
+
+    // Ascending, disjoint, and inside the grid.
+    for pair in columns.windows(2) {
+      assert!(pair[0].x1 <= pair[1].x0, "{pair:?} overlap");
+    }
+    assert_eq!(columns[0].x0, 0);
+    assert_eq!(columns[5].x1, width);
+    // At this width there really are gaps, which is what makes the columns
+    // separate habitats.
+    assert!(columns.windows(2).any(|p| p[0].x1 < p[1].x0));
+
+    // A row above the pool: soil exactly where a column is.
+    let row = (height as f32 * 0.2) as usize + 1;
+    for x in 0..width {
+      let i = x + row * width;
+      let total =
+        grid.cells.sand_density[i] + grid.cells.silt_density[i] + grid.cells.clay_density[i];
+      match columns.iter().position(|c| c.contains(x)) {
+        Some(_) => assert!((total - 1.0).abs() < 1e-6, "cell {x} sums to {total}"),
+        None => assert_eq!(total, 0.0, "gap cell {x} holds soil"),
+      }
+    }
+    // Below the pool line, nothing at all.
+    for x in 0..width {
+      let i = x + (row - 2) * width;
+      assert_eq!(grid.cells.sand_density[i], 0.0);
+    }
+
+    // The mixes: the pure columns are one type throughout, and each gradient
+    // runs from its left type to (one step short of) its right type.
+    for column in capillary_columns(width) {
+      let (x0, x1) = (column.extent.x0, column.extent.x1);
+      let at = |x: usize| {
+        let i = x + row * width;
+        SoilMix {
+          sand: grid.cells.sand_density[i],
+          silt: grid.cells.silt_density[i],
+          clay: grid.cells.clay_density[i],
+        }
+      };
+      assert_eq!(
+        at(x0),
+        column.left,
+        "{} at its left edge",
+        column.extent.label
+      );
+      if column.left == column.right {
+        assert_eq!(
+          at(x1 - 1),
+          column.left,
+          "{} is not pure",
+          column.extent.label
+        );
+      } else {
+        let last = at(x1 - 1);
+        let t = (column.extent.width() - 1) as f32 / column.extent.width() as f32;
+        assert!(
+          (last.sand - (column.left.sand + (column.right.sand - column.left.sand) * t)).abs()
+            < 1e-6
+        );
+        assert!(
+          (last.clay - (column.left.clay + (column.right.clay - column.left.clay) * t)).abs()
+            < 1e-6
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn every_other_terrain_is_one_column_spanning_the_world() {
+    let grid = SoilGrid::new(64, 32, 0.1, TerrainMode::Noise, 42);
+    let columns = grid.columns();
+    assert_eq!(columns.len(), 1);
+    assert_eq!(columns[0].x0, 0);
+    assert_eq!(columns[0].x1, 64);
+    assert_eq!(columns[0].label, "world");
+    assert!(columns[0].contains(0) && columns[0].contains(63));
+    assert!(!columns[0].contains(64));
+  }
+
+  #[test]
+  fn a_narrow_world_has_no_gaps_between_its_columns() {
+    // `gap` is `width / 40`, so a grid under 40 cells wide tiles exactly.
+    // The metrics tests lean on that: every organism lands in a column.
+    let grid = SoilGrid::new(30, 20, 0.1, TerrainMode::CapillaryTest, 0);
+    let columns = grid.columns();
+    assert!(
+      columns.windows(2).all(|p| p[0].x1 == p[1].x0),
+      "{columns:?} should tile"
+    );
+    assert_eq!(grid.cell_column(0.55), 5);
+    assert_eq!(columns.iter().position(|c| c.contains(5)), Some(1));
   }
 }
