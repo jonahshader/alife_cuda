@@ -52,6 +52,7 @@ struct View {
 @group(0) @binding(4) var<storage, read> pos: array<f32>;
 @group(0) @binding(5) var<storage, read> state: array<u32>;
 @group(0) @binding(6) var<storage, read> evap_prob: array<f32>;
+@group(0) @binding(7) var<storage, read> part_type: array<u32>;
 
 fn to_clip(world: vec2<f32>) -> vec4<f32> {
   return vec4<f32>(world * view.scale + view.offset, 0.0, 1.0);
@@ -112,6 +113,19 @@ struct ParticleOut {
   @location(1) local: vec2<f32>,
 };
 
+// Body particles are coloured by the part type their limb carries, so a
+// plant reads as a plant without looking anything up: root brown, stem
+// green-brown, leaf green, seed yellow. The reserved codes stay grey.
+fn part_type_to_color(part: u32) -> vec3<f32> {
+  switch part {
+    case 1u: { return vec3<f32>(0.42, 0.28, 0.14); }
+    case 2u: { return vec3<f32>(0.36, 0.42, 0.18); }
+    case 3u: { return vec3<f32>(0.20, 0.68, 0.24); }
+    case 4u: { return vec3<f32>(0.95, 0.83, 0.25); }
+    default: { return vec3<f32>(0.6, 0.6, 0.6); }
+  }
+}
+
 // deep blue (0) -> teal (0.5) -> white (1.0)
 fn evap_prob_to_color(raw: f32) -> vec3<f32> {
   let p = clamp(raw, 0.0, 1.0);
@@ -131,10 +145,14 @@ fn particle_vs(@builtin(vertex_index) vi: u32) -> ParticleOut {
 
   var radius = view.particle_radius;
   var color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
-  if (state[id] == 1u) {
+  let kind = state[id];
+  if (kind == 1u) {
     // 0x40CCCCCC in the C++ renderer's packed ABGR.
     color = vec4<f32>(0.8, 0.8, 0.8, 0.25);
     radius = radius * 0.5;
+  } else if (kind == 2u) {
+    color = vec4<f32>(part_type_to_color(part_type[id]), 1.0);
+    radius = radius * 1.5;
   } else if (view.debug_evap == 1u) {
     color = vec4<f32>(evap_prob_to_color(evap_prob[id]), 1.0);
   }
@@ -142,7 +160,14 @@ fn particle_vs(@builtin(vertex_index) vi: u32) -> ParticleOut {
   var out: ParticleOut;
   out.clip = to_clip(centre + corner * radius);
   out.color = color;
-  out.local = corner;
+  // An unallocated body slot is parked outside the world and is not a
+  // particle at all: send its corners past the disc cutoff so every fragment
+  // is discarded.
+  if (kind == 3u) {
+    out.local = corner * 4.0;
+  } else {
+    out.local = corner;
+  }
   return out;
 }
 
@@ -189,7 +214,7 @@ impl Pipelines {
       },
       count: None,
     }];
-    entries.extend((1..=6).map(storage));
+    entries.extend((1..=7).map(storage));
 
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
       label: Some("alife sim bindings"),
@@ -291,6 +316,7 @@ impl CallbackTrait for SimCallback {
       &self.sph.pos,
       &self.sph.state,
       &self.sph.evap_prob,
+      &self.sph.part_type,
     ]
     .into_iter()
     .map(|handle| shared_buffer(&self.client, handle))

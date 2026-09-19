@@ -13,7 +13,9 @@ use crate::BrainShape;
 use crate::SimParams;
 use crate::bodies::{BodyCfg, BodyState, SimBodies};
 use crate::genome::Population;
-use crate::kernels::{self, accel, density, evap, grid::GridDevice, motion};
+use crate::kernels::{
+  self, accel, constraints, density, evap, grid::GridDevice, limb_geometry, motion,
+};
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20_ref, u01_ref};
 use crate::soil::{SoilDevice, SoilGrid, TerrainMode};
@@ -237,12 +239,20 @@ impl<R: Runtime> Sim<R> {
   pub fn step(&mut self) {
     // Destructured so each timed closure borrows only what it launches
     // while the timings are borrowed mutably.
+    // Host-side while births are: with no organism alive the two organism
+    // passes are skipped outright rather than launched over zero units, so a
+    // run without founders costs exactly what it did before they existed.
+    let organisms = self.organism_count();
+
     let Self {
       client,
       sph,
       vel_next,
       soil_device,
       grid,
+      pop,
+      bodies,
+      body_cfg,
       params_buf,
       cfg,
       timings,
@@ -251,6 +261,7 @@ impl<R: Runtime> Sim<R> {
       ..
     } = self;
     let cfg = *cfg;
+    let body_cfg = *body_cfg;
     let timing = *timing;
 
     crate::soil::update_soil(&mut self.soil, self.params.dt);
@@ -293,6 +304,23 @@ impl<R: Runtime> Sim<R> {
       motion::launch_move_vapor(client, sph, params_buf, ctr, cfg);
     });
     rng_counter.incr();
+
+    if organisms > 0 {
+      run_timed(client, timing, timings, "project_constraints", &mut || {
+        constraints::launch(client, sph, bodies, pop, params_buf, body_cfg, cfg);
+      });
+      run_timed(client, timing, timings, "write_limb_geometry", &mut || {
+        limb_geometry::launch(
+          client,
+          sph,
+          bodies,
+          pop,
+          params_buf,
+          body_cfg,
+          cfg.num_particles as usize,
+        );
+      });
+    }
 
     self.step_count += 1;
   }

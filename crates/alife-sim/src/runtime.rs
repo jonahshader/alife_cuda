@@ -154,6 +154,14 @@ impl AnySim {
     dispatch!(self, sim => sim.organism_count())
   }
 
+  pub fn population(&self) -> &crate::genome::Population {
+    dispatch!(self, sim => sim.population())
+  }
+
+  pub fn bodies(&self) -> &crate::bodies::BodyState {
+    dispatch!(self, sim => sim.bodies())
+  }
+
   pub fn sync(&self) {
     dispatch!(self, sim => sim.sync())
   }
