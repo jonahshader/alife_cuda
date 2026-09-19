@@ -36,6 +36,7 @@ use crate::genome::shape::{BrainShape, FEATURE_DIM, IDENTITY_DIM, N_TYPES, SENSO
 pub use crate::genome::population::Weights;
 
 pub mod sense;
+pub mod tokens;
 
 /// Outputs per limb: the sprout logits over child types, then the two
 /// actuator outputs (target angle and one reserved).

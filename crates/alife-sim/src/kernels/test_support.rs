@@ -288,6 +288,11 @@ impl OrganismHarness {
     self.bodies.geometry = self.bodies.device.geometry.download(&self.client);
   }
 
+  /// The device copy of the brain weights the kernels read.
+  pub fn weights(&self) -> crate::brain::Weights {
+    self.pop.weights()
+  }
+
   pub fn run_sense(&self) {
     crate::brain::sense::launch(
       &self.client,
@@ -299,6 +304,19 @@ impl OrganismHarness {
       &self.params_buf,
       self.brain.cfg,
       self.cfg,
+    );
+  }
+
+  /// The token kernel, which reads what [`Self::run_sense`] wrote.
+  pub fn run_tokens(&self) {
+    crate::brain::tokens::launch(
+      &self.client,
+      &self.weights(),
+      &self.bodies,
+      &self.pop,
+      &self.brain.device,
+      &self.pop.shape,
+      self.brain.cfg,
     );
   }
 
