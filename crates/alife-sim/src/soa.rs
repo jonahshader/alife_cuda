@@ -74,6 +74,60 @@ impl SoaField for Vec2 {
   }
 }
 
+/// A small fixed-width vector of floats — a limb's identity vector. The
+/// components are contiguous on the device, so element `i` starts at
+/// `i * N`. The `Default` bound is the std one, which reaches `N <= 32`.
+impl<const N: usize> SoaField for [f32; N]
+where
+  [f32; N]: Default,
+{
+  type Device = f32;
+  type Raw = [f32; N];
+  const COMPONENTS: usize = N;
+
+  fn write_device(self, out: &mut Vec<f32>) {
+    out.extend_from_slice(&self);
+  }
+
+  fn read_device(src: &[f32]) -> Self {
+    let mut out = [0.0; N];
+    out.copy_from_slice(&src[..N]);
+    out
+  }
+
+  fn to_raw(self) -> Self {
+    self
+  }
+
+  fn from_raw(raw: Self) -> Self {
+    raw
+  }
+}
+
+/// A flag or an index that is already a kernel-native word: no conversion
+/// either way.
+impl SoaField for u32 {
+  type Device = u32;
+  type Raw = u32;
+  const COMPONENTS: usize = 1;
+
+  fn write_device(self, out: &mut Vec<u32>) {
+    out.push(self);
+  }
+
+  fn read_device(src: &[u32]) -> Self {
+    src[0]
+  }
+
+  fn to_raw(self) -> u32 {
+    self
+  }
+
+  fn from_raw(raw: u32) -> Self {
+    raw
+  }
+}
+
 /// `uint8_t` in the C++ SoA. Kernels see a `u32`; the dump keeps the byte.
 impl SoaField for u8 {
   type Device = u32;
