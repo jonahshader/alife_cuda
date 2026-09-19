@@ -8,10 +8,6 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-- **Energy and life cycle.** Per-column light occlusion scan, leaf energy
-  gain, root water draw from soil saturation, per-particle upkeep, death to
-  soil organic matter, seed particle emission with a mutated genome,
-  germination on landing in soil.
 - **Soil-specialization experiment** in `--terrain-mode 1`, with the three
   controls in the spec (identical-soil isolation control, soil-position
   permutation, transplant test). It must leave air above the columns: today
@@ -20,77 +16,55 @@ the spec, don't re-derive it.
   terrain regenerates every parity reference, so it belongs to this chunk
   rather than an earlier one.
 
-Left open by the genome chunk, for the chunk that first steps organisms:
-
-- `crates/alife-sim/src/genome/` is built and tested but nothing in
-  `sim.rs` touches it. The life-cycle chunk owns wiring it: founders into
-  slots at startup, `slots::claim_free_slots` then `mutate::mutate` on
-  birth, and advancing the `step` word the mutation kernels key on. It also
-  owns setting a newborn's `alive`, `parent_id`, `birth_step`, `lineage_id`
-  and `generation` (parent's plus one), and copying its `latent_init` slice
-  into latent state — mutation writes only the genome. `spawn_founders`
-  already does the founder half of that, generation 0.
-- `mutate::MutateInputs` takes the newborn list as device buffers with a
-  device-resident count, so the life-cycle chunk never has to read a count
-  back to the host; it does have to give the launcher a host-side upper
-  bound on the list length.
-
 Left open by the bodies chunk:
 
-- The two spawn kernels (`kernels/spawn.rs`: occupancy marking and
-  particle placement) have no plain-Rust reference or reference test, the
-  one exception to the crate's rule; `grow_limb` also downloads the whole
-  `ppos` buffer and re-uploads the whole limb map per limb, and an organism
-  whose every `grow_limb` fails is marked alive with a stale device anchor.
-  All three go away when the life-cycle chunk moves spawning into a kernel
-  over a newborn list, which must come with its reference.
-- **Spawning is host-side.** `bodies::spawn` and `bodies::grow_limb` read
-  `ppos` back and claim slots with a scan plus two small reads per call, and
-  `Sim::step` decides whether to run the organism passes from a host-side
-  count of `alive`. That is fine for `--founders` at startup and for a
-  sprout head called rarely, and wrong for a device-driven life cycle: the
-  life-cycle chunk owns moving the layout into a kernel over a newborn list,
-  the way `mutate` already is.
-- `bodies::BodyState::high_water` only grows, so a death that frees the
-  highest body slots does not shrink what the per-particle kernels are
-  launched over. Recomputing it from the occupancy scan is the fix if long
-  runs ever leave a high mark with nothing under it.
 - `project_constraints` is one unit per organism and so one cube at the
-  default `max_organisms` of 256: 0.109 ms of the 0.772 ms step at
-  `--founders 64` (`perf.md`), on one SM. Splitting a unit per limb needs
-  the sweeps to become separate launches, which is only worth it if
-  organism counts stay this low.
+  default `max_organisms` of 256: 0.099 ms of the 1.378 ms step at
+  `--founders 64` with the life cycle running (`perf.md`), on one SM.
+  Splitting a unit per limb needs the sweeps to become separate launches,
+  which is only worth it if organism counts stay this low.
 
 Left open by the metrics chunk:
 
-- **`Sim::record_births` / `record_deaths` are hooks nothing calls**, so
-  `births` and `deaths` are 0 for a whole run. The life-cycle chunk calls
-  them where it creates and kills organisms.
-- **The sampler reads the population's host mirrors**, which are the master
-  copy only while births are host-side. Once the life cycle writes `alive`,
-  `energy` or the lineage fields from a kernel, `metrics::measure` needs
-  them downloaded first — cheap for the organism and limb SoAs, not for the
-  brain tensor, so it wants a partial download rather than
-  `Population::download`.
-- **Energy is in the time series but nothing writes it**, so
-  `energy_mean/min/max` are 0 and the "energy flux" the spec asks for is a
-  delta the life-cycle chunk makes meaningful.
 - **Per-column traits are binned by anchor**, so an organism anchored in the
   gap between two columns counts in `alive` and in no column. That is right
   while plants are anchored; a mobile creature needs binning by where it
   currently is.
+- **`alive` counts seeds in flight**, because a seed holds an organism slot
+  (`organism.md`, *Genome buffers*). The per-column figures do not: a seed
+  has no anchor yet. Splitting the two in the time series is a column, not
+  a design question — do it when a run turns on how many of the population
+  are in the air.
+
+Left open by the life-cycle chunk:
+
+- **A run left to itself fills every organism slot after a few thousand
+  steps** (`organism.md`, decisions, 2026-09-19). The binding constraint is
+  `max_organisms`, not light or space, because plants at the founder body
+  size do not shade each other enough in a 32 m world. The
+  soil-specialization terrain work is where that gets tested properly.
+- **The `stage` field is not in the dump**, because the population tensors
+  are not: `--load` resumes the fluid and reserves body capacity on top
+  (`crates/alife-sim/README.md`). A run cannot be checkpointed and resumed
+  with its organisms until the dump carries them.
+- **`soil.organic_matter` is host-side only.** A death deposits into the
+  host `SoilGrid` and the device mirror is not refreshed, because no kernel
+  reads the field. Whoever first has a kernel read it — erosion, or a root
+  that prefers rich soil — owns uploading it, or moving the master to the
+  device.
+- **The free-slot scan reads the whole `free_ids` buffer back** (336 KB at
+  the defaults) for the handful of ids a tick claims. `read_free_slots`
+  has no way to ask for a prefix; a handle slice or a device-side count
+  would cut it to nothing. It is two reads on a tick that claims anything,
+  measured inside the 0.066 ms/step the whole life tick costs
+  (`perf.md`), so it is not urgent.
 
 Left open by the brain chunk:
 
-- **Nothing applies a head.** `brain::forward` writes
-  `[max_organisms x max_limbs x HEAD_DIM]` — the sprout logits over child
-  types, then the two actuator outputs — and stops. The life-cycle chunk
-  reads them through `Sim::brain_outputs` and decides what a logit means:
-  argmax against index 0 ("none"), a threshold, or a sample.
-- **The `light` and `energy` sensor slots are written as zeros.** The
-  energy chunk owns the per-column occlusion scan and the per-organism
-  budget, and owns filling those two slots in `brain::sense`; the slots
-  exist now so the brain's shape does not change then.
+- **The actuator head is still read by nothing.** `brain::forward` writes
+  the sprout logits and then two actuator outputs; the life tick reads the
+  sprout logits' argmax and ignores the rest, because no part type takes a
+  target angle yet. Milestone 2's actuated limb is what consumes them.
 - **`contact` is the spec's `solid fraction > 0.5`, and pure clay sits
   exactly on the threshold** (`1 - CLAY_POROSITY` is 0.50, against sand's
   0.62 and silt's 0.55), so a limb buried in undiluted clay reads no
@@ -101,7 +75,9 @@ Left open by the brain chunk:
   `sph.density` does (`kernels::density` adds `solid_density_at_pos`, which
   is `target_density` in air). The reading therefore sits near 1 in free air
   rather than near 0. It is a usable signal as it stands; subtracting the
-  offset would mean sampling the soil twice per limb.
+  offset would mean sampling the soil twice per limb. The energy kernel
+  takes the same quantity and subtracts 1 from it, so the two agree about
+  what "wet" means and moving one moves the other.
 - **22 launches, ~6% of the step, and entirely launch-bound** (`perf.md`).
   Merging them buys back microseconds against a step the three neighbour
   kernels dominate, so it is not worth doing until organism counts or brain

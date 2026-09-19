@@ -411,3 +411,78 @@ CPU runtime at 20, terrain modes 0 and 1, all six identical.
 anywhere, and the largest latent sits at 4.83 for the whole run. Before
 `latent_norm` existed the same run passed 4e18 by step 40 and overflowed by
 step 45 (`organism.md`, decisions).
+
+### Energy and the life cycle (2026-09-19, commit after c5d9f00)
+
+Two kernels and one packed readback every `life_interval` = 10 steps, plus
+whatever that tick decides to grow, place, free or mutate.
+
+```
+cargo +1.98.1 build --release -j16
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 \
+  ./target/release/alife --headless --runtime cuda --seed 42 \
+  --iterations 3001 --founders <N> [--life-interval 100000]
+```
+
+Per-kernel averages over 3000 steps (the event profiler, which on CUDA is
+wall time around a synchronise and so carries a ~11 µs floor per launch;
+the two life kernels run 300 times, not 3000, and their `max` is the
+first-launch JIT):
+
+| kernel                       | `--founders 0` | 64, life off | 64, life on |
+|------------------------------|---------------:|-------------:|------------:|
+| `calculate_accel`            |          0.341 |            — |       0.345 |
+| `calculate_evap_prob`        |          0.167 |            — |       0.167 |
+| `calculate_particle_density` |          0.164 |            — |       0.165 |
+| `project_constraints`        |              — |            — |       0.099 |
+| `write_limb_geometry`        |              — |            — |       0.015 |
+| brain, all 22 launches       |              — |            — |       0.276 |
+| `light_grid` (per tick)      |              — |            — |       0.040 |
+| `organism_energy` (per tick) |              — |            — |       0.015 |
+| **profiler per step**        |      **0.814** |    **1.209** |   **1.378** |
+| **wall clock per step**      |      **1.216** |    **1.970** |   **2.036** |
+
+The profiler serialises every launch, so the wall-clock row is the honest
+per-step figure and the profiler row is the sum of the serialised parts.
+Between the two `--founders 64` runs — same startup, same JIT, one with
+`--life-interval 100000` so the tick never fires — the whole life cycle
+costs **0.066 ms per step**, about 3% of the step: 0.0055 ms of it is the
+two kernels amortised over the interval, and the rest is the packed
+readback, the free-slot scans on a tick that claims anything, and the limb
+download on a tick with a birth. Note that the two runs do not simulate the
+same world — the one with the life cycle on grows, seeds and kills bodies —
+so this is the cost of having a life cycle, not of one fixed workload.
+
+### The population, 3000 steps (2026-09-19, commit after c5d9f00)
+
+```
+LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64 ./target/release/alife --headless \
+  --runtime <cuda|wgpu|cpu> --seed 42 --terrain-mode 0 --founders 64 \
+  --iterations <3000|500> --metrics m.csv --dump d.bin
+```
+
+| runtime | steps | alive | births | deaths | lineages | generation max | species |
+|---------|------:|------:|-------:|-------:|---------:|---------------:|--------:|
+| cuda    |  3000 |    44 |     48 |     90 |       17 |              3 |       2 |
+| wgpu    |  3000 |    35 |     46 |     93 |       17 |              1 |       1 |
+| cpu     |   500 |    39 |      0 |     27 |       37 |              1 |       1 |
+| cpu     |  1500 |    53 |     25 |     61 |       24 |              1 |       1 |
+
+Started from 64 founders and 64 lineages, so a third of the lineages are
+extinct by step 3000 and the population is well under the 256 organism
+slots. The three runtimes diverge from each other — the brain's
+transcendentals are one ulp apart across backends (`organism.md`,
+decisions), and one sprout decision landing differently changes a body —
+but each is **bit-identical to its own repeat**: two runs per runtime,
+dumps compared with `cmp`, identical, and the metrics CSVs identical once
+the wall-clock column is dropped. No field of any CSV is NaN or infinite.
+The CPU runtime at 500 steps has no births yet because the first seed lands
+around step 600; 1500 steps is where its cycle is visible.
+
+`--founders 0` dumps are byte-identical to the pre-life-cycle build
+(`c9bae4a`), whole files compared with `cmp`: CUDA and wgpu at 50 steps,
+the CPU runtime at 20, terrain modes 0 and 1, all six identical.
+
+The energy constants are `organism.md`'s decision entry; the run that
+chose them is the 0.001-versus-0.003 pair of `upkeep_per_particle`, 3
+deaths and every slot full against 78 deaths and 93 of 256 slots.

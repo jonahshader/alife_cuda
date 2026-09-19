@@ -57,9 +57,10 @@ failure mode. If an entry describes *what* shipped rather than *why* or
   plants and creatures, fixed-shape genome, Perceiver-IO brain over limb
   tokens, particle bodies, ecology as the only selection, evolutionary
   metrics, the soil-specialization experiment and its controls, milestones.
-  **Specified, not yet implemented**; it is the spec the organism chunks in
-  `TODO.md` are built from. Update it in the same commit as any
-  implementation that diverges.
+  **Milestone 1 is built**, the experiment that closes it is not; the file
+  is both the spec the remaining organism chunks in `TODO.md` are built
+  from and the description of what runs. Update it in the same commit as
+  any implementation that diverges.
 
 The fluid, soil, and tree models are still documented in their owning
 headers (`src/systems/particle_fluid2.cuh`, `soil.cuh`, `tree_types.cuh`)

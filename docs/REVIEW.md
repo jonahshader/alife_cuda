@@ -9,6 +9,26 @@ acknowledgements, no changelog, no pre-milestone tuning (that goes to
 
 ## Pending
 
+- **2026-09-19 — plants now live and die, and nobody has watched them.**
+  The life cycle runs: founders gain energy from light and water, sprout
+  their genome's limbs when the brain says to, seed, and starve. At
+  `--founders 64 --seed 42` on the noise terrain the population drops from
+  64 to about 40 by step 400 and climbs back to ~90 by step 3000, with 45
+  of the 64 founder lineages extinct (`perf.md`). What the numbers cannot
+  tell you is whether it *looks* right — whether a seed visibly falls off
+  its parent and lands, whether a sprouting stem grows where you would
+  expect it to, whether a dying plant's particles vanish cleanly. That
+  needs the window, which no agent opens.
+- **2026-09-19 — I moved one of the brief's energy constants, on
+  evidence.** `upkeep_per_particle` is 0.003 rather than the 0.001 the
+  brief's derivation gives, because at 0.001 open light alone pays for a
+  whole body: 3 deaths against 99 births over 3000 steps and every organism
+  slot full by step 400, which is a population with no selection in it.
+  `germinate_speed` went 0.05 → 0.5 for the same reason — 0.05 is below the
+  fluid's own mean speed, so seeds never settled. Both are in
+  `organism.md`'s decisions with the runs. If the intended dynamic was the
+  gentler one, the constant is a one-line change.
+
 - **2026-09-19 — the Rust GUI has never been seen.** The port's window
   builds and its shaders and pipelines validate on a headless device, but
   nobody has opened it; the brief said not to. `cd` anywhere and run

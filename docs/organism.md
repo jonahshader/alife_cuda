@@ -3,11 +3,12 @@
 The settled design for organisms: one representation for plants and
 creatures, a fixed-shape genome, a brain over body-part tokens, bodies made
 of particles in the fluid's particle system, and selection by ecology rather
-than a fitness function. **Status: the genome, the particle bodies and the
-brain's forward pass are built; energy and the life cycle are not, and
-nothing applies the brain's outputs yet.** The open work is in
-`TODO.md`; this file is the spec builders build from. When implementation
-diverges from it, update this file in the same commit.
+than a fitness function. **Status: milestone 1 runs — the genome, the
+particle bodies, the brain's forward pass, and energy with a life cycle
+that turns the population over on its own. What is left of the milestone
+is the soil-specialization experiment and its controls.** The open work is
+in `TODO.md`; this file is the spec builders build from. When
+implementation diverges from it, update this file in the same commit.
 
 ## Why this shape
 
@@ -124,15 +125,35 @@ assumes one MLP architecture per population and is not ported.
 
 ## World coupling and life cycle
 
-- **Energy.** Leaf particles gain energy from light, computed by a
-  per-column occlusion scan from the top of the world so plants shade each
-  other. Root particles draw water from their soil cell's saturation. Every
-  particle costs energy per tick. Energy below zero is death; the body's
-  particles become organic matter in the soil.
-- **Reproduction.** Energy above a threshold is spent on a seed particle
-  carrying a mutated copy of the genome. The seed is a particle, so it
-  falls, water carries it, and dispersal is free. A seed that lands in soil
-  pins its root and starts growing.
+The whole cycle runs on one cadence: every `life_interval` steps (default
+10), after the brain. `crates/alife-sim/src/life/` is it.
+
+- **Light.** A per-soil-cell occlusion grid, rebuilt each tick. One kernel
+  counts the stem and leaf particles per cell into a `u32` grid; a second,
+  one unit per soil column, walks from the top down and multiplies the
+  light by `light_attenuation` (default 0.7) once per particle it has
+  passed, starting at `light_top` (1.0). The sensors read the same grid, so
+  between rebuilds a limb's light reading is up to `life_interval` steps
+  stale.
+- **Energy.** One unit per organism, serial over its particles. Leaves earn
+  `light_gain` times the light in their cell; roots earn `water_gain` times
+  `max(0, water − 1)`, where `water` is the brain sensor's own quantity
+  (`density / target_density`, which reads exactly 1 in air because of the
+  soil's solid-density offset, so the `− 1` is the wetness). Every particle
+  costs `upkeep_per_particle`. Energy below zero is death: every particle
+  goes back to the free pool and leaves `organic_matter_per_particle` in
+  the soil cell it was standing in.
+- **Growth.** A plant with `energy ≥ sprout_cost` whose sprout head does
+  not say "none" grows one ungrown child record of its genome, lowest child
+  slot first, and is charged. At most one limb per organism per tick.
+- **Reproduction.** Energy above `seed_threshold` is spent on a seed
+  particle carrying a mutated copy of the genome. The seed is a particle
+  with no limb, so no constraint holds it: it falls, water carries it, and
+  dispersal is free. A seed that comes to rest (speed below
+  `germinate_speed`) in soil or on the floor germinates — its particle is
+  released, its root grows from where it landed, it starts on
+  `seed_energy`, and only then does it count as a birth. One that drifts
+  for `seed_lifetime` steps without landing dies unremarked.
 - **Selection.** None explicit. Energy, shading, water, space, and other
   organisms are the fitness function; the simulation is the evaluator.
 
@@ -274,8 +295,12 @@ geometry the brain will read — beside the population tensors.
   shadow is the brain chunk's concern.
 - Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor),
   `generation` (hops from the founder; mutation never touches it), plus
-  the runtime `alive` flag, `energy`, and the latent state
+  the runtime `alive` flag, `energy`, `stage`, and the latent state
   `[max_organisms × n_latents × d_latent]`, which is state, not genome.
+  `alive` means the slot is occupied — it is what the slot allocator scans
+  — and `stage` says by what: 0 a seed in flight, 1 a germinated plant. A
+  seed holds a slot and a genome but has no body, no energy budget and no
+  place in the population counts until it lands.
 - Mutation is two kernels over newborn organisms, Threefry-keyed by
   `(child slot, step, stream)` and countered by the draw's index within its
   stream, so what a child gets depends on nothing but its slot and the
@@ -339,12 +364,24 @@ launch-bound, so fp32 storage is the default and `--brain-fp16` is a flag.
 
 **Step order** once organisms exist: grid build (all non-`Free`) → density
 → evap probability → accel → evaporate → move liquid → move vapor →
-sense (token features per limb) → brain forward → apply heads (sprout,
-actuator targets) → constraint pass → limb geometry → energy and life
-cycle. The bodies chunk owns the constraint pass and publishes limb
-geometry (root-relative position, segment angle, depth) for the token
-features; the brain chunk owns sense → forward, and the life-cycle chunk
-owns apply — nothing reads a head yet.
+constraint pass → limb geometry → sense (token features per limb) → brain
+forward → the life tick, every `life_interval` steps. The constraint pass
+publishes limb geometry (root-relative position, segment angle, depth) for
+the token features; the life tick reads the sprout head the forward pass
+just wrote, so applying a head and deciding the life cycle are one step.
+
+**The life tick's shape.** Light and energy are kernels; growth, placement,
+freeing and mutation are kernels; the *decisions* between them are a serial
+walk over the organism slots on the host, in slot order, and therefore
+deterministic. It costs one `read` per tick of a packed
+`[max_organisms × (6 + max_limbs)]` float buffer — energies, seed positions
+and speeds, body tops, and the sprout head's argmax per limb, reduced on
+the device rather than shipped — plus the free-slot scan's reads when
+something is claimed and one limb-record download when something was born.
+The organism SoA is host-mastered except `energy`, which the energy kernel
+writes; the brain tensor and the limb records are device-mastered for a
+newborn, because that is where the mutation kernels wrote them, so a birth
+never uploads the whole population.
 
 ## Decisions & dead ends
 
@@ -469,6 +506,53 @@ owns apply — nothing reads a head yet.
   ppos_before_the_step) / dt` — the position-based-dynamics velocity —
   equals `vel + (ppos_projected - ppos_after_move) / dt`. Taking only the
   second term would throw a body's inertia away every step.
+- 2026-09-19 — **The sprout head decides *when* a genome's limb records
+  grow, not *what* they are.** The spec says the head "decides whether to
+  grow a child limb of which type", and the type logits exist; they are
+  read as a gate only — argmax against index 0, "none" — and the limb that
+  grows is the next ungrown child record already in the genome, by child
+  slot. Letting the head choose the type would make the body a product of
+  the brain's runtime state rather than of the genome: the part type would
+  stop being heritable, two siblings with one genome could grow different
+  bodies, and `species_distance` — which is defined over the discrete
+  section — would no longer describe anything an offspring inherits. That
+  is Lamarckian development, and it takes the structural mutation operators
+  out of the loop they are there to close. The type logits stay in the
+  head's shape and stay informational; if evolved bodies ever plateau in a
+  way that looks like "the genome cannot express this limb", the thing to
+  try is a richer discrete section, not a brain that overrides it.
+- 2026-09-19 — **An integer atomic is not the atomic the spec rules out.**
+  The light grid's occluder count is an `atomicAdd` of 1 into a `u32` per
+  soil cell. Integer addition is associative and exact, so the arrival
+  order cannot change the result, and the run stays bit-reproducible. What
+  "no atomics that decide order" rules out is an atomic whose *return
+  value* is used — a slot grab — or a float accumulation, where the
+  summation order is the result. Same rule applies to the organic matter a
+  death leaves: that one is a float sum per cell, so it is done on the host
+  in slot order instead.
+- 2026-09-19 — **`upkeep_per_particle` is 0.003, not the 0.001 the
+  derivation started from, and `germinate_speed` 0.5, not 0.05.** Measured
+  at `--founders 64 --iterations 3000 --seed 42` on the noise terrain: at
+  0.001 a founder's six particles cost 0.006 a step against 0.012 of light
+  in the open, so open light alone pays for a whole body, nothing ever
+  starves, and the run records 3 deaths against 99 births with every
+  organism slot full by step 400 — a population with no selection in it. At
+  0.003 the same run records 78 deaths against 68 births, ends at 93 of 256
+  slots, and 45 of the 64 founder lineages are already extinct. 0.05 for
+  the germination speed is below the fluid's own mean speed, so seeds
+  almost never settled and held their slots until `seed_lifetime`; 0.5 is
+  "has come to rest relative to the water around it". The other constants
+  are as specified. `perf.md` has the runs.
+- 2026-09-19 — **A run left to itself fills every organism slot after a few
+  thousand steps, and that is `max_organisms`, not the energy balance.**
+  At `--founders 64` the population sits between 40 and 110 for the first
+  ~4000 steps, then evolution finds a body whose gain outruns upkeep, mean
+  energy climbs without bound and the 256 slots fill by ~5000. The ceiling
+  that should bind is light and space; at this body size, 256 plants in a
+  32 m world do not shade each other enough to be that ceiling. Raising
+  `max_organisms` moves the wall rather than removing it, so the real
+  answer is bodies big enough to compete for light — which is the
+  soil-specialization experiment's terrain work, not a constant.
 - 2026-09-19 — **The GUI runs the sim on the wgpu runtime, always.** The
   renderer binds CubeCL's own buffers; a sim on the CUDA or CPU runtime
   would have to copy every buffer through the host each frame, which is the

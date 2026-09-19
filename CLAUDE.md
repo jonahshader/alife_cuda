@@ -106,8 +106,10 @@ L-system trees still live in. New sim work goes in the Rust tree.
   the particle SoA and `--load <path>` resumes from one — version 2 of the
   C++ `--dump` format, and it still reads version 1
   (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
-  soil surface; the default 0 leaves the world exactly as it was before
-  organisms existed. `--metrics <path>` writes the evolutionary time series
+  soil surface and the life cycle takes it from there — they gain energy,
+  sprout, seed and die on their own; the default 0 leaves the world exactly
+  as it was before organisms existed, life cycle included.
+  `--metrics <path>` writes the evolutionary time series
   as CSV every `--metrics-every K` steps (default 100) and prints a summary
   at exit (`docs/organism.md`, *Metrics*). `config.toml` is read from the
   CWD and `--write-config` emits the defaults; every sim param is also a CLI flag
