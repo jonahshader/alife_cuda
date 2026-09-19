@@ -475,6 +475,7 @@ impl eframe::App for SimApp {
         let half_height = self.camera_height * 0.5;
         let half_width = half_height * (rect.width() / rect.height().max(1.0));
         let geom = *self.sim.geometry();
+        let body_cfg = self.sim.body_cfg();
         let view = ViewUniform {
           scale: [1.0 / half_width, 1.0 / half_height],
           offset: [
@@ -483,13 +484,18 @@ impl eframe::App for SimApp {
           ],
           soil_cell_size: geom.soil_cell_size,
           particle_radius: self.params.smoothing_radius * 0.1,
-          _pad: [0.0; 2],
+          world_width: geom.bounds.x,
+          _pad: 0.0,
           soil_width: geom.soil_width as u32,
           soil_height: geom.soil_height as u32,
           // Only the live prefix: unclaimed body slots are `Free` and would
           // be a discarded quad each, per frame.
           particle_count: self.sim.live_particles().0 as u32,
           debug_evap: u32::from(self.debug_evap),
+          max_limbs: body_cfg.max_limbs,
+          per_limb: body_cfg.max_particles_per_limb,
+          segment_count: body_cfg.particle_map_len() as u32,
+          _pad2: 0,
         };
 
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(
@@ -501,6 +507,8 @@ impl eframe::App for SimApp {
             sph: self.sim.device_particles().clone(),
             soil: self.sim.device_soil().clone(),
             soil_cells: geom.num_soil_cells() as u32,
+            bodies: self.sim.bodies().device.clone(),
+            limbs: self.sim.population().device.limbs.clone(),
           },
         ));
       });

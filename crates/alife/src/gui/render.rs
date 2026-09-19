@@ -7,8 +7,17 @@
 //! read the same storage buffers the kernels wrote and index them by
 //! `@builtin(vertex_index)`.
 //!
-//! Both passes therefore issue a single `draw` with no vertex or index buffer:
-//! six vertices per soil cell and six per particle.
+//! Every pass therefore issues a single `draw` with no vertex or index buffer:
+//! six vertices per soil cell, six per particle, and six per entry of the
+//! body map.
+//!
+//! **Bodies are drawn as segments, not dots.** A limb is a chain of
+//! particles, so each entry of the `(organism, limb, index)` map draws a
+//! quad from its particle back to its predecessor: the previous index, or
+//! for a limb's first particle the parent limb's last — the same base joint
+//! the constraint pass projects against (`crate::kernels::constraints`).
+//! The root limb's first particle has no predecessor and draws nothing.
+//! The body discs stay, at the segment's half-width, so joints are round.
 
 use std::sync::Arc;
 
@@ -25,11 +34,20 @@ pub struct ViewUniform {
   pub offset: [f32; 2],
   pub soil_cell_size: f32,
   pub particle_radius: f32,
-  pub _pad: [f32; 2],
+  /// The world wraps in x; a segment across the seam takes the minimum
+  /// image, as the constraint pass does.
+  pub world_width: f32,
+  pub _pad: f32,
   pub soil_width: u32,
   pub soil_height: u32,
   pub particle_count: u32,
   pub debug_evap: u32,
+  /// The body map's shape: `max_limbs` records per organism, `per_limb`
+  /// entries per record, `segment_count` entries in all.
+  pub max_limbs: u32,
+  pub per_limb: u32,
+  pub segment_count: u32,
+  pub _pad2: u32,
 }
 
 const SHADER: &str = r#"
@@ -38,11 +56,16 @@ struct View {
   offset: vec2<f32>,
   soil_cell_size: f32,
   particle_radius: f32,
-  pad: vec2<f32>,
+  world_width: f32,
+  pad: f32,
   soil_width: u32,
   soil_height: u32,
   particle_count: u32,
   debug_evap: u32,
+  max_limbs: u32,
+  per_limb: u32,
+  segment_count: u32,
+  pad2: u32,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -53,6 +76,13 @@ struct View {
 @group(0) @binding(5) var<storage, read> state: array<u32>;
 @group(0) @binding(6) var<storage, read> evap_prob: array<f32>;
 @group(0) @binding(7) var<storage, read> part_type: array<u32>;
+// The body map and the limb records it is indexed by.
+@group(0) @binding(8) var<storage, read> limb_particles: array<u32>;
+@group(0) @binding(9) var<storage, read> limb_part_type: array<u32>;
+@group(0) @binding(10) var<storage, read> limb_length: array<u32>;
+@group(0) @binding(11) var<storage, read> limb_parent: array<u32>;
+
+const NO_PARTICLE: u32 = 0xffffffffu;
 
 fn to_clip(world: vec2<f32>) -> vec4<f32> {
   return vec4<f32>(world * view.scale + view.offset, 0.0, 1.0);
@@ -178,6 +208,90 @@ fn particle_fs(in: ParticleOut) -> @location(0) vec4<f32> {
   }
   return in.color;
 }
+
+// Particles limb record `record` actually holds: its length, capped by the
+// map's width, and zero for an absent record — the constraint pass's
+// `limb_len`.
+fn limb_len(record: u32) -> u32 {
+  if (limb_part_type[record] == 0u) {
+    return 0u;
+  }
+  return min(limb_length[record], view.per_limb);
+}
+
+// Minimum-image difference in x across the wrapping world.
+fn wrap_delta(dx: f32) -> f32 {
+  let w = view.world_width;
+  if (dx > 0.5 * w) {
+    return dx - w;
+  }
+  if (dx < -0.5 * w) {
+    return dx + w;
+  }
+  return dx;
+}
+
+struct SegmentOut {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) color: vec4<f32>,
+};
+
+@vertex
+fn segment_vs(@builtin(vertex_index) vi: u32) -> SegmentOut {
+  let entry = vi / 6u;
+  let corner = quad_corner(vi % 6u);
+  let per_organism = view.max_limbs * view.per_limb;
+  let o = entry / per_organism;
+  let within = entry % per_organism;
+  let l = within / view.per_limb;
+  let i = within % view.per_limb;
+  let record = o * view.max_limbs + l;
+
+  let a = limb_particles[entry];
+  var b = NO_PARTICLE;
+  if (i > 0u) {
+    b = limb_particles[entry - 1u];
+  } else {
+    // The base joint: the parent limb's last particle. The root limb is its
+    // own parent and has no base segment.
+    let parent = limb_parent[record];
+    if (parent != l) {
+      let n = limb_len(o * view.max_limbs + parent);
+      if (n > 0u) {
+        b = limb_particles[o * per_organism + parent * view.per_limb + n - 1u];
+      }
+    }
+  }
+
+  var out: SegmentOut;
+  if (a == NO_PARTICLE || b == NO_PARTICLE) {
+    // No segment: a zero-area quad rasterises nothing.
+    out.clip = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.color = vec4<f32>(0.0);
+    return out;
+  }
+
+  let pa = vec2<f32>(pos[a * 2u], pos[a * 2u + 1u]);
+  let pb = vec2<f32>(pos[b * 2u], pos[b * 2u + 1u]);
+  let along = vec2<f32>(wrap_delta(pa.x - pb.x), pa.y - pb.y);
+  let len = length(along);
+  var dir = vec2<f32>(1.0, 0.0);
+  if (len > 1.0e-6) {
+    dir = along / len;
+  }
+  let normal = vec2<f32>(-dir.y, dir.x);
+  let half_width = view.particle_radius * 1.5;
+  let point = pb + dir * (len * corner.x) + normal * ((corner.y * 2.0 - 1.0) * half_width);
+
+  out.clip = to_clip(point);
+  out.color = vec4<f32>(part_type_to_color(part_type[a]), 1.0);
+  return out;
+}
+
+@fragment
+fn segment_fs(in: SegmentOut) -> @location(0) vec4<f32> {
+  return in.color;
+}
 "#;
 
 /// Pipelines and layout, built once.
@@ -185,6 +299,7 @@ pub struct Pipelines {
   layout: wgpu::BindGroupLayout,
   soil: wgpu::RenderPipeline,
   particles: wgpu::RenderPipeline,
+  segments: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -214,7 +329,7 @@ impl Pipelines {
       },
       count: None,
     }];
-    entries.extend((1..=7).map(storage));
+    entries.extend((1..=11).map(storage));
 
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
       label: Some("alife sim bindings"),
@@ -259,6 +374,7 @@ impl Pipelines {
     Self {
       soil: make("alife soil", "soil_vs", "soil_fs"),
       particles: make("alife particles", "particle_vs", "particle_fs"),
+      segments: make("alife segments", "segment_vs", "segment_fs"),
       layout,
     }
   }
@@ -278,6 +394,7 @@ struct Frame {
   bind_group: wgpu::BindGroup,
   soil_vertices: u32,
   particle_vertices: u32,
+  segment_vertices: u32,
 }
 
 /// The identity of one bound storage window: which buffer, and where in it.
@@ -296,6 +413,8 @@ pub struct SimCallback {
   pub sph: alife_sim::particles::SphDevice,
   pub soil: alife_sim::soil::SoilDevice,
   pub soil_cells: u32,
+  pub bodies: alife_sim::bodies::BodyDevice,
+  pub limbs: alife_sim::genome::population::LimbDevice,
 }
 
 impl CallbackTrait for SimCallback {
@@ -317,6 +436,10 @@ impl CallbackTrait for SimCallback {
       &self.sph.state,
       &self.sph.evap_prob,
       &self.sph.part_type,
+      &self.bodies.limb_particles,
+      &self.limbs.part_type,
+      &self.limbs.length,
+      &self.limbs.parent,
     ]
     .into_iter()
     .map(|handle| shared_buffer(&self.client, handle))
@@ -371,6 +494,7 @@ impl CallbackTrait for SimCallback {
       bind_group,
       soil_vertices: self.soil_cells * 6,
       particle_vertices: self.view.particle_count * 6,
+      segment_vertices: self.view.segment_count * 6,
     });
     Vec::new()
   }
@@ -387,6 +511,9 @@ impl CallbackTrait for SimCallback {
     render_pass.set_bind_group(0, &frame.bind_group, &[]);
     render_pass.set_pipeline(&self.pipelines.soil);
     render_pass.draw(0..frame.soil_vertices, 0..1);
+    // Segments under the discs, so a joint is a disc over two segment ends.
+    render_pass.set_pipeline(&self.pipelines.segments);
+    render_pass.draw(0..frame.segment_vertices, 0..1);
     render_pass.set_pipeline(&self.pipelines.particles);
     render_pass.draw(0..frame.particle_vertices, 0..1);
   }
@@ -475,15 +602,22 @@ mod tests {
         offset: [0.0, 0.0],
         soil_cell_size: sim.geometry().soil_cell_size,
         particle_radius: 0.01,
-        _pad: [0.0; 2],
+        world_width: sim.geometry().bounds.x,
+        _pad: 0.0,
         soil_width: sim.geometry().soil_width as u32,
         soil_height: sim.geometry().soil_height as u32,
         particle_count: sim.live_particles().0 as u32,
         debug_evap: 0,
+        max_limbs: sim.body_cfg().max_limbs,
+        per_limb: sim.body_cfg().max_particles_per_limb,
+        segment_count: sim.body_cfg().particle_map_len() as u32,
+        _pad2: 0,
       },
       sph,
       soil: sim.device_soil().clone(),
       soil_cells: sim.geometry().num_soil_cells() as u32,
+      bodies: sim.bodies().device.clone(),
+      limbs: sim.population().device.limbs.clone(),
     };
 
     let screen = ScreenDescriptor {
