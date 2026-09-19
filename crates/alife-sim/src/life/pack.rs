@@ -1,35 +1,41 @@
 //! Everything the host decision pass needs, in one buffer and one readback.
 //!
-//! The life tick is decided on the host — which organisms sprout, seed,
+//! The life tick is decided on the host — which organisms grow, seed,
 //! germinate and die — and the host is not allowed to be expensive about it.
 //! Rather than pulling the heads buffer (`max_organisms x max_limbs x
-//! HEAD_DIM` floats, 164 KB at the defaults) and several particle fields
-//! back, one unit per organism packs what the decisions actually read into
-//! `[max_organisms x (LIFE_FIXED + max_limbs)]` floats — 20 KB at the
-//! defaults, one `read`:
+//! HEAD_DIM` floats) and several particle fields back, one unit per organism
+//! packs what the decisions actually read into `[max_organisms x (LIFE_FIXED
+//! + 2 * max_limbs)]` floats — 38 KB at the defaults, one `read`:
 //!
 //! - the organism's energy, which the energy kernel just wrote;
 //! - its seed particle's position and speed, for germination;
 //! - the top of its body, where a seed is emitted from;
 //! - per limb, the worst its base joint has been bent since the last tick,
-//!   which is what a limb breaks on (`docs/organism.md`, *Growth*).
+//!   which is what a limb breaks on (`docs/organism.md`, *Growth*);
+//! - per limb, the brain's growth logit, which the allocation adds to the
+//!   record's `growth_bias` before the softmax.
 //!
-//! The per-limb maximum is *reset* here, for every slot alive or not: this is
-//! the one reader of it, and the interval it covers is the one that just
-//! ended. A free slot packs as zeros, and so reads as "no energy, no seed, no
-//! bend", which is what the host does nothing about.
+//! The two per-limb runs are separate slices rather than interleaved, so a
+//! host walk over either one is contiguous.
+//!
+//! The per-limb bend maximum is *reset* here, for every slot alive or not:
+//! this is the one reader of it, and the interval it covers is the one that
+//! just ended. The logit is only read; the brain rewrites it every step. A
+//! free slot packs as zeros, and so reads as "no energy, no seed, no bend, no
+//! logit", which is what the host does nothing about.
 
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
 use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
+use crate::brain::{BrainState, HEAD_DIM, HEAD_GROWTH};
 use crate::genome::PartType;
 use crate::genome::Population;
 use crate::kernels::constraints::{limb_len, particle_at};
 use crate::kernels::{CUBE_DIM, cube_count, whole};
 use crate::particles::SphDevice;
 
-/// Slots of one organism's packed entry, before the per-limb bend maxima.
+/// Slots of one organism's packed entry, before the two per-limb runs.
 pub const LIFE_ENERGY: usize = 0;
 pub const LIFE_SEED_X: usize = 1;
 pub const LIFE_SEED_Y: usize = 2;
@@ -45,9 +51,20 @@ pub const NO_SEED_X: f32 = -1.0;
 const TYPE_STEM: u32 = PartType::Stem as u32;
 const TYPE_LEAF: u32 = PartType::Leaf as u32;
 
-/// Floats per organism in the packed buffer.
+/// Floats per organism in the packed buffer: the fixed slots, then one bend
+/// maximum per limb, then one growth logit per limb.
 pub fn stride(body: BodyCfg) -> usize {
-  LIFE_FIXED + body.max_limbs as usize
+  LIFE_FIXED + 2 * body.max_limbs as usize
+}
+
+/// Where a limb's worst base-joint bend sits in an organism's entry.
+pub fn bend_slot(limb: usize) -> usize {
+  LIFE_FIXED + limb
+}
+
+/// Where a limb's growth logit sits in an organism's entry.
+pub fn logit_slot(body: BodyCfg, limb: usize) -> usize {
+  LIFE_FIXED + body.max_limbs as usize + limb
 }
 
 /// One unit per organism slot, serial over its limbs.
@@ -62,6 +79,7 @@ pub fn pack_life(
   energy: &[f32],
   seed_particles: &[u32],
   anchors: &[f32],
+  heads: &[f32],
   bend_max: &mut [f32],
   out: &mut [f32],
   #[comptime] body: BodyCfg,
@@ -72,7 +90,7 @@ pub fn pack_life(
   }
   let ml = comptime!(body.max_limbs);
   let mp = comptime!(body.max_particles_per_limb);
-  let width = comptime!((LIFE_FIXED as u32) + body.max_limbs);
+  let width = comptime!((LIFE_FIXED as u32) + 2u32 * body.max_limbs);
   let base = (o * width) as usize;
   let base_limb = o * ml;
   for k in 0..width {
@@ -81,11 +99,14 @@ pub fn pack_life(
   // Read and reset before the `alive` guard: a slot that died during the
   // interval must not hand its bend on to whatever germinates into it next.
   // A dead slot's maxima are already zero — the constraint pass skips it —
-  // so the packed value is the same zero the loop above wrote.
+  // so the packed value is the same zero the loop above wrote, and so is its
+  // logit, which the heads kernel zeroes for a slot it skips.
   for l in 0..ml {
     let slot = (base_limb + l) as usize;
     out[base + LIFE_FIXED + l as usize] = bend_max[slot];
     bend_max[slot] = 0.0f32;
+    out[base + LIFE_FIXED + (ml + l) as usize] =
+      heads[slot * comptime!(HEAD_DIM) + comptime!(HEAD_GROWTH)];
   }
   if alive[o as usize] == 0u32 {
     terminate!();
@@ -157,6 +178,7 @@ pub fn read<R: Runtime>(
   sph: &SphDevice,
   bodies: &BodyState,
   pop: &Population,
+  brain: &BrainState,
   pack: &LifePack,
   num_particles: usize,
 ) -> Vec<f32> {
@@ -173,6 +195,7 @@ pub fn read<R: Runtime>(
     whole(&pop.device.organisms.energy, body.max_organisms as usize),
     whole(&bodies.device.seed_particles, body.max_organisms as usize),
     whole(&bodies.device.anchors, body.max_organisms as usize * 2),
+    whole(&brain.device.heads, brain.cfg.heads_len()),
     whole(&bodies.device.bend_max, body.limb_count()),
     whole(&pack.buffer, pack.len),
     body,
@@ -185,6 +208,7 @@ pub fn pack_life_ref(
   particles: &crate::particles::SphHost,
   pop: &Population,
   bodies: &BodyState,
+  heads: &[f32],
   bend_max: &mut [f32],
 ) -> Vec<f32> {
   let body = bodies.cfg;
@@ -195,7 +219,8 @@ pub fn pack_life_ref(
   for o in 0..body.max_organisms as usize {
     let base = o * width;
     for l in 0..ml {
-      out[base + LIFE_FIXED + l] = std::mem::take(&mut bend_max[o * ml + l]);
+      out[base + bend_slot(l)] = std::mem::take(&mut bend_max[o * ml + l]);
+      out[base + logit_slot(body, l)] = heads[(o * ml + l) * HEAD_DIM + HEAD_GROWTH];
     }
     if pop.organisms.alive[o] == 0 {
       continue;
@@ -251,6 +276,13 @@ mod tests {
       .collect()
   }
 
+  /// One brain tick, so the heads hold something other than the zeros the
+  /// buffer was allocated with.
+  fn run_brain(h: &OrganismHarness) -> Vec<f32> {
+    h.run_brain();
+    h.brain.read_heads(&h.client)
+  }
+
   #[test]
   fn matches_reference() {
     let mut h = OrganismHarness::new();
@@ -265,6 +297,7 @@ mod tests {
     h.bodies.upload(&h.client);
     let mut bend = fixture_bend_max(&h);
     h.bodies.device.bend_max = h.client.create_from_slice(bytemuck::cast_slice(&bend));
+    let heads = run_brain(&h);
 
     let pack = LifePack::new(&h.client, h.body_cfg);
     let actual = read(
@@ -272,10 +305,11 @@ mod tests {
       &h.sph,
       &h.bodies,
       &h.pop,
+      &h.brain,
       &pack,
       h.geom.num_particles,
     );
-    let expected = pack_life_ref(&h.particles, &h.pop, &h.bodies, &mut bend);
+    let expected = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, &mut bend);
     assert_eq!(actual.len(), expected.len());
     assert_close(&actual, &expected, 1e-6, "life pack");
 
@@ -296,6 +330,7 @@ mod tests {
     let ml = h.body_cfg.max_limbs as usize;
     let bend = fixture_bend_max(&h);
     h.bodies.device.bend_max = h.client.create_from_slice(bytemuck::cast_slice(&bend));
+    let heads = run_brain(&h);
 
     let pack = LifePack::new(&h.client, h.body_cfg);
     let first = read(
@@ -303,13 +338,14 @@ mod tests {
       &h.sph,
       &h.bodies,
       &h.pop,
+      &h.brain,
       &pack,
       h.geom.num_particles,
     );
     let width = stride(h.body_cfg);
-    assert_eq!(width, LIFE_FIXED + ml);
+    assert_eq!(width, LIFE_FIXED + 2 * ml);
     for l in 0..ml {
-      assert_eq!(first[LIFE_FIXED + l], bend[l], "limb {l}");
+      assert_eq!(first[bend_slot(l)], bend[l], "limb {l}");
     }
 
     let second = read(
@@ -317,21 +353,72 @@ mod tests {
       &h.sph,
       &h.bodies,
       &h.pop,
+      &h.brain,
       &pack,
       h.geom.num_particles,
     );
     assert!(
-      second[LIFE_FIXED..LIFE_FIXED + ml]
+      second[bend_slot(0)..bend_slot(ml)]
         .iter()
         .all(|v| *v == 0.0),
       "the maxima survived the tick that read them: {:?}",
-      &second[LIFE_FIXED..LIFE_FIXED + ml]
+      &second[bend_slot(0)..bend_slot(ml)]
     );
 
     // And the host twin resets its own copy the same way.
     let mut host = bend.clone();
-    let packed = pack_life_ref(&h.particles, &h.pop, &h.bodies, &mut host);
-    assert_eq!(&packed[LIFE_FIXED..LIFE_FIXED + ml], &bend[..ml]);
+    let packed = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, &mut host);
+    assert_eq!(&packed[bend_slot(0)..bend_slot(ml)], &bend[..ml]);
     assert!(host.iter().all(|v| *v == 0.0));
+  }
+
+  /// The growth logits ride in a per-limb slice of their own, straight out of
+  /// the heads buffer, and — unlike the bend maxima — reading them leaves
+  /// them alone: the brain writes them afresh every step.
+  #[test]
+  fn the_growth_logits_come_from_the_heads_buffer() {
+    let h = OrganismHarness::new();
+    let ml = h.body_cfg.max_limbs as usize;
+    let heads = run_brain(&h);
+
+    let pack = LifePack::new(&h.client, h.body_cfg);
+    let packed = read(
+      &h.client,
+      &h.sph,
+      &h.bodies,
+      &h.pop,
+      &h.brain,
+      &pack,
+      h.geom.num_particles,
+    );
+
+    let mut nonzero = 0;
+    for o in 0..h.body_cfg.max_organisms as usize {
+      for l in 0..ml {
+        let logit = heads[(o * ml + l) * HEAD_DIM + HEAD_GROWTH];
+        assert_eq!(
+          packed[o * stride(h.body_cfg) + logit_slot(h.body_cfg, l)],
+          logit,
+          "organism {o} limb {l}"
+        );
+        nonzero += (logit != 0.0) as usize;
+      }
+    }
+    assert!(
+      nonzero > 0,
+      "no limb had a logit, so the test proves nothing"
+    );
+
+    let again = read(
+      &h.client,
+      &h.sph,
+      &h.bodies,
+      &h.pop,
+      &h.brain,
+      &pack,
+      h.geom.num_particles,
+    );
+    let logits = |p: &[f32]| p[logit_slot(h.body_cfg, 0)..logit_slot(h.body_cfg, ml)].to_vec();
+    assert_eq!(logits(&again), logits(&packed), "a read cleared the logits");
   }
 }

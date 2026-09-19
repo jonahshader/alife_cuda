@@ -218,7 +218,8 @@ built; the two together are the model below.
   ordering.
 - *Spend per tick:* `spend = clamp(energy − seed_cost, 0, Σ growth_rate
   over growing limbs)`. Shares are `spend × softmax(growth_bias + logit)`
-  over the growing limbs, `logit` being 0 until chunk 4; a share above the
+  over the growing limbs, `logit` being the brain's growth head for that
+  limb, as it stood at the tick's own step; a share above the
   limb's `growth_rate` is capped and the excess redistributed once, by the
   same softmax, over the uncapped limbs. A share buys *volume* at
   `volume_per_energy`, and the limb's new `grown` is solved from `V + ΔV`,
@@ -268,11 +269,12 @@ resets it, so each tick sees its own interval, and the decision is the
 host's, in slot order, like every other life decision. A limb shed this way
 counts in the `breaks` column of the metrics time series.
 
-**4. The brain's part.** `head_sprout` becomes `head_growth`, one logit
-per limb added to `growth_bias` before the softmax — the sprout head's
-"when" role, now continuous. The actuator head's first output is wired:
-the base-joint target is `grow_angle + actuator_gain × tanh(a)`, the
-brain nudging the genome's rest angle. Both are the wire phototropism
+**4. The brain's part.** `head_growth` is one logit per limb, added to
+`growth_bias` before the softmax — the sprout head's "when" role, now
+continuous; it rides in the packed life buffer's second per-limb slice.
+Still open: the actuator head's first output, which is to make the
+base-joint target `grow_angle + actuator_gain × tanh(a)`, the brain
+nudging the genome's rest angle. Both are the wire phototropism
 needs: a token carries its limb's light, and a brain that raises the
 logit or bends the joint toward the brighter side grows toward the sun
 with no new mechanism.
@@ -540,16 +542,18 @@ forward → the life tick, every `life_interval` steps. The constraint pass
 publishes limb geometry (root-relative position, segment angle, depth) for
 the token features; the life tick runs on the heads the forward pass just
 wrote, so applying a head and deciding the life cycle are one step — though
-until chunk 4 of *Growth* wires `head_growth`, nothing reads one.
+until the actuator head is wired, the growth logit is the only one read.
 
 **The life tick's shape.** Light and energy are kernels; growth, placement,
 freeing and mutation are kernels; the *decisions* between them are a serial
 walk over the organism slots on the host, in slot order, and therefore
 deterministic. It costs one `read` per tick of a packed
-`[max_organisms × (6 + max_limbs)]` float buffer — energies, seed positions
-and speeds, body tops, and per limb the worst its base joint was bent over
-the interval, accumulated by the constraint pass and reset by the pack
-kernel that reads it — plus the free-slot scan's reads when
+`[max_organisms × (6 + 2 × max_limbs)]` float buffer — energies, seed
+positions and speeds, body tops, then two per-limb slices: the worst each
+base joint was bent over the interval, accumulated by the constraint pass and
+reset by the pack kernel that reads it, and the brain's growth logit, copied
+out of the heads buffer and not reset, because the brain rewrites it every
+step — plus the free-slot scan's reads when
 something is claimed and one limb-record download when something was born.
 The organism SoA is host-mastered except `energy`, which the energy kernel
 writes; the brain tensor and the limb records are device-mastered for a

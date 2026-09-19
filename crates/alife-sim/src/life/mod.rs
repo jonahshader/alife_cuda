@@ -8,13 +8,14 @@
 //! 1. rebuild the light grid ([`light`]);
 //! 2. credit and charge every organism ([`energy`]);
 //! 3. one packed readback ([`pack`]) — energies, seed positions and speeds,
-//!    body tops, and each limb's worst base-joint bend over the interval;
+//!    body tops, and per limb the worst its base joint was bent over the
+//!    interval and the brain's growth logit;
 //! 4. decide, on the host: who dies, who germinates, how much every limb
 //!    grows, who seeds;
 //! 5. free the dead, place the seeds, run the growth and mutation kernels.
 //!
 //! **What crosses the bus, per tick.** One `read` of
-//! `max_organisms x (6 + max_limbs)` floats — 20 KB at the defaults — plus
+//! `max_organisms x (6 + 2 * max_limbs)` floats — 38 KB at the defaults — plus
 //! the free-slot scan's two reads when something is claimed, the same reads a
 //! `read_free_slots` costs anywhere, and one `download_limbs` (150 KB) when
 //! something was born. Nothing else is read back, and nothing is read back at
@@ -128,6 +129,7 @@ impl<R: Runtime> Sim<R> {
       &self.sph,
       &self.bodies,
       &self.pop,
+      &self.brain,
       &self.life_pack,
       num_particles,
     )
@@ -215,6 +217,7 @@ impl<R: Runtime> Sim<R> {
         o,
         energy,
         &broken,
+        &packed[base..],
         &mut out.lengthened,
         &mut grew,
       );
@@ -450,10 +453,11 @@ impl<R: Runtime> Sim<R> {
 /// and it needs no ordering because every limb's progress is read as it stood
 /// at the start of the tick. The organism spends `energy - seed_cost`, capped
 /// at what its growing limbs can absorb between them, so growth never starves
-/// reproduction, and the split is a softmax over the limbs' growth biases —
-/// a bias slows a limb relative to its siblings rather than deleting it. A
-/// share above a limb's own `growth_rate` is capped there and redistributed
-/// once over the limbs that were not capped.
+/// reproduction, and the split is a softmax over the limbs' growth biases
+/// plus the brain's growth logits — a bias slows a limb relative to its
+/// siblings rather than deleting it, and the logit is the brain saying the
+/// same thing about this tick. A share above a limb's own `growth_rate` is
+/// capped there and redistributed once over the limbs that were not capped.
 ///
 /// A share buys **volume** at `volume_per_energy`, and the limb's new length
 /// is solved from the volume it now has (`bodies::grown_from_volume`): a
@@ -465,7 +469,9 @@ impl<R: Runtime> Sim<R> {
 /// energy vanishes into growth that never happened.
 ///
 /// `broken` is the limbs [`broken_limbs`] has decided are coming off this
-/// tick; none of them grows, whatever it could have absorbed.
+/// tick; none of them grows, whatever it could have absorbed. `packed` is the
+/// organism's slice of the life buffer, which is where the brain's per-limb
+/// growth logit rides.
 ///
 /// Writes nothing: the new lengths go to `lengthened` and the limbs that
 /// crossed a whole segment — so the map owes them a particle — to `growth`.
@@ -477,6 +483,7 @@ fn allocate_growth(
   organism: usize,
   energy: f32,
   broken: &[usize],
+  packed: &[f32],
   lengthened: &mut Vec<(usize, f32)>,
   growth: &mut Vec<GrowRequest>,
 ) -> f32 {
@@ -524,8 +531,12 @@ fn allocate_growth(
   }
 
   // Softmax over the biases, shifted by the largest so a big bias cannot
-  // overflow the exponential.
-  let bias = |limb: usize| pop.limbs.growth_bias[pop.limb_index(organism, limb)];
+  // overflow the exponential. The genome's bias is what the limb is for, the
+  // brain's logit what this tick is for; they add, and a limb with neither
+  // sits at zero like every other.
+  let bias = |limb: usize| {
+    pop.limbs.growth_bias[pop.limb_index(organism, limb)] + packed[pack::logit_slot(cfg, limb)]
+  };
   let top = growing
     .iter()
     .map(|limb| bias(*limb))
@@ -649,7 +660,7 @@ fn broken_limbs(
     let target = (pop.limbs.length[record] as usize).min(mp) as f32;
     let thickness = bodies::limb_thickness(pop.limbs.target_thickness[record], target, grown(limb));
     let bears = params.break_angle * (thickness / params.break_thickness_ref).clamp(0.0, 1.0);
-    if packed[pack::LIFE_FIXED + limb] > bears {
+    if packed[pack::bend_slot(limb)] > bears {
       broken[limb] = true;
       any = true;
     }
@@ -760,12 +771,30 @@ mod tests {
     (pop, bodies)
   }
 
-  /// Everything one call decides, as `(spend, lengths, requests)`.
+  /// Everything one call decides, as `(spend, lengths, requests)`, with no
+  /// bend and no growth logit in the packed entry.
   fn allocate(
     pop: &Population,
     bodies: &BodyState,
     params: &SimParams,
     energy: f32,
+  ) -> (f32, Vec<(usize, f32)>, Vec<GrowRequest>) {
+    allocate_with(
+      pop,
+      bodies,
+      params,
+      energy,
+      &vec![0.0; pack::stride(bodies.cfg)],
+    )
+  }
+
+  /// The same, over a packed entry the caller has put logits into.
+  fn allocate_with(
+    pop: &Population,
+    bodies: &BodyState,
+    params: &SimParams,
+    energy: f32,
+    packed: &[f32],
   ) -> (f32, Vec<(usize, f32)>, Vec<GrowRequest>) {
     let (mut lengths, mut requests) = (Vec::new(), Vec::new());
     let spend = allocate_growth(
@@ -775,6 +804,7 @@ mod tests {
       0,
       energy,
       &[],
+      packed,
       &mut lengths,
       &mut requests,
     );
@@ -810,10 +840,10 @@ mod tests {
     let (pop, bodies, mut packed) = grown_seedling(&mut params);
 
     // The stem, at its full thickness, bears the whole of `break_angle`.
-    packed[pack::LIFE_FIXED + 1] = 0.99;
+    packed[pack::bend_slot(1)] = 0.99;
     assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
 
-    packed[pack::LIFE_FIXED + 1] = 1.01;
+    packed[pack::bend_slot(1)] = 1.01;
     assert_eq!(
       broken_limbs(&pop, &bodies, &params, 0, &packed),
       vec![1, 2],
@@ -828,12 +858,12 @@ mod tests {
     let mut params = params();
     let (mut pop, bodies, mut packed) = grown_seedling(&mut params);
 
-    packed[pack::LIFE_FIXED] = 10.0;
+    packed[pack::bend_slot(0)] = 10.0;
     assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
 
     // The same bend on a root-typed limb that *does* have a base joint.
     pop.limbs.part_type[1] = PartType::Root;
-    packed[pack::LIFE_FIXED + 1] = 10.0;
+    packed[pack::bend_slot(1)] = 10.0;
     assert!(
       broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty(),
       "a root limb snapped"
@@ -857,10 +887,10 @@ mod tests {
     bodies.grown[1] = 0.75;
     bodies.grown[2] = 0.0;
 
-    packed[pack::LIFE_FIXED + 1] = 0.49;
+    packed[pack::bend_slot(1)] = 0.49;
     assert!(broken_limbs(&pop, &bodies, &params, 0, &packed).is_empty());
 
-    packed[pack::LIFE_FIXED + 1] = 0.51;
+    packed[pack::bend_slot(1)] = 0.51;
     assert_eq!(
       broken_limbs(&pop, &bodies, &params, 0, &packed),
       vec![1, 2],
@@ -884,6 +914,7 @@ mod tests {
       0,
       99.0,
       &[1],
+      &vec![0.0; pack::stride(bodies.cfg)],
       &mut lengths,
       &mut requests,
     );
@@ -945,6 +976,57 @@ mod tests {
     let stem_gain = volume(&pop, &params, 1, stem);
     assert!((root_gain - 0.01).abs() < 1e-6, "the root took {root_gain}");
     assert!((stem_gain - 0.49).abs() < 1e-5, "the stem took {stem_gain}");
+  }
+
+  /// The brain's growth logit rides in the packed entry and enters the
+  /// softmax beside the genome's bias: a positive logit on one limb moves the
+  /// tick's growth towards it, and an equal logit on every limb moves
+  /// nothing, because a softmax only sees differences.
+  #[test]
+  fn a_positive_growth_logit_shifts_the_allocation_towards_its_limb() {
+    let params = params();
+    let (pop, mut bodies) = seedling(&params);
+    // The root three quarters along, so the root and the stem are both
+    // growing and neither is capped by its rate at this spend.
+    bodies.grown[0] = 1.5;
+    let width = pack::stride(bodies.cfg);
+    let volume_of = |lengths: &[(usize, f32)], limb: usize, from: f32| {
+      let to = lengths.iter().find(|(r, _)| *r == limb).unwrap().1;
+      volume(&pop, &params, limb, to) - volume(&pop, &params, limb, from)
+    };
+
+    let (flat_spend, flat, _) = allocate(&pop, &bodies, &params, 1.1);
+    let (root_flat, stem_flat) = (volume_of(&flat, 0, 1.5), volume_of(&flat, 1, 0.0));
+    assert!(
+      (root_flat - stem_flat).abs() < 1e-6,
+      "two limbs at one bias split unevenly: {root_flat} against {stem_flat}"
+    );
+
+    let mut packed = vec![0.0f32; width];
+    packed[pack::logit_slot(bodies.cfg, 1)] = 2.0;
+    let (spend, biased, _) = allocate_with(&pop, &bodies, &params, 1.1, &packed);
+    let (root, stem) = (volume_of(&biased, 0, 1.5), volume_of(&biased, 1, 0.0));
+    assert!(
+      stem > stem_flat,
+      "the logit bought the stem nothing: {stem}"
+    );
+    assert!(root < root_flat, "the root kept its share: {root}");
+    // e^2 : 1 over the two growing limbs, and the spend itself is unchanged —
+    // the brain splits the growth, it does not add to it.
+    assert!(
+      (stem / (root + stem) - (2.0f32.exp() / (1.0 + 2.0f32.exp()))).abs() < 1e-4,
+      "the split is not the softmax: {root} against {stem}"
+    );
+    assert!((spend - 0.1).abs() < 1e-6, "{spend}");
+
+    // The same logit everywhere is no logit at all.
+    let mut flat_logits = vec![0.0f32; width];
+    for limb in 0..pop.max_limbs {
+      flat_logits[pack::logit_slot(bodies.cfg, limb)] = -3.0;
+    }
+    let (same_spend, same, _) = allocate_with(&pop, &bodies, &params, 1.1, &flat_logits);
+    assert_eq!(same, flat);
+    assert_eq!(same_spend, flat_spend);
   }
 
   /// A child ends the tick no further along than its parent, whatever it was
