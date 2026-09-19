@@ -86,6 +86,9 @@ pub struct BodyDevice {
   pub limb_particles: Handle,
   /// `[max_organisms]` anchor positions, interleaved x,y.
   pub anchors: Handle,
+  /// `[max_organisms]` particle ids: the one particle a seed organism is,
+  /// or [`NO_PARTICLE`] once it has germinated (or never was a seed).
+  pub seed_particles: Handle,
   /// Where the integrator left each particle, before the projection moved it.
   /// `[num_particles]` interleaved x,y; only body particles are written.
   pub ppos_prev: Handle,
@@ -105,6 +108,10 @@ pub struct BodyState {
   pub limb_particles: Vec<u32>,
   /// Each organism's anchor: the soil cell its root germinated in.
   pub anchors: Vec<Vec2>,
+  /// The single particle a seed organism is, or [`NO_PARTICLE`]. A seed is
+  /// not in [`Self::limb_particles`], which is why the constraint pass leaves
+  /// it alone: it has no limbs to hold it, so it falls and drifts.
+  pub seed_particles: Vec<u32>,
   pub geometry: LimbGeometryHost,
   pub device: BodyDevice,
 }
@@ -118,10 +125,12 @@ impl BodyState {
     let cfg = BodyCfg::from_params(params);
     let limb_particles = vec![NO_PARTICLE; cfg.particle_map_len()];
     let anchors = vec![Vec2::ZERO; cfg.max_organisms as usize];
+    let seed_particles = vec![NO_PARTICLE; cfg.max_organisms as usize];
     let geometry = LimbGeometryHost::new(cfg.limb_count());
     let device = BodyDevice {
       limb_particles: client.create_from_slice(bytemuck::cast_slice(&limb_particles)),
       anchors: client.create_from_slice(bytemuck::cast_slice(&flatten(&anchors))),
+      seed_particles: client.create_from_slice(bytemuck::cast_slice(&seed_particles)),
       ppos_prev: client.empty(geom.num_particles * 2 * size_of::<f32>()),
       geometry: LimbGeometryDevice::upload(client, &geometry),
     };
@@ -130,9 +139,51 @@ impl BodyState {
       high_water: 0,
       limb_particles,
       anchors,
+      seed_particles,
       geometry,
       device,
     }
+  }
+
+  /// Every particle slot this organism holds: its limbs' and, if it is still
+  /// a seed, the seed particle.
+  pub fn organism_particles(&self, organism: usize) -> Vec<u32> {
+    let cfg = self.cfg;
+    let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
+    let start = organism * per_organism;
+    let mut out: Vec<u32> = self.limb_particles[start..start + per_organism]
+      .iter()
+      .copied()
+      .filter(|id| *id != NO_PARTICLE)
+      .collect();
+    if self.seed_particles[organism] != NO_PARTICLE {
+      out.push(self.seed_particles[organism]);
+    }
+    out
+  }
+
+  /// Forget every particle `organism` held, and the seed slot with it.
+  pub fn release(&mut self, organism: usize) {
+    let cfg = self.cfg;
+    let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
+    let start = organism * per_organism;
+    self.limb_particles[start..start + per_organism].fill(NO_PARTICLE);
+    self.seed_particles[organism] = NO_PARTICLE;
+  }
+
+  /// One past the highest claimed particle slot, recomputed from the map.
+  ///
+  /// [`Self::high_water`] only grows as slots are claimed; after deaths the
+  /// top of the range can be empty again, and the per-particle kernels should
+  /// not be launched over it (`TODO.md`, left open by the bodies chunk).
+  pub fn recompute_high_water(&mut self) {
+    let highest = self
+      .limb_particles
+      .iter()
+      .chain(self.seed_particles.iter())
+      .filter(|id| **id != NO_PARTICLE)
+      .max();
+    self.high_water = highest.map_or(0, |id| *id as usize + 1);
   }
 
   /// The particle holding `(organism, limb, index)`, or [`NO_PARTICLE`].
@@ -140,11 +191,13 @@ impl BodyState {
     self.limb_particles[self.cfg.limb_slice(organism, limb).start + index]
   }
 
-  /// Upload the host master copies of the map and the anchors.
+  /// Upload the host master copies of the map, the anchors and the seeds.
   pub fn upload<R: Runtime>(&mut self, client: &ComputeClient<R>) {
     self.device.limb_particles =
       client.create_from_slice(bytemuck::cast_slice(&self.limb_particles));
     self.device.anchors = client.create_from_slice(bytemuck::cast_slice(&flatten(&self.anchors)));
+    self.device.seed_particles =
+      client.create_from_slice(bytemuck::cast_slice(&self.seed_particles));
   }
 }
 
@@ -222,10 +275,7 @@ fn install<R: Runtime>(
   access.pop.write_genome(organism, genome);
   access.pop.organisms.alive[organism] = 1;
   access.bodies.anchors[organism] = anchor;
-  let cfg = access.bodies.cfg;
-  let per_organism = (cfg.max_limbs * cfg.max_particles_per_limb) as usize;
-  let start = organism * per_organism;
-  access.bodies.limb_particles[start..start + per_organism].fill(NO_PARTICLE);
+  access.bodies.release(organism);
 }
 
 /// Grow every ungrown limb of these organisms, parents before children.

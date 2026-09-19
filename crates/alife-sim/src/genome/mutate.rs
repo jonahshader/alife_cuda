@@ -390,6 +390,101 @@ pub fn mutate<R: Runtime>(
   );
 }
 
+// --- The rest of a birth ---
+
+/// Copy each newborn's `latent_init` slice into its persistent latent state.
+///
+/// One unit per `(newborn, latent element)`. It has to run on the device and
+/// after [`mutate_brain`]: a child's `latent_init` is part of the row the
+/// mutation just perturbed, and the host master does not have that row.
+#[cube(launch)]
+pub fn reset_latents(
+  brain: &[f32],
+  latents: &mut [f32],
+  newborns: &[u32],
+  count: &[u32],
+  param_count: u32,
+  init_offset: u32,
+  state_len: u32,
+) {
+  let t = ABSOLUTE_POS as u32;
+  if t >= count[0] * state_len {
+    terminate!();
+  }
+  let entry = t / state_len;
+  let j = t % state_len;
+  let child = newborns[entry as usize];
+  latents[(child * state_len + j) as usize] =
+    brain[(child * param_count + init_offset + j) as usize];
+}
+
+/// Narrow the fp32 brain tensor into its fp16 shadow, on the device.
+///
+/// `--brain-fp16` keeps the fp32 copy as the master and the kernels read the
+/// shadow ([`super::population::Weights`]). Births write the master on the
+/// device, so the shadow has to be rebuilt there too, or a child would run
+/// on whatever its slot held before.
+#[cube(launch)]
+pub fn narrow_brain<W: Float>(src: &[f32], dst: &mut [W], n: u32) {
+  let i = ABSOLUTE_POS;
+  if i >= n as usize {
+    terminate!();
+  }
+  dst[i] = W::cast_from(src[i]);
+}
+
+/// Run [`reset_latents`] over a newborn list.
+pub fn launch_reset_latents<R: Runtime>(
+  client: &ComputeClient<R>,
+  device: &PopulationDevice,
+  inputs: &MutateInputs,
+  shape: &super::BrainShape,
+  max_organisms: usize,
+) {
+  if inputs.capacity == 0 {
+    return;
+  }
+  let state_len = shape.latent_state_len();
+  let init = shape.latent_init();
+  reset_latents::launch::<R>(
+    client,
+    cube_count(inputs.capacity * state_len),
+    CubeDim::new_1d(CUBE_DIM),
+    whole(&device.brain, max_organisms * shape.param_count()),
+    whole(&device.latents, max_organisms * state_len),
+    whole(&inputs.newborns, inputs.capacity),
+    whole(&inputs.count, 1),
+    shape.param_count() as u32,
+    init.start as u32,
+    state_len as u32,
+  );
+}
+
+/// Run [`narrow_brain`] over the whole tensor.
+pub fn launch_narrow<R: Runtime>(client: &ComputeClient<R>, src: &Handle, dst: &Handle, n: usize) {
+  narrow_brain::launch::<half::f16, R>(
+    client,
+    cube_count(n),
+    CubeDim::new_1d(CUBE_DIM),
+    whole(src, n),
+    whole(dst, n),
+    n as u32,
+  );
+}
+
+/// Plain-Rust twin of [`reset_latents`], over the host copies.
+pub fn reset_latents_ref(pop: &mut Population, births: &[Birth]) {
+  let init = pop.shape.latent_init();
+  let params = pop.shape.param_count();
+  let state = pop.shape.latent_state_len();
+  for birth in births {
+    let child = birth.child as usize;
+    for j in 0..state {
+      pop.latents[child * state + j] = pop.brain[child * params + init.start + j];
+    }
+  }
+}
+
 // --- Plain-Rust reference ---
 
 fn draw_gaussian_ref(child: u32, step: u32, seed: u32, stream: u32, index: u32) -> f32 {
@@ -652,6 +747,81 @@ pub mod tests {
     {
       assert_eq!(a, e, "{what}: identity[{i}]");
     }
+  }
+
+  /// A newborn's latents start from the `latent_init` slice of the row the
+  /// mutation just wrote — not its parent's, and not whatever the slot held.
+  #[test]
+  fn latents_are_reset_from_the_mutated_row() {
+    let client = CpuRuntime::client(&CpuDevice);
+    let params = test_params();
+    let births = births();
+    let mut pop = seeded_population(&client, &params);
+    // Something recognisably wrong in every newborn slot's latent state.
+    for birth in &births {
+      let state = pop.shape.latent_state_len();
+      let base = birth.child as usize * state;
+      pop.latents[base..base + state].fill(-7.0);
+    }
+    pop.upload(&client);
+
+    let cfg = MutateCfg::new(&pop);
+    let inputs = MutateInputs::upload(&client, &births, 3, 42, &params);
+    mutate(&client, &pop.device, &inputs, cfg);
+    launch_reset_latents(&client, &pop.device, &inputs, &pop.shape, pop.max_organisms);
+    pop.download(&client);
+
+    let from_device = pop.latents.clone();
+    // Wipe the same slots again and run the reference over the row the
+    // device mutation produced, which is now the host's copy too.
+    let state = pop.shape.latent_state_len();
+    for birth in &births {
+      let base = birth.child as usize * state;
+      pop.latents[base..base + state].fill(-7.0);
+    }
+    reset_latents_ref(&mut pop, &births);
+    assert_eq!(from_device, pop.latents);
+
+    let init = pop.shape.latent_init();
+    for birth in &births {
+      let child = birth.child as usize;
+      assert_eq!(pop.latent_row(child), &pop.brain_row(child)[init.clone()]);
+      assert!(pop.latent_row(child).iter().all(|v| *v != -7.0));
+    }
+  }
+
+  /// With `--brain-fp16` the kernels read a shadow, and a birth writes the
+  /// master on the device: the shadow has to be rebuilt there too.
+  #[test]
+  fn the_fp16_shadow_follows_a_birth() {
+    let client = CpuRuntime::client(&CpuDevice);
+    let params = SimParams {
+      brain_fp16: 1,
+      ..test_params()
+    };
+    let births = births();
+    let mut pop = seeded_population(&client, &params);
+    let cfg = MutateCfg::new(&pop);
+    let inputs = MutateInputs::upload(&client, &births, 5, 42, &params);
+    mutate(&client, &pop.device, &inputs, cfg);
+    pop.narrow_shadow(&client);
+    pop.download(&client);
+
+    let shadow = pop.device.brain_f16.as_ref().expect("fp16 is on");
+    let bytes = client.read_one_unchecked(shadow.clone());
+    let actual: Vec<f32> = bytes
+      .as_chunks::<2>()
+      .0
+      .iter()
+      .map(|b| half::f16::from_le_bytes(*b).to_f32())
+      .take(pop.brain.len())
+      .collect();
+    let expected: Vec<f32> = pop
+      .brain
+      .iter()
+      .map(|v| half::f16::from_f32(*v).to_f32())
+      .collect();
+    assert_eq!(actual, expected);
   }
 
   #[test]

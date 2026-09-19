@@ -136,8 +136,20 @@ define_soa! {
         /// lineage fields. Mutation never touches it — it is not genome, it
         /// is where in the lineage this organism sits.
         generation: u32,
+        /// What occupies the slot: [`STAGE_SEED`] for a seed in flight,
+        /// [`STAGE_PLANT`] once it has germinated. `alive` says the slot is
+        /// taken — which is what the slot allocator scans — and this says
+        /// what is in it, because a seed holds a slot and a genome but has no
+        /// body, no energy budget and no place in the population counts until
+        /// it germinates.
+        stage: u32,
     }
 }
+
+/// A seed particle in flight: one particle, no limbs, no energy budget.
+pub const STAGE_SEED: u32 = 0;
+/// A germinated organism: anchored, growing, gaining and spending.
+pub const STAGE_PLANT: u32 = 1;
 
 /// `parent_id` / `lineage_id` of an organism with no parent — a seeded
 /// founder rather than an offspring.
@@ -384,6 +396,26 @@ impl Population {
     self.organisms = self.device.organisms.download(client);
     self.brain = read_f32(client, &self.device.brain, self.brain.len());
     self.latents = read_f32(client, &self.device.latents, self.latents.len());
+  }
+
+  /// Refresh the host mirror of the discrete section alone.
+  ///
+  /// The mutation kernel writes a newborn's limb records on the device, and
+  /// the host needs them back to decide what to grow and to measure species
+  /// distance. The brain tensor is 19 MB at the defaults and nothing on the
+  /// host reads it, so a full [`Self::download`] after every birth would be
+  /// three orders of magnitude of readback for nothing.
+  pub fn download_limbs<R: Runtime>(&mut self, client: &ComputeClient<R>) {
+    self.limbs = self.device.limbs.download(client);
+  }
+
+  /// Refresh the fp16 shadow from the fp32 master **on the device**, which is
+  /// what a birth needs: the mutation kernel wrote the child's row there and
+  /// the host master no longer has it. A no-op without `--brain-fp16`.
+  pub fn narrow_shadow<R: Runtime>(&self, client: &ComputeClient<R>) {
+    if let Some(shadow) = &self.device.brain_f16 {
+      super::mutate::launch_narrow(client, &self.device.brain, shadow, self.brain.len());
+    }
   }
 }
 

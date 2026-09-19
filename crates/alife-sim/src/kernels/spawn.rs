@@ -25,7 +25,13 @@ use super::{
 };
 use crate::bodies::BodyCfg;
 use crate::genome::population::{LimbArgs, limb_args};
-use crate::particles::{ParticleKind, SphDevice, SphHost};
+use crate::particles::{PARKED_POS, ParticleKind, SphDevice, SphHost};
+
+/// [`crate::particles::PARKED_POS`] as two kernel-side literals.
+const PARKED_X: f32 = PARKED_POS.x;
+const PARKED_Y: f32 = PARKED_POS.y;
+/// [`crate::particles::NO_ORGANISM`].
+const NO_ORGANISM: u32 = crate::particles::NO_ORGANISM;
 
 /// 1 where a particle slot is taken, 0 where it is claimable. A `Free` slot
 /// is the only claimable one.
@@ -177,6 +183,89 @@ pub fn place_body_particles(
   sph.limb[id] = limb[k];
   sph.index_in_limb[id] = index_in_limb[k];
   sph.part_type[id] = part_type[k];
+}
+
+/// Give a list of particle slots back: park them outside the world and mark
+/// them claimable again. One unit per entry.
+///
+/// Each freed slot's `ppos` is copied out first, because a dying body's
+/// particles become organic matter in the soil cell they were standing in and
+/// the host does the depositing — a float add per cell is order-dependent on
+/// the device and the host sum is in slot order, so it is the same every run.
+///
+/// The slot is left exactly as `SphHost::push_free_slots` leaves a slot that
+/// has never been used, so a re-used slot and a fresh one are the same thing.
+#[cube(launch)]
+pub fn free_particles(sph: &mut BodyArgs, ids: &[u32], freed: &mut [f32], count: u32) {
+  let k = ABSOLUTE_POS;
+  if k >= count as usize {
+    terminate!();
+  }
+  let id = ids[k] as usize;
+  freed[2 * k] = sph.ppos[2 * id];
+  freed[2 * k + 1] = sph.ppos[2 * id + 1];
+
+  sph.pos[2 * id] = PARKED_X;
+  sph.pos[2 * id + 1] = PARKED_Y;
+  sph.ppos[2 * id] = PARKED_X;
+  sph.ppos[2 * id + 1] = PARKED_Y;
+  sph.vel[2 * id] = 0.0f32;
+  sph.vel[2 * id + 1] = 0.0f32;
+  sph.mass[id] = 0.0f32;
+  sph.density[id] = 0.0f32;
+  sph.near_density[id] = 0.0f32;
+  sph.evap_prob[id] = 0.0f32;
+  sph.state[id] = KIND_FREE;
+  sph.organism[id] = NO_ORGANISM;
+  sph.limb[id] = 0u32;
+  sph.index_in_limb[id] = 0u32;
+  sph.part_type[id] = 0u32;
+}
+
+/// Free a list of slots and return where each one was standing.
+pub fn launch_free<R: Runtime>(
+  client: &ComputeClient<R>,
+  sph: &SphDevice,
+  ids: &[u32],
+) -> Vec<glam::Vec2> {
+  if ids.is_empty() {
+    return Vec::new();
+  }
+  let n = ids.len();
+  let ids_dev = client.create_from_slice(bytemuck::cast_slice(ids));
+  let freed = client.empty(n * 2 * size_of::<f32>());
+  free_particles::launch::<R>(
+    client,
+    cube_count(n),
+    CubeDim::new_1d(super::CUBE_DIM),
+    body_args(sph),
+    whole(&ids_dev, n),
+    whole(&freed, n * 2),
+    n as u32,
+  );
+  crate::soa::download_field(client, &freed, n)
+}
+
+/// Plain-Rust twin of [`free_particles`].
+pub fn free_particles_ref(particles: &mut SphHost, ids: &[u32]) -> Vec<glam::Vec2> {
+  let mut freed = Vec::with_capacity(ids.len());
+  for id in ids {
+    let id = *id as usize;
+    freed.push(particles.ppos[id]);
+    particles.pos[id] = crate::particles::PARKED_POS;
+    particles.ppos[id] = crate::particles::PARKED_POS;
+    particles.vel[id] = glam::Vec2::ZERO;
+    particles.mass[id] = 0.0;
+    particles.density[id] = 0.0;
+    particles.near_density[id] = 0.0;
+    particles.evap_prob[id] = 0.0;
+    particles.state[id] = ParticleKind::Free;
+    particles.organism[id] = crate::particles::NO_ORGANISM;
+    particles.limb[id] = 0;
+    particles.index_in_limb[id] = 0;
+    particles.part_type[id] = crate::genome::PartType::Absent;
+  }
+  freed
 }
 
 /// Fill a per-particle occupancy flag buffer from the particle kinds.
@@ -396,6 +485,30 @@ mod tests {
   use crate::bodies::NO_PARTICLE;
   use crate::kernels::test_support::OrganismHarness;
   use crate::soa::download_field;
+
+  /// Freeing a slot has to leave it exactly as a never-used one, or the
+  /// occupancy scan and every `Free` guard would see two kinds of empty.
+  #[test]
+  fn freeing_matches_reference_and_a_fresh_slot() {
+    let h = OrganismHarness::new();
+    let ids: Vec<u32> = (0..3).map(|i| h.bodies.particle(0, 0, 0) + i).collect();
+    let where_they_were = launch_free(&h.client, &h.sph, &ids);
+
+    let mut expected = h.particles.clone();
+    let expected_positions = free_particles_ref(&mut expected, &ids);
+    assert_eq!(where_they_were, expected_positions);
+    assert_eq!(h.read_particles(), expected);
+
+    // A slot the world reserved and never used, compared field by field
+    // against one this just freed.
+    let fresh = h.geom.num_particles - 1;
+    let freed = ids[0] as usize;
+    assert_eq!(expected.state[freed], expected.state[fresh]);
+    assert_eq!(expected.ppos[freed], expected.ppos[fresh]);
+    assert_eq!(expected.mass[freed], expected.mass[fresh]);
+    assert_eq!(expected.organism[freed], expected.organism[fresh]);
+    assert_eq!(expected.part_type[freed], expected.part_type[fresh]);
+  }
 
   #[test]
   fn occupancy_matches_reference() {
