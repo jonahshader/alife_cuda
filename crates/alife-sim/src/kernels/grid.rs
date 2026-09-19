@@ -163,10 +163,13 @@ pub fn build<R: Runtime>(
   grid: &GridDevice,
   params: &Handle,
   cfg: Cfg,
+  live: super::LiveParticles,
   timed: &mut dyn FnMut(&'static str, &mut (dyn FnMut() + Send)),
 ) {
   let cells = cfg.num_cells as usize;
+  // The buffers are the full capacity; only the launches are the live prefix.
   let particles = cfg.num_particles as usize;
+  let launched = live.get();
 
   timed("reset_cell_counts", &mut || {
     reset_cell_counts::launch::<R>(
@@ -181,7 +184,7 @@ pub fn build<R: Runtime>(
   timed("count_cells", &mut || {
     count_cells::launch::<R>(
       client,
-      cube_count(particles),
+      cube_count(launched),
       CubeDim::new_1d(super::CUBE_DIM),
       sph_args(sph),
       whole(&grid.cell_counts, cells),
@@ -207,7 +210,7 @@ pub fn build<R: Runtime>(
   timed("scatter_ids", &mut || {
     scatter_ids::launch::<R>(
       client,
-      cube_count(particles),
+      cube_count(launched),
       CubeDim::new_1d(super::CUBE_DIM),
       whole(&grid.particle_cell, particles),
       whole(&grid.cell_cursor, cells),

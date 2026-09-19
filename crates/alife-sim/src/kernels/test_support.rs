@@ -94,6 +94,12 @@ impl Harness {
     }
   }
 
+  /// Launch over every slot: the fixture's body particles sit among the
+  /// fluid ones rather than above it, so there is no live prefix to take.
+  pub fn live(&self) -> super::LiveParticles {
+    super::LiveParticles(self.geom.num_particles)
+  }
+
   pub fn build_grid(&self) {
     super::grid::build(
       &self.client,
@@ -101,6 +107,7 @@ impl Harness {
       &self.grid,
       &self.params_buf,
       self.cfg,
+      self.live(),
       &mut |_, f| f(),
     );
   }

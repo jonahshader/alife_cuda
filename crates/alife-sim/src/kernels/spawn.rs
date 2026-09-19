@@ -68,6 +68,8 @@ pub fn place_body_particles(
 }
 
 /// Fill a per-particle occupancy flag buffer from the particle kinds.
+/// Over every slot, not the live prefix: a claim is looking for the free
+/// slots above the high-water mark.
 pub fn launch_mark_occupancy<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,

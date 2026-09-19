@@ -299,10 +299,11 @@ pub fn launch_evaporate<R: Runtime>(
   params: &Handle,
   ctr: RngCounter,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   evaporate_particles::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(params, super::PARAM_COUNT),
@@ -319,10 +320,11 @@ pub fn launch_move<R: Runtime>(
   sph: &SphDevice,
   params: &Handle,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   move_particles::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(params, super::PARAM_COUNT),
@@ -336,10 +338,11 @@ pub fn launch_move_vapor<R: Runtime>(
   params: &Handle,
   ctr: RngCounter,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   move_vapor_particles::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(params, super::PARAM_COUNT),
@@ -375,7 +378,7 @@ mod tests {
     with_evap_signal(&mut h);
     let ctr = RngCounter([3, 0, 0, 0]);
 
-    super::launch_evaporate(&h.client, &h.sph, &h.params_buf, ctr, h.cfg);
+    super::launch_evaporate(&h.client, &h.sph, &h.params_buf, ctr, h.cfg, h.live());
     let actual = h.read_particles();
 
     let mut expected = h.particles.clone();
@@ -392,7 +395,7 @@ mod tests {
   #[test]
   fn move_matches_reference() {
     let h = Harness::new();
-    super::launch_move(&h.client, &h.sph, &h.params_buf, h.cfg);
+    super::launch_move(&h.client, &h.sph, &h.params_buf, h.cfg, h.live());
     let actual = h.read_particles();
 
     let mut expected = h.particles.clone();
@@ -408,7 +411,7 @@ mod tests {
     let h = Harness::new();
     let ctr = RngCounter([11, 0, 0, 0]);
 
-    super::launch_move_vapor(&h.client, &h.sph, &h.params_buf, ctr, h.cfg);
+    super::launch_move_vapor(&h.client, &h.sph, &h.params_buf, ctr, h.cfg, h.live());
     let actual = h.read_particles();
 
     let mut expected = h.particles.clone();
@@ -424,7 +427,7 @@ mod tests {
   #[test]
   fn liquid_stays_inside_the_world() {
     let h = Harness::new();
-    super::launch_move(&h.client, &h.sph, &h.params_buf, h.cfg);
+    super::launch_move(&h.client, &h.sph, &h.params_buf, h.cfg, h.live());
     let moved = h.read_particles();
     for (i, pos) in moved.pos.iter().enumerate() {
       if moved.state[i] != crate::particles::ParticleKind::Liquid {

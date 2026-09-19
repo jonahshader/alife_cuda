@@ -118,6 +118,7 @@ pub fn calculate_particle_density_ref(
 }
 
 /// Launch helper; see `sim::Sim::step` for the order within a step.
+#[allow(clippy::too_many_arguments)]
 pub fn launch<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &crate::particles::SphDevice,
@@ -125,10 +126,11 @@ pub fn launch<R: Runtime>(
   soil: &crate::soil::SoilDevice,
   params: &cubecl_runtime::server::Handle,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   calculate_particle_density::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::grid_args(grid, &cfg),
@@ -153,6 +155,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     let actual = h.read_particles();
 
@@ -186,6 +189,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     let actual = h.read_particles();
     // The capillary-test terrain is solid above the pool, so at least one

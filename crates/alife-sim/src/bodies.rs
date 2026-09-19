@@ -96,6 +96,12 @@ pub struct BodyDevice {
 /// [`crate::genome::Population`].
 pub struct BodyState {
   pub cfg: BodyCfg,
+  /// One past the highest particle slot ever claimed, or 0 if none has been.
+  /// Slots are claimed ascending, so everything above this is still `Free`
+  /// and the per-particle kernels do not have to be launched over it
+  /// ([`crate::kernels::LiveParticles`]). It only ever grows: a slot freed by
+  /// a death leaves the mark where it was.
+  pub high_water: usize,
   pub limb_particles: Vec<u32>,
   /// Each organism's anchor: the soil cell its root germinated in.
   pub anchors: Vec<Vec2>,
@@ -121,6 +127,7 @@ impl BodyState {
     };
     Self {
       cfg,
+      high_water: 0,
       limb_particles,
       anchors,
       geometry,
@@ -314,6 +321,7 @@ pub fn grow_limb<R: Runtime>(
   crate::kernels::spawn::launch_place(access.client, access.sph, organism as u32, &placement);
   for (i, id) in ids.iter().enumerate() {
     access.bodies.limb_particles[slice.start + i] = *id;
+    access.bodies.high_water = access.bodies.high_water.max(*id as usize + 1);
   }
   access.bodies.upload(access.client);
   Ok(count)

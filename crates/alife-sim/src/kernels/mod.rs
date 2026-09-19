@@ -35,6 +35,26 @@ pub fn cube_count(work: usize) -> CubeCount {
   CubeCount::Static(work.div_ceil(CUBE_DIM as usize).max(1) as u32, 1, 1)
 }
 
+/// How many particle slots a per-particle kernel is actually launched over.
+///
+/// Not `cfg.num_particles`: body slots are claimed ascending from the start
+/// of the capacity, so everything above the high-water mark is `Free` and
+/// every kernel would terminate on it immediately. Launching over the live
+/// prefix instead costs the three neighbour kernels 6-9% less at
+/// `--founders 0` — the whole body capacity, 64% more units, would otherwise
+/// be launched and thrown away every step.
+///
+/// The comptime bound inside each kernel stays `cfg.num_particles`, so this
+/// changes no generated code: it only launches fewer cubes of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveParticles(pub usize);
+
+impl LiveParticles {
+  pub fn get(self) -> usize {
+    self.0
+  }
+}
+
 /// The comptime half of the kernel configuration; it belongs to the world's
 /// geometry, which is what decides it.
 pub use crate::world::Cfg;

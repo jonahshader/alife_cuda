@@ -121,6 +121,7 @@ pub fn calculate_evap_prob_ref(
   }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn launch<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &crate::particles::SphDevice,
@@ -128,10 +129,11 @@ pub fn launch<R: Runtime>(
   soil: &crate::soil::SoilDevice,
   params: &cubecl_runtime::server::Handle,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   calculate_evap_prob::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::grid_args(grid, &cfg),
@@ -157,6 +159,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     h.particles = h.read_particles();
     h.sph = SphDevice::upload(&h.client, &h.particles);
@@ -168,6 +171,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     let actual = h.read_particles();
 

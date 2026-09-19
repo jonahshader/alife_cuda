@@ -193,6 +193,12 @@ impl<R: Runtime> Sim<R> {
     self.body_cfg
   }
 
+  /// Particle slots the per-particle kernels are launched over: the fluid
+  /// plus however much of the body capacity has ever been claimed.
+  pub fn live_particles(&self) -> kernels::LiveParticles {
+    kernels::LiveParticles(self.geom.fluid_particles.max(self.bodies.high_water))
+  }
+
   /// Organism slots currently alive. The host copy is authoritative while
   /// births are host-side; the life-cycle chunk takes that over.
   pub fn organism_count(&self) -> usize {
@@ -243,6 +249,7 @@ impl<R: Runtime> Sim<R> {
     // passes are skipped outright rather than launched over zero units, so a
     // run without founders costs exactly what it did before they existed.
     let organisms = self.organism_count();
+    let live = self.live_particles();
 
     let Self {
       client,
@@ -266,7 +273,7 @@ impl<R: Runtime> Sim<R> {
 
     crate::soil::update_soil(&mut self.soil, self.params.dt);
 
-    kernels::grid::build(client, sph, grid, params_buf, cfg, &mut |name, f| {
+    kernels::grid::build(client, sph, grid, params_buf, cfg, live, &mut |name, f| {
       run_timed(client, timing, timings, name, f);
     });
 
@@ -276,32 +283,41 @@ impl<R: Runtime> Sim<R> {
       timings,
       "calculate_particle_density",
       &mut || {
-        density::launch(client, sph, grid, soil_device, params_buf, cfg);
+        density::launch(client, sph, grid, soil_device, params_buf, cfg, live);
       },
     );
 
     run_timed(client, timing, timings, "calculate_evap_prob", &mut || {
-      evap::launch(client, sph, grid, soil_device, params_buf, cfg);
+      evap::launch(client, sph, grid, soil_device, params_buf, cfg, live);
     });
 
     run_timed(client, timing, timings, "calculate_accel", &mut || {
-      accel::launch(client, sph, vel_next, grid, soil_device, params_buf, cfg);
+      accel::launch(
+        client,
+        sph,
+        vel_next,
+        grid,
+        soil_device,
+        params_buf,
+        cfg,
+        live,
+      );
     });
     std::mem::swap(&mut sph.vel, vel_next);
 
     let ctr = *rng_counter;
     run_timed(client, timing, timings, "evaporate_particles", &mut || {
-      motion::launch_evaporate(client, sph, params_buf, ctr, cfg);
+      motion::launch_evaporate(client, sph, params_buf, ctr, cfg, live);
     });
     rng_counter.incr();
 
     run_timed(client, timing, timings, "move_particles", &mut || {
-      motion::launch_move(client, sph, params_buf, cfg);
+      motion::launch_move(client, sph, params_buf, cfg, live);
     });
 
     let ctr = *rng_counter;
     run_timed(client, timing, timings, "move_vapor_particles", &mut || {
-      motion::launch_move_vapor(client, sph, params_buf, ctr, cfg);
+      motion::launch_move_vapor(client, sph, params_buf, ctr, cfg, live);
     });
     rng_counter.incr();
 

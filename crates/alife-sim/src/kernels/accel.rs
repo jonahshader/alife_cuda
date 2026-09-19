@@ -244,10 +244,11 @@ pub fn launch<R: Runtime>(
   soil: &crate::soil::SoilDevice,
   params: &cubecl_runtime::server::Handle,
   cfg: Cfg,
+  live: super::LiveParticles,
 ) {
   calculate_accel::launch::<R>(
     client,
-    super::cube_count(cfg.num_particles as usize),
+    super::cube_count(live.get()),
     CubeDim::new_1d(super::CUBE_DIM),
     super::sph_args(sph),
     super::whole(vel_next, cfg.num_particles as usize * 2),
@@ -274,6 +275,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     // The reference needs the same densities the kernel just wrote.
     let seeded = h.read_particles();
@@ -288,6 +290,7 @@ mod tests {
       &h.soil_dev,
       &h.params_buf,
       h.cfg,
+      h.live(),
     );
     let actual: Vec<glam::Vec2> =
       crate::soa::download_field(&h.client, &h.vel_next, h.particles.len());
