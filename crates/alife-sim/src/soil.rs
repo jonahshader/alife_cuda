@@ -262,9 +262,11 @@ pub fn capillary_test(width: usize, height: usize) -> SoilHost {
   let pool_h = (height as f32 * 0.2) as usize; // bottom 20% is open water pool
   let terrain_h = height;
 
+  // The layout is a function of the width alone; build it once, not per row.
+  let columns = capillary_columns(width);
   for y in pool_h..terrain_h {
     let row = y * width;
-    for column in capillary_columns(width) {
+    for column in columns {
       let extent = column.extent;
       for x in extent.x0..extent.x1 {
         // `t` never reaches 1: the last cell of a gradient is one step short

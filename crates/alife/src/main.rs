@@ -53,8 +53,8 @@ struct Cli {
   #[arg(long, value_name = "PATH")]
   metrics: Option<PathBuf>,
 
-  /// Steps between metrics samples
-  #[arg(long, default_value_t = 100, value_name = "K")]
+  /// Steps between metrics samples (at least 1)
+  #[arg(long, default_value_t = 100, value_name = "K", value_parser = clap::value_parser!(u32).range(1..))]
   metrics_every: u32,
 
   /// Compute backend (default: cuda if available, else wgpu, else cpu)
