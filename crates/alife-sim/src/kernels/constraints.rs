@@ -157,7 +157,7 @@ pub fn project_angle(
 /// Particles limb `l` of organism `o` actually holds: its record's `length`,
 /// capped by the map's width, and zero for an absent record.
 #[cube]
-fn limb_len(limbs: &LimbArgs, record: u32, #[comptime] cfg: BodyCfg) -> u32 {
+pub fn limb_len(limbs: &LimbArgs, record: u32, #[comptime] cfg: BodyCfg) -> u32 {
   let mut n = 0u32;
   if limbs.part_type[record as usize] != 0u32 {
     n = limbs.length[record as usize];
@@ -170,7 +170,7 @@ fn limb_len(limbs: &LimbArgs, record: u32, #[comptime] cfg: BodyCfg) -> u32 {
 
 /// The particle holding `(organism, limb, index)`.
 #[cube]
-fn particle_at(map: &[u32], pbase: u32, l: u32, i: u32, #[comptime] cfg: BodyCfg) -> u32 {
+pub fn particle_at(map: &[u32], pbase: u32, l: u32, i: u32, #[comptime] cfg: BodyCfg) -> u32 {
   map[(pbase + l * comptime!(cfg.max_particles_per_limb) + i) as usize]
 }
 

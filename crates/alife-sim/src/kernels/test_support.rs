@@ -165,6 +165,9 @@ pub struct OrganismHarness {
   /// against the geometry the device pass will actually see.
   pub bodies: BodyState,
   pub brain: crate::brain::BrainState,
+  /// The light grid the sensors read, rebuilt from the fixture's bodies so a
+  /// sense test sees the shadow its own plant casts.
+  pub light: crate::life::light::LightGrid,
   pub params_buf: Handle,
 }
 
@@ -253,6 +256,15 @@ impl OrganismHarness {
     let soil_dev = SoilDevice::upload(&client, &soil.cells);
     let brain =
       crate::brain::BrainState::new(&client, crate::brain::BrainCfg::new(&pop.shape, &params));
+    let light = crate::life::light::LightGrid::new(&client, &soil, params.light_top);
+    crate::life::light::launch(
+      &client,
+      &sph,
+      &light,
+      &params_buf,
+      cfg,
+      super::LiveParticles(geom.num_particles),
+    );
 
     let mut harness = Self {
       client,
@@ -267,6 +279,7 @@ impl OrganismHarness {
       pop,
       bodies,
       brain,
+      light,
       params_buf,
     };
     harness.publish_geometry();
@@ -300,6 +313,7 @@ impl OrganismHarness {
       &self.soil_dev,
       &self.bodies,
       &self.pop,
+      &self.light,
       &self.brain.device,
       &self.params_buf,
       self.brain.cfg,

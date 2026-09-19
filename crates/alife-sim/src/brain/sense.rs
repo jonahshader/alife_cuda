@@ -13,6 +13,11 @@
 //! An absent limb, or a free organism slot, is written as zeros rather than
 //! left alone — a stale reading from a dead organism would otherwise be fed
 //! to whatever slot comes next.
+//!
+//! Light comes from the grid [`crate::life::light`] rebuilds every
+//! `life_interval` steps, so between rebuilds it is that many steps stale;
+//! energy is the organism's budget divided by `seed_threshold`, so 1 means
+//! "ready to seed".
 
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
@@ -24,7 +29,10 @@ use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
 use crate::genome::Population;
 use crate::genome::shape::SENSOR_DIM;
 use crate::kernels::soil_sample::{solid_fraction_at_pos, solid_fraction_at_pos_ref};
-use crate::kernels::{Cfg, P_SOIL_SIZE, P_TARGET_DENSITY, SoilArgs, cube_count, soil_args, whole};
+use crate::kernels::{
+  Cfg, P_SEED_THRESHOLD, P_SOIL_SIZE, P_TARGET_DENSITY, SoilArgs, cube_count, soil_args, whole,
+};
+use crate::life::light::{LightGrid, soil_cell_index, soil_cell_index_ref};
 use crate::particles::{SphDevice, SphHost};
 use crate::soil::{SoilDevice, SoilHost};
 
@@ -40,8 +48,10 @@ pub const S_ENERGY: usize = 4;
 /// Pure clay's solid fraction is exactly 0.50 (`1 - CLAY_POROSITY`), so a limb
 /// buried in undiluted clay reads *no* contact while the same limb in sand
 /// (0.62) or silt (0.55) reads contact. That is the spec's threshold taken
-/// literally; the energy chunk owns whether contact should instead come from
-/// soil presence, which would not have the edge.
+/// literally; whether contact should instead come from soil presence, which
+/// would not have the edge, is still open and belongs to the first milestone
+/// that acts on the channel — the life cycle reads soil through
+/// `solid_fraction_at_pos` directly rather than through this flag.
 pub const CONTACT_THRESHOLD: f32 = 0.5;
 
 /// One unit per `(organism, limb)`.
@@ -56,7 +66,9 @@ pub fn write_sensors(
   part_type: &[u32],
   map: &[u32],
   alive: &[u32],
+  energy: &[f32],
   soil: &SoilArgs,
+  light: &[f32],
   sensors: &mut [f32],
   params: &[f32],
   #[comptime] body: BodyCfg,
@@ -107,15 +119,18 @@ pub fn write_sensors(
     contact = 1.0f32;
   }
 
-  // Light and energy stay zero: the energy chunk owns the per-column
-  // occlusion scan and the per-organism energy budget, and writes these two
-  // slots when it lands. The slots exist now so the brain's shape does not
-  // change then.
-  sensors[base + S_LIGHT] = 0.0f32;
+  // Light at the limb's own cell, from the grid the life tick rebuilt. It is
+  // up to `life_interval` steps old between rebuilds, which is what a canopy
+  // that moves at a plant's pace is worth.
+  let cell = soil_cell_index(px, py, params[P_SOIL_SIZE as usize], world);
+
+  sensors[base + S_LIGHT] = light[cell as usize];
   sensors[base + S_WATER] = water;
   sensors[base + S_SOIL] = solid;
   sensors[base + S_CONTACT] = contact;
-  sensors[base + S_ENERGY] = 0.0f32;
+  // Normalized by the energy at which the organism reproduces, so 1 is "ready
+  // to seed" whatever the budget's absolute scale.
+  sensors[base + S_ENERGY] = energy[o as usize] / params[P_SEED_THRESHOLD as usize];
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -125,6 +140,7 @@ pub fn launch<R: Runtime>(
   soil: &SoilDevice,
   bodies: &BodyState,
   pop: &Population,
+  light: &LightGrid,
   brain: &super::BrainDevice,
   params: &Handle,
   cfg: BrainCfg,
@@ -141,7 +157,9 @@ pub fn launch<R: Runtime>(
     whole(&pop.device.limbs.part_type, cfg.limbs()),
     whole(&bodies.device.limb_particles, body.particle_map_len()),
     whole(&pop.device.organisms.alive, cfg.max_organisms as usize),
+    whole(&pop.device.organisms.energy, cfg.max_organisms as usize),
     soil_args(soil, &world),
+    whole(&light.light, light.cells),
     whole(&brain.sensors, cfg.sensors_len()),
     whole(params, crate::kernels::PARAM_COUNT),
     body,
@@ -155,6 +173,7 @@ pub fn write_sensors_ref(
   pop: &Population,
   bodies: &BodyState,
   soil: &SoilHost,
+  light: &[f32],
   params: &SimParams,
   geom: &crate::world::WorldGeometry,
 ) -> Vec<f32> {
@@ -177,12 +196,14 @@ pub fn write_sensors_ref(
       let water = (particles.density[first as usize] / params.target_density).clamp(0.0, 2.0);
       let solid = solid_fraction_at_pos_ref(pos, soil, geom.soil_cell_size, &world);
 
+      let cell = soil_cell_index_ref(pos, geom.soil_cell_size, &world);
+
       let base = t * SENSOR_DIM;
-      out[base + S_LIGHT] = 0.0;
+      out[base + S_LIGHT] = light[cell];
       out[base + S_WATER] = water;
       out[base + S_SOIL] = solid;
       out[base + S_CONTACT] = if solid > CONTACT_THRESHOLD { 1.0 } else { 0.0 };
-      out[base + S_ENERGY] = 0.0;
+      out[base + S_ENERGY] = pop.organisms.energy[o] / params.seed_threshold;
     }
   }
   out
@@ -193,41 +214,47 @@ mod tests {
   use super::*;
   use crate::kernels::test_support::{OrganismHarness, assert_close};
 
-  #[test]
-  fn matches_reference() {
-    let h = OrganismHarness::new();
-    h.run_sense();
-    let actual = h.brain.read_sensors(&h.client);
-    let expected = write_sensors_ref(
+  fn reference(h: &OrganismHarness) -> Vec<f32> {
+    write_sensors_ref(
       &h.particles,
       &h.pop,
       &h.bodies,
       &h.soil.cells,
+      &h.light.read(&h.client),
       &h.params,
       &h.geom,
-    );
+    )
+  }
+
+  #[test]
+  fn matches_reference() {
+    let mut h = OrganismHarness::new();
+    // Energy and light are the two channels that come from the life tick, so
+    // the fixture gives the organism a budget rather than leaving it at zero.
+    h.pop.organisms.energy[0] = 1.25;
+    h.pop.upload(&h.client);
+    h.run_sense();
+    let actual = h.brain.read_sensors(&h.client);
+    let expected = reference(&h);
     assert_eq!(actual.len(), expected.len());
     assert_close(&actual, &expected, 1e-6, "sensors");
+    assert_eq!(
+      actual[S_ENERGY],
+      1.25 / h.params.seed_threshold,
+      "the root limb's energy channel is the organism's budget, normalized"
+    );
   }
 
   /// The fixture's plant stands on the capillary-test terrain, so its root is
   /// in soil and its leaf is not: the soil and contact channels have to tell
-  /// them apart, and the two the energy chunk owns have to stay zero.
+  /// them apart, and every channel has to stay in its range.
   #[test]
-  fn the_slots_the_energy_chunk_owns_stay_zero() {
+  fn every_channel_stays_in_range() {
     let h = OrganismHarness::new();
-    let expected = write_sensors_ref(
-      &h.particles,
-      &h.pop,
-      &h.bodies,
-      &h.soil.cells,
-      &h.params,
-      &h.geom,
-    );
+    let expected = reference(&h);
     for t in 0..h.body_cfg.limb_count() {
       let s = &expected[t * SENSOR_DIM..(t + 1) * SENSOR_DIM];
-      assert_eq!(s[S_LIGHT], 0.0);
-      assert_eq!(s[S_ENERGY], 0.0);
+      assert!(s[S_LIGHT] >= 0.0 && s[S_LIGHT] <= h.params.light_top);
       assert!(s[S_WATER] >= 0.0 && s[S_WATER] <= 2.0);
       assert!(s[S_SOIL] >= 0.0 && s[S_SOIL] <= 1.0);
       assert!(s[S_CONTACT] == 0.0 || s[S_CONTACT] == 1.0);
