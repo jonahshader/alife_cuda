@@ -13,6 +13,9 @@
 use core::ops::Range;
 
 use crate::SimParams;
+// The head widths are the brain's own constants, so the parameter table and
+// the heads buffer the kernels index cannot disagree about them.
+use crate::brain::{ACTUATOR_DIM, GROWTH_DIM};
 
 /// Part-type codes a genome can use, and with it the height of the brain's
 /// embedding table. 0 is "absent"; 1–4 are root, stem, leaf and seed; 5–7 are
@@ -187,11 +190,11 @@ brain_slices! {
     out_o = |s| (s.d_latent, s.d_token), Weight;
     /// One logit per limb, added to the record's `growth_bias` before the
     /// softmax that splits a tick's growth over the growing limbs.
-    head_growth = |s| (s.d_token, 1), Weight;
-    growth_b = |s| (1, 1), Bias;
+    head_growth = |s| (s.d_token, GROWTH_DIM), Weight;
+    growth_b = |s| (1, GROWTH_DIM), Bias;
     /// Target joint angle, plus one reserved output.
-    head_actuator = |s| (s.d_token, 2), Weight;
-    actuator_b = |s| (1, 2), Bias;
+    head_actuator = |s| (s.d_token, ACTUATOR_DIM), Weight;
+    actuator_b = |s| (1, ACTUATOR_DIM), Bias;
     /// Initial value of the persistent latents; copied into latent state at
     /// birth, so it is genome rather than state.
     latent_init = |s| (s.n_latents, s.d_latent), Unit;
