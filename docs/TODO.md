@@ -8,10 +8,6 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-- **Genome + population tensors.** Discrete limb records and the
-  fixed-shape continuous brain tensor as SoA population buffers; Gaussian
-  and structural mutation operators; species distance over the discrete
-  section.
 - **Particle bodies.** Limbs as particle chains in the fluid's particle
   system with distance and base-joint angle constraints (rest length capped
   at the smoothing radius); root pinning in soil; part types root, stem,
@@ -34,6 +30,20 @@ the spec, don't re-derive it.
   controls in the spec (identical-soil isolation control, soil-position
   permutation, transplant test). The capillary test reset must publish its
   column extents so per-column metrics can be computed.
+
+Left open by the genome chunk, for the chunk that first steps organisms:
+
+- `crates/alife-sim/src/genome/` is built and tested but nothing in
+  `sim.rs` touches it. The life-cycle chunk owns wiring it: founders into
+  slots at startup, `slots::claim_free_slots` then `mutate::mutate` on
+  birth, and advancing the `step` word the mutation kernels key on. It also
+  owns setting a newborn's `alive`, `parent_id`, `birth_step` and
+  `lineage_id`, and copying its `latent_init` slice into latent state —
+  mutation writes only the genome.
+- `mutate::MutateInputs` takes the newborn list as device buffers with a
+  device-resident count, so the life-cycle chunk never has to read a count
+  back to the host; it does have to give the launcher a host-side upper
+  bound on the list length.
 
 ## Inspection & verification
 

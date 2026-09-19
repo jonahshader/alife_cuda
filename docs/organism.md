@@ -223,23 +223,35 @@ via atomics.
 - Discrete, `[max_organisms × max_limbs]`: `part_type` (u8, 0 = absent;
   1 root, 2 stem, 3 leaf, 4 seed, 5–7 reserved), `length` (u8, particles),
   `parent` (u8 limb index; the root limb is its own parent), `child_slot`
-  (u8), `grow_angle` (f32, the rest angle at the base joint), `identity`
-  (`[f32; 4]`).
+  (u8), `grow_angle` (f32, the rest angle at the base joint, measured
+  against the parent segment's direction — the root, being its own parent,
+  measures against the world frame instead, 0 at +x and counter-clockwise),
+  `identity` (`[f32; 4]`).
 - Continuous, `[max_organisms × BrainShape::param_count()]` f32 on the
   host as the master copy, uploaded per organism on birth; the fp16 device
   shadow is the brain chunk's concern.
 - Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor), plus
   the runtime `alive` flag, `energy`, and the latent state
   `[max_organisms × n_latents × d_latent]`, which is state, not genome.
-- Mutation is a kernel over newborn organisms, Threefry-keyed by child slot
-  and step: Gaussian perturbation of the brain tensor (`mutation_sigma`),
-  and with probability `structural_rate` one structural edit: add a limb
-  (random present parent, first absent record, random type and length,
-  child slot = next free), remove a limb (mark absent, cascade to its
-  children), or retype; identity and grow angle get their own small
-  Gaussian. Species distance is over the discrete section: number of
-  differing part types plus normalized identity distance, computed on the
-  host for metrics.
+- Mutation is two kernels over newborn organisms, Threefry-keyed by
+  `(child slot, step, stream)` and countered by the draw's index within its
+  stream, so what a child gets depends on nothing but its slot and the
+  step. One is a draw per brain parameter over `newborns × param_count`;
+  the other is one unit per newborn, serial over that organism's limb
+  records — one unit for both would put 18,890 serial iterations on a
+  single thread. Both copy the parent's section before perturbing it.
+  Gaussian perturbation of the brain tensor (`mutation_sigma`), and with
+  probability `structural_rate` one structural edit chosen uniformly: add a
+  limb (random present parent, first absent record, random type 1–4, random
+  length, child slot = the parent's existing child count, a uniform grow
+  angle and a fresh sigma-1 identity), remove a limb (a random present
+  non-root limb, marked absent and cascaded to its descendants), or retype
+  (a random present non-root limb, to a type 2–4). The root is never
+  removed or retyped. Identity and grow angle get their own small Gaussian,
+  on present records only. Species distance is over the discrete section:
+  the number of differing part types (absent counts as a type) plus the
+  mean identity L2 over the limbs present in both, the sum divided by
+  `max_limbs`, computed on the host for metrics.
 
 **Brain shape** (`BrainShape`, owned by the genome chunk, consumed by the
 brain chunk). Defaults: `d_token` 32, `d_latent` 32, `n_latents` 8,
@@ -263,8 +275,10 @@ range so both chunks index the same tensor:
 | `head_actuator`, `actuator_b` | `d_token × 2`, `2` (target angle, reserved) |
 | `latent_init` | `n_latents × d_latent` |
 
-About 18.9k parameters at the defaults. Initialization is Gaussian with
-sigma `1/sqrt(fan_in)` per slice. One tick of the brain: tokens from limb
+18,890 parameters at the defaults. Initialization is Gaussian with sigma
+`1/sqrt(fan_in)` per slice, where a weight slice is stored `[input dim ×
+output dim]` so its fan-in is its row count; biases are zero and
+`latent_init` is sigma 1. One tick of the brain: tokens from limb
 geometry and sensors; input cross-attention latents→tokens; latent
 self-attention; MLP; gated update of the persistent latents; output
 cross-attention tokens→latents; heads per limb. Single-head attention,
@@ -338,6 +352,16 @@ owns sense → forward → apply.
   step; three barrier-free launches cost the GPU backends a few µs and made
   the CPU runtime usable. A cube-wide barrier is not a portable primitive
   across this runtime set at this maturity.
+- 2026-09-19 — **A kernel that calls `ln` or `cos` is not bit-identical
+  across backends.** The mutation kernels' Box–Muller draw matches its
+  plain-Rust twin exactly on the CPU runtime, but CUDA lands 2.4e-7 and
+  wgpu 4.8e-7 away from it — about one ulp at these magnitudes, from the
+  backends' own transcendental implementations. Integer decisions taken
+  from the same RNG words (which structural edit, which limb) still match
+  exactly everywhere, and the fluid's bit-reproducibility is untouched
+  because no fluid kernel calls a transcendental. Rule for later kernels:
+  exact within one runtime, tolerance across them, and keep anything that
+  must agree across backends on the integer side of the draw.
 - 2026-09-19 — **The GUI runs the sim on the wgpu runtime, always.** The
   renderer binds CubeCL's own buffers; a sim on the CUDA or CPU runtime
   would have to copy every buffer through the host each frame, which is the
