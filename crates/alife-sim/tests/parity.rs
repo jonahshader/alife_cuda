@@ -6,8 +6,10 @@
 //! step from an identical state, the per-field difference between this port
 //! and the C++ must be no worse than the difference between two C++ runs.
 //!
-//! The reference dumps are not checked in. Regenerating them is documented in
-//! `crates/alife-sim/README.md`; without them these tests skip.
+//! The reference dumps are checked in under `resources/parity/` so a machine
+//! that cannot build the C++ (no CUDA) can still run this. Regenerating them
+//! is documented in `crates/alife-sim/README.md`; without them these tests
+//! skip.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
@@ -18,11 +20,11 @@ use alife_sim::sim::InitialState;
 use alife_sim::{SimParams, dump};
 
 fn parity_dir() -> PathBuf {
-  // crates/alife-sim -> workspace root -> target/parity
+  // crates/alife-sim -> workspace root -> resources/parity
   Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("../../target/parity")
+    .join("../../resources/parity")
     .canonicalize()
-    .unwrap_or_else(|_| PathBuf::from("target/parity"))
+    .unwrap_or_else(|_| PathBuf::from("resources/parity"))
 }
 
 const RUNTIMES: [RuntimeKind; 3] = [RuntimeKind::Cpu, RuntimeKind::Cuda, RuntimeKind::Wgpu];

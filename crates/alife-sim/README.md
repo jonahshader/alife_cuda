@@ -24,22 +24,22 @@ says why); without it, `available(Cuda)` is false and that backend is skipped.
 
 `tests/parity.rs` compares one step of this port against the C++ binary, and
 measures how much the C++ differs from itself over the same two steps. That
-floor is the bar. The dumps are not checked in — they are 2.5 MB each and are
-reproducible in seconds — so the test skips when they are absent.
+floor is the bar. The dumps are checked in under `resources/parity/` (2.5 MB
+each, written by the C++ binary at commit `2cb23ab`) so a machine without CUDA
+can still run the check; the test skips when they are absent.
 
-From the workspace root, with the C++ tree built
+To regenerate them, from the workspace root with the C++ tree built
 (`cmake -S . -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j16`):
 
 ```
-mkdir -p target/parity
 ./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 1 \
-  --dump target/parity/ref1.bin
+  --dump resources/parity/ref1.bin
 ./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
-  --dump target/parity/ref2a.bin
+  --dump resources/parity/ref2a.bin
 ./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
-  --dump target/parity/ref2b.bin
+  --dump resources/parity/ref2b.bin
 ./build/alife_cuda --headless --terrain-mode 1 --seed 42 --iterations 2 \
-  --dump target/parity/ref2c.bin
+  --dump resources/parity/ref2c.bin
 ```
 
 `ref1.bin` is the starting state; the `ref2*.bin` runs are three samples of the
