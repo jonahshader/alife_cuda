@@ -10,9 +10,12 @@ pub mod kernels;
 pub mod params;
 pub mod particles;
 pub mod rng;
+pub mod runtime;
+pub mod sim;
 pub mod soa;
 pub mod soil;
 pub mod timing;
+pub mod wgpu_backend;
 pub mod world;
 
 pub use params::{SimParams, SimParamsCli};
