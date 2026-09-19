@@ -181,6 +181,74 @@ const SLIDERS: &[(&str, &[Control])] = &[
   ]),
 ];
 
+/// One point of the population plot: the counts at a step.
+#[derive(Clone, Copy)]
+struct PopSample {
+  step: u32,
+  organisms: usize,
+  births: u64,
+  deaths: u64,
+}
+
+/// The population over the run, for the plot under the world.
+///
+/// Every count here is host-side already — the life tick owns `alive` and
+/// the counters — so a sample costs nothing on the device. The series is
+/// kept to a bounded number of points: when it fills, every other point is
+/// dropped and the sampling interval doubles, so a run of any length plots
+/// at the same cost and the same apparent resolution.
+struct PopHistory {
+  samples: Vec<PopSample>,
+  /// Steps between samples; doubles as the series thins.
+  every: u32,
+}
+
+impl PopHistory {
+  const CAPACITY: usize = 2048;
+
+  fn new() -> Self {
+    Self {
+      samples: Vec::with_capacity(Self::CAPACITY),
+      every: 1,
+    }
+  }
+
+  /// Record the current counts if this step is due one.
+  fn record(&mut self, sim: &Sim<cubecl_wgpu::WgpuRuntime>) {
+    let step = sim.step_count();
+    let due = match self.samples.last() {
+      Some(last) => step >= last.step + self.every,
+      None => true,
+    };
+    if !due {
+      return;
+    }
+    let counters = sim.counters();
+    self.samples.push(PopSample {
+      step,
+      organisms: sim.organism_count(),
+      births: counters.births,
+      deaths: counters.deaths,
+    });
+    if self.samples.len() >= Self::CAPACITY {
+      let mut keep = 0;
+      self.samples.retain(|_| {
+        keep += 1;
+        keep % 2 == 1
+      });
+      self.every *= 2;
+    }
+  }
+
+  fn series(&self, y: impl Fn(&PopSample) -> f64) -> Vec<[f64; 2]> {
+    self
+      .samples
+      .iter()
+      .map(|s| [f64::from(s.step), y(s)])
+      .collect()
+  }
+}
+
 struct SimApp {
   sim: Sim<cubecl_wgpu::WgpuRuntime>,
   setup: WgpuSetup,
@@ -188,9 +256,10 @@ struct SimApp {
   params: SimParams,
   seed: u64,
 
-  /// Founders seeded at startup and again on every rebuild, so Reset gives
-  /// back the same world.
+  /// Founders seeded on every rebuild, so Reset gives back the same world.
+  /// The panel edits this; it takes effect on the next Reset.
   founders: usize,
+  history: PopHistory,
 
   running: bool,
   step_once: bool,
@@ -234,6 +303,8 @@ impl SimApp {
     ));
 
     let bounds = sim.geometry().bounds;
+    let mut history = PopHistory::new();
+    history.record(&sim);
     Ok(Self {
       sim,
       setup,
@@ -241,6 +312,7 @@ impl SimApp {
       params,
       seed,
       founders,
+      history,
       running: true,
       step_once: false,
       steps_per_frame: 1,
@@ -256,6 +328,26 @@ impl SimApp {
     let (_device, client) = client_on(&self.setup);
     self.sim = Sim::new(client, self.params, self.seed, None);
     alife_sim::bodies::spawn_founders(&mut self.sim, self.founders);
+    self.history = PopHistory::new();
+    self.history.record(&self.sim);
+  }
+
+  fn population_plot(&self, ui: &mut egui::Ui) {
+    use egui_plot::{Legend, Line, Plot};
+    let h = &self.history;
+    Plot::new("population")
+      .height(150.0)
+      .legend(Legend::default())
+      .include_y(0.0)
+      .allow_drag(false)
+      .allow_zoom(false)
+      .allow_scroll(false)
+      .x_axis_label("step")
+      .show(ui, |plot| {
+        plot.line(Line::new("organisms", h.series(|s| s.organisms as f64)));
+        plot.line(Line::new("births", h.series(|s| s.births as f64)));
+        plot.line(Line::new("deaths", h.series(|s| s.deaths as f64)));
+      });
   }
 
   fn controls(&mut self, ui: &mut egui::Ui) {
@@ -279,13 +371,21 @@ impl SimApp {
       }
     });
     ui.add(egui::Slider::new(&mut self.steps_per_frame, 1..=16).text("steps per frame"));
+    ui.horizontal(|ui| {
+      let max = usize::try_from(p.max_organisms).unwrap_or(0);
+      ui.add(egui::DragValue::new(&mut self.founders).range(0..=max));
+      ui.label("founders (on Reset)");
+    });
     // Nothing here reads the particle buffers back: counting the vapor would
-    // cost a device round trip every frame.
+    // cost a device round trip every frame. The organism counts are host-side.
+    let counters = self.sim.counters();
     ui.label(format!(
-      "step {}  ·  {} particle slots  ·  {} organisms",
+      "step {}  ·  {} particle slots\n{} organisms  ·  {} births  ·  {} deaths",
       self.sim.step_count(),
       self.sim.geometry().num_particles,
       self.sim.organism_count(),
+      counters.births,
+      counters.deaths,
     ));
 
     for (heading, controls) in SLIDERS {
@@ -340,6 +440,7 @@ impl eframe::App for SimApp {
       // same queue; syncing here keeps the frame's contents well-defined.
       self.sim.sync();
       self.step_once = false;
+      self.history.record(&self.sim);
     }
 
     egui::Panel::right("controls")
@@ -347,6 +448,8 @@ impl eframe::App for SimApp {
       .show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| self.controls(ui));
       });
+
+    egui::Panel::bottom("population").show(ui, |ui| self.population_plot(ui));
 
     egui::CentralPanel::no_frame()
       .frame(egui::Frame::NONE.fill(egui::Color32::from_rgb(8, 10, 20)))
