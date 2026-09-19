@@ -169,6 +169,8 @@ sim_params! {
         "Number of persistent brain latents";
     brain_trunk_hidden: i32 = 64, "organism.brain_trunk_hidden", "brain-trunk-hidden",
         "Hidden width of the brain's latent MLP trunk";
+    brain_fp16: i32 = 0, "organism.brain_fp16", "brain-fp16",
+        "Store the brain's device weights as fp16 (accumulation stays fp32)";
     mutation_sigma: f32 = 0.02, "organism.mutation_sigma", "mutation-sigma",
         "Gaussian sigma applied to a newborn's brain row";
     identity_sigma: f32 = 0.05, "organism.identity_sigma", "identity-sigma",

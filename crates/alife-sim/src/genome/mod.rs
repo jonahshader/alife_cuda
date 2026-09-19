@@ -18,7 +18,7 @@ pub mod species;
 
 pub use population::{
   Genome, LimbDevice, LimbHost, LimbRecord, OrganismDevice, OrganismHost, PartType, Population,
-  PopulationDevice,
+  PopulationDevice, Weights,
 };
 pub use shape::{BrainShape, FEATURE_DIM, IDENTITY_DIM, InitKind, N_TYPES, SENSOR_DIM, SliceSpec};
 pub use species::species_distance;

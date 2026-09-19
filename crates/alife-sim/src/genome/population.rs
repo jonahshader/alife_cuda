@@ -205,6 +205,20 @@ impl Genome {
   }
 }
 
+/// How the brain tensor is stored on the device, and so which element type
+/// the kernels that read it are instantiated at.
+///
+/// `docs/organism.md` asks for fp16 weights with fp32 accumulate. Every
+/// kernel that reads the brain is generic over this and accumulates in fp32
+/// either way, so the choice changes nothing but the bytes read — and the
+/// tolerance a comparison against the reference needs. `--brain-fp16` picks
+/// it; `docs/perf.md` has the measurement behind the default.
+#[derive(Debug, Clone)]
+pub enum Weights {
+  F32(Handle),
+  F16(Handle),
+}
+
 /// The device mirror of every population buffer.
 #[derive(Debug, Clone)]
 pub struct PopulationDevice {
@@ -212,6 +226,10 @@ pub struct PopulationDevice {
   pub organisms: OrganismDevice,
   /// `[max_organisms x param_count()]` fp32, the brain tensor.
   pub brain: Handle,
+  /// The same tensor in fp16, present only when `--brain-fp16` is on. The
+  /// fp32 copy stays the master: this is a shadow the brain kernels read,
+  /// rewritten from it by [`Population::upload`].
+  pub brain_f16: Option<Handle>,
   /// `[max_organisms x n_latents x d_latent]` fp32, the persistent latents.
   pub latents: Handle,
 }
@@ -230,6 +248,9 @@ pub struct Population {
   pub brain: Vec<f32>,
   /// `[max_organisms x n_latents x d_latent]`, row-major.
   pub latents: Vec<f32>,
+  /// Whether the device carries an fp16 shadow of the brain tensor beside the
+  /// fp32 master (`--brain-fp16`).
+  pub fp16: bool,
   pub device: PopulationDevice,
 }
 
@@ -245,11 +266,13 @@ impl Population {
     organisms.lineage_id.fill(NO_PARENT);
     let brain = vec![0.0f32; max_organisms * shape.param_count()];
     let latents = vec![0.0f32; max_organisms * shape.latent_state_len()];
+    let fp16 = params.brain_fp16 != 0;
 
     let device = PopulationDevice {
       limbs: LimbDevice::upload(client, &limbs),
       organisms: OrganismDevice::upload(client, &organisms),
       brain: client.create_from_slice(bytemuck::cast_slice(&brain)),
+      brain_f16: fp16.then(|| upload_f16(client, &brain)),
       latents: client.create_from_slice(bytemuck::cast_slice(&latents)),
     };
 
@@ -262,7 +285,16 @@ impl Population {
       organisms,
       brain,
       latents,
+      fp16,
       device,
+    }
+  }
+
+  /// Which device copy of the brain the kernels read.
+  pub fn weights(&self) -> Weights {
+    match &self.device.brain_f16 {
+      Some(handle) => Weights::F16(handle.clone()),
+      None => Weights::F32(self.device.brain.clone()),
     }
   }
 
@@ -330,11 +362,18 @@ impl Population {
 
   /// Host to device, every buffer. Handles are replaced, as
   /// [`crate::particles::SphDevice::upload`] does.
+  ///
+  /// This is also where the fp16 shadow is refreshed. It is derived from the
+  /// fp32 master and never read back, so the two cannot drift: the only way
+  /// to change a brain row today is to write it here and upload, and when the
+  /// life-cycle chunk moves births onto the device, whatever writes a row
+  /// there owns rewriting its half of the shadow.
   pub fn upload<R: Runtime>(&mut self, client: &ComputeClient<R>) {
     self.device = PopulationDevice {
       limbs: LimbDevice::upload(client, &self.limbs),
       organisms: OrganismDevice::upload(client, &self.organisms),
       brain: client.create_from_slice(bytemuck::cast_slice(&self.brain)),
+      brain_f16: self.fp16.then(|| upload_f16(client, &self.brain)),
       latents: client.create_from_slice(bytemuck::cast_slice(&self.latents)),
     };
   }
@@ -346,6 +385,19 @@ impl Population {
     self.brain = read_f32(client, &self.device.brain, self.brain.len());
     self.latents = read_f32(client, &self.device.latents, self.latents.len());
   }
+}
+
+/// Narrow an fp32 tensor to fp16 and upload it.
+///
+/// Byte-assembled rather than `bytemuck`-cast: `half`'s `bytemuck` feature is
+/// not on, and a `to_le_bytes` per value is a startup-and-birth cost, not a
+/// per-step one.
+fn upload_f16<R: Runtime>(client: &ComputeClient<R>, values: &[f32]) -> Handle {
+  let bytes: Vec<u8> = values
+    .iter()
+    .flat_map(|v| half::f16::from_f32(*v).to_le_bytes())
+    .collect();
+  client.create_from_slice(&bytes)
 }
 
 /// Read `n` floats back from a device buffer.
