@@ -8,8 +8,9 @@ use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
 use super::{
-  Cfg, P_BOUNDS_X, P_BOUNDS_Y, P_COLLISION_DAMPING, P_CONDENSE_ALT_POWER, P_CONDENSE_RATE, P_DT,
-  P_DT_PREDICT, P_EVAP_RATE, P_VAPOR_BUOYANCY, P_VAPOR_DRIFT, SphArgs,
+  Cfg, KIND_LIQUID, KIND_VAPOR, P_BOUNDS_X, P_BOUNDS_Y, P_COLLISION_DAMPING, P_CONDENSE_ALT_POWER,
+  P_CONDENSE_RATE, P_DT, P_DT_PREDICT, P_EVAP_RATE, P_VAPOR_BUOYANCY, P_VAPOR_DRIFT, SphArgs,
+  in_fluid,
 };
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20, threefry4x32_20_ref, u01, u01_ref};
@@ -33,7 +34,8 @@ pub fn evaporate_particles(
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 0u32 {
+  // Liquid only: a body particle never evaporates.
+  if sph.state[i] != KIND_LIQUID {
     terminate!();
   }
 
@@ -58,7 +60,9 @@ pub fn move_particles(sph: &mut SphArgs, params: &[f32], #[comptime] cfg: Cfg) {
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 0u32 {
+  // Body particles integrate exactly like liquid; the constraint pass then
+  // projects them onto their limb.
+  if !in_fluid(sph.state[i]) {
     terminate!();
   }
 
@@ -120,7 +124,7 @@ pub fn move_vapor_particles(
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 1u32 {
+  if sph.state[i] != KIND_VAPOR {
     terminate!();
   }
 
@@ -215,7 +219,7 @@ pub fn move_particles_ref(
 ) {
   let (bounds_x, bounds_y) = (geom.bounds.x, geom.bounds.y);
   for i in 0..particles.len() {
-    if particles.state[i] != ParticleKind::Liquid {
+    if !particles.state[i].in_fluid() {
       continue;
     }
     let vel = particles.vel[i];

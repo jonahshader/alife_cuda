@@ -6,8 +6,9 @@ use cubecl::prelude::*;
 use super::grid::{GridDevice, neighbour_cell, neighbours, unwrap_x};
 use super::soil_sample::{presence_at_pos, presence_at_pos_ref};
 use super::{
-  Cfg, GridArgs, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, SoilArgs, SphArgs,
-  density_kernel_gradient_component, density_kernel_gradient_component_ref, particle_to_cid,
+  Cfg, GridArgs, KIND_LIQUID, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, SoilArgs,
+  SphArgs, density_kernel_gradient_component, density_kernel_gradient_component_ref,
+  particle_to_cid,
 };
 use crate::particles::{ParticleKind, SphHost};
 use crate::soil::SoilHost;
@@ -26,7 +27,9 @@ pub fn calculate_evap_prob(
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 0u32 {
+  // Liquid only: a body particle never evaporates, and a free slot is not a
+  // particle at all.
+  if sph.state[i] != KIND_LIQUID {
     sph.evap_prob[i] = 0.0f32;
     terminate!();
   }

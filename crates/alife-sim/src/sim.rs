@@ -63,13 +63,19 @@ impl<R: Runtime> Sim<R> {
     initial: Option<InitialState>,
   ) -> Self {
     let mut geom = WorldGeometry::from_params(&params);
-    let (particles, step_count) = match initial {
+    let (mut particles, step_count) = match initial {
       Some(state) => {
-        geom = geom.with_particle_count(state.particles.len());
-        (state.particles, state.step_count)
+        // A dump carries no organisms, so its body particles cannot be
+        // resumed: the fluid it held becomes the fluid capacity and the body
+        // slots are re-reserved empty on top.
+        let fluid = state.particles.fluid_only();
+        geom = geom.with_fluid_count(fluid.len());
+        (fluid, state.step_count)
       }
       None => (initial_particles(&geom, &params, seed), 0),
     };
+    particles.push_free_slots(geom.body_slots);
+    debug_assert_eq!(particles.len(), geom.num_particles);
     let cfg = geom.cfg();
 
     let soil = SoilGrid::new(
@@ -281,14 +287,14 @@ fn run_timed<R: Runtime>(
   }
 }
 
-/// The initial particle field.
+/// The initial fluid particles. The body slots are appended by the caller.
 ///
 /// The C++ draws from `std::default_random_engine` with libstdc++'s own
 /// distributions, which no other implementation reproduces, so this cannot be
 /// and is not the same field at the same seed. Parity against the C++ is
 /// therefore checked by loading a C++ dump (`--load`), not by seeding alike.
 pub fn initial_particles(geom: &WorldGeometry, params: &SimParams, seed: u64) -> SphHost {
-  let n = geom.num_particles;
+  let n = geom.fluid_particles;
   let mut particles = SphHost::new(n);
   let ctr = [seed as u32, (seed >> 32) as u32, 0, 0];
 

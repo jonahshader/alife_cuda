@@ -1,5 +1,5 @@
-//! `calculate_particle_density`: SPH density at each liquid particle, plus the
-//! solid fraction of the soil underneath it.
+//! `calculate_particle_density`: SPH density at each liquid or body particle,
+//! plus the solid fraction of the soil underneath it.
 
 use cubecl::prelude::*;
 
@@ -7,10 +7,10 @@ use super::grid::{GridDevice, neighbour_cell, neighbours, unwrap_x};
 use super::soil_sample::{solid_density_at_pos, solid_density_at_pos_ref};
 use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CELL_SIZE, P_SMOOTHING_RADIUS, P_SOIL_SIZE, P_TARGET_DENSITY,
-  SoilArgs, SphArgs, density_kernel, density_kernel_ref, near_density_kernel,
+  SoilArgs, SphArgs, density_kernel, density_kernel_ref, in_fluid, near_density_kernel,
   near_density_kernel_ref, particle_to_cid,
 };
-use crate::particles::{ParticleKind, SphHost};
+use crate::particles::SphHost;
 use crate::soil::SoilHost;
 
 /// Density and near-density at a position, gathered over the 3x3 cell
@@ -27,7 +27,10 @@ pub fn calculate_particle_density(
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 0u32 {
+  // Body particles are SPH boundary particles: they carry mass, they are in
+  // the grid, and they need a density of their own because `calculate_accel`
+  // divides by it.
+  if !in_fluid(sph.state[i]) {
     terminate!();
   }
 
@@ -88,7 +91,7 @@ pub fn calculate_particle_density_ref(
 ) {
   let bounds_x = geom.bounds.x;
   for i in 0..particles.len() {
-    if particles.state[i] != ParticleKind::Liquid {
+    if !particles.state[i].in_fluid() {
       continue;
     }
     let pos = particles.pos[i];

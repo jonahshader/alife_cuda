@@ -52,6 +52,11 @@ impl Harness {
       // Big enough that nothing evaporates by accident, small enough
       // that the probability path still runs.
       evap_rate: 0.01,
+      // A body capacity in proportion to this world: the default 256 x 16 x 8
+      // would bury 144 fluid particles under 32,768 free slots.
+      max_organisms: 4,
+      max_limbs: 5,
+      max_particles_per_limb: 3,
       ..SimParams::default()
     };
     let geom = WorldGeometry::from_params(&params);
@@ -130,8 +135,11 @@ impl Harness {
 
 /// Deterministic particles: a spread over the lower half of the world, plus
 /// deliberate placements at the wrap seam, the floor and the ceiling.
+///
+/// Every particle kind is present: a fixture without body and free slots
+/// would leave the guards that tell them apart untested.
 fn fixture_particles(geom: &WorldGeometry) -> SphHost {
-  let n = geom.num_particles;
+  let n = geom.fluid_particles;
   let mut particles = SphHost::new(n);
   let ctr = [0xFACE, 0, 0, 0];
 
@@ -146,12 +154,21 @@ fn fixture_particles(geom: &WorldGeometry) -> SphHost {
     particles.vel[i] = Vec2::new((u01_ref(r[2]) - 0.5) * 0.4, (u01_ref(r[3]) - 0.5) * 0.4);
     particles.mass[i] = 0.9 + 0.2 * u01_ref(r[2]);
     particles.sym_break[i] = (r[3] % 256) as u8;
-    // Every seventh particle is vapor, so every `state` guard is live.
+    // Every seventh particle is vapor and every eleventh a body particle, so
+    // every `state` guard is live.
     particles.state[i] = if i % 7 == 0 {
       ParticleKind::Vapor
+    } else if i % 11 == 0 {
+      ParticleKind::Body
     } else {
       ParticleKind::Liquid
     };
+    if particles.state[i] == ParticleKind::Body {
+      particles.organism[i] = (i % 3) as u32;
+      particles.limb[i] = (i % 4) as u8;
+      particles.index_in_limb[i] = (i % 5) as u8;
+      particles.part_type[i] = crate::genome::PartType::from_byte(1 + (i % 4) as u8);
+    }
   }
 
   // Corner cases, in cells the neighbour loops have to wrap or clamp into.
@@ -170,6 +187,9 @@ fn fixture_particles(geom: &WorldGeometry) -> SphHost {
     particles.state[k] = ParticleKind::Liquid;
   }
 
+  // The body-slot capacity, exactly as a real world reserves it: parked
+  // outside the grid and skipped by every kernel.
+  particles.push_free_slots(geom.body_slots);
   particles
 }
 

@@ -40,6 +40,13 @@ pub struct WorldGeometry {
   pub soil_width: usize,
   pub soil_height: usize,
   pub soil_cell_size: f32,
+  /// Fluid particles: the ones a fresh world starts with, or the non-body
+  /// particles a dump carried.
+  pub fluid_particles: usize,
+  /// Body slots reserved on top of the fluid, `max_organisms x max_limbs x
+  /// max_particles_per_limb`. They start [`crate::ParticleKind::Free`].
+  pub body_slots: usize,
+  /// `fluid_particles + body_slots`; the length of every particle buffer.
   pub num_particles: usize,
 }
 
@@ -60,6 +67,13 @@ impl WorldGeometry {
     // y does not wrap and a partial top row is harmless, so it rounds up
     let grid_height = (bounds.y / cell_size).ceil() as usize;
 
+    let fluid_particles = params.particles_per_cell.max(0) as usize * grid_width * grid_height;
+    // Capacity is fixed at start, as `organism.md` requires: no buffer grows
+    // once the kernels have baked `num_particles` in as a comptime constant.
+    let body_slots = params.max_organisms.max(0) as usize
+      * params.max_limbs.max(0) as usize
+      * params.max_particles_per_limb.max(0) as usize;
+
     Self {
       bounds,
       grid_width,
@@ -69,7 +83,9 @@ impl WorldGeometry {
       soil_width: (params.world_width / params.soil_cell_size).round() as usize,
       soil_height: (params.world_height / params.soil_cell_size).round() as usize,
       soil_cell_size: params.soil_cell_size,
-      num_particles: params.particles_per_cell.max(0) as usize * grid_width * grid_height,
+      fluid_particles,
+      body_slots,
+      num_particles: fluid_particles + body_slots,
     }
   }
 
@@ -94,10 +110,12 @@ impl WorldGeometry {
     }
   }
 
-  /// Adopt a particle count that came from a dump instead of from the
-  /// `particles_per_cell` default.
-  pub fn with_particle_count(mut self, n: usize) -> Self {
-    self.num_particles = n;
+  /// Adopt a fluid count that came from a dump instead of from the
+  /// `particles_per_cell` default. The body capacity is unchanged and still
+  /// sits on top of it.
+  pub fn with_fluid_count(mut self, n: usize) -> Self {
+    self.fluid_particles = n;
+    self.num_particles = n + self.body_slots;
     self
   }
 }
@@ -112,8 +130,21 @@ mod tests {
     assert_eq!(geom.grid_width, 160);
     assert_eq!(geom.grid_height, 80);
     assert_eq!(geom.cell_size, 0.2);
-    assert_eq!(geom.num_particles, 51_200);
+    assert_eq!(geom.fluid_particles, 51_200);
     assert_eq!(geom.soil_width, 320);
     assert_eq!(geom.soil_height, 160);
+  }
+
+  #[test]
+  fn body_slots_sit_on_top_of_the_fluid() {
+    let params = SimParams::default();
+    let geom = WorldGeometry::from_params(&params);
+    assert_eq!(geom.body_slots, 256 * 16 * 8);
+    assert_eq!(geom.num_particles, geom.fluid_particles + geom.body_slots);
+
+    // A dump replaces the fluid count and leaves the capacity alone.
+    let loaded = geom.with_fluid_count(1_000);
+    assert_eq!(loaded.fluid_particles, 1_000);
+    assert_eq!(loaded.num_particles, 1_000 + geom.body_slots);
   }
 }

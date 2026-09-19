@@ -24,9 +24,10 @@ use cubecl_runtime::server::Handle;
 
 use super::scan;
 use super::{
-  Cfg, GridArgs, P_CELL_SIZE, SCAN_THREADS, SphArgs, cube_count, particle_to_cid, sph_args, whole,
+  Cfg, GridArgs, P_CELL_SIZE, SCAN_THREADS, SphArgs, cube_count, in_fluid, particle_to_cid,
+  sph_args, whole,
 };
-use crate::particles::{ParticleKind, SphDevice, SphHost};
+use crate::particles::{SphDevice, SphHost};
 
 /// Marks a particle that is not in the grid at all — the C++ skips vapor with
 /// `if (sph.state[i] != 0) return;` before ever computing a cell.
@@ -67,8 +68,9 @@ pub fn reset_cell_counts(cell_counts: &mut [u32], #[comptime] cfg: Cfg) {
   }
 }
 
-/// Histogram: how many liquid particles land in each cell, and which cell each
-/// particle landed in.
+/// Histogram: how many particles land in each cell, and which cell each
+/// particle landed in. Liquid and body particles are in the grid; vapor and
+/// free slots are not.
 #[cube(launch)]
 pub fn count_cells(
   sph: &SphArgs,
@@ -81,7 +83,7 @@ pub fn count_cells(
   if i >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[i] != 0u32 {
+  if !in_fluid(sph.state[i]) {
     particle_cell[i] = NOT_IN_GRID;
     terminate!();
   }
@@ -96,7 +98,7 @@ pub fn count_cells(
   cell_counts[cid as usize].fetch_add(1u32);
 }
 
-/// Place every liquid particle into its cell's slice. The slot a particle wins
+/// Place every in-grid particle into its cell's slice. The slot a particle wins
 /// is race-dependent; `sort_cells` below makes the outcome deterministic.
 #[cube(launch)]
 pub fn scatter_ids(
@@ -241,7 +243,7 @@ pub fn build_ref(particles: &SphHost, cell_size: f32, cfg: &Cfg) -> GridRef {
   let mut particle_cell = vec![NOT_IN_GRID; particles.len()];
 
   for (i, slot) in particle_cell.iter_mut().enumerate() {
-    if particles.state[i] != ParticleKind::Liquid {
+    if !particles.state[i].in_fluid() {
       continue;
     }
     let cid = super::particle_to_cid_ref(particles.pos[i], cell_size, cfg);
@@ -258,7 +260,8 @@ pub fn build_ref(particles: &SphHost, cell_size: f32, cfg: &Cfg) -> GridRef {
 
   // Ascending particle id, which is what the stable scatter plus per-cell
   // sort produces on the device. Only the first `running` slots are ever
-  // written — vapor takes no slot — so that is the meaningful length.
+  // written — vapor and free slots take none — so that is the meaningful
+  // length.
   let mut cursor = cell_start.clone();
   let mut sorted_ids = vec![NOT_IN_GRID; running as usize];
   for (i, cid) in particle_cell.iter().enumerate() {
@@ -416,13 +419,13 @@ mod tests {
   }
 
   #[test]
-  fn every_liquid_particle_is_placed_exactly_once() {
+  fn every_in_fluid_particle_is_placed_exactly_once() {
     let h = Harness::new();
     h.build_grid();
     let grid = h.read_grid();
 
-    let liquid = h.particles.liquid_count();
-    assert_eq!(grid.cell_counts.iter().sum::<u32>() as usize, liquid);
+    let placed = h.particles.state.iter().filter(|k| k.in_fluid()).count();
+    assert_eq!(grid.cell_counts.iter().sum::<u32>() as usize, placed);
 
     let mut seen = vec![false; h.particles.len()];
     for c in 0..grid.cell_counts.len() {
@@ -438,7 +441,10 @@ mod tests {
         }
       }
     }
-    assert_eq!(seen.iter().filter(|s| **s).count(), liquid);
+    assert_eq!(seen.iter().filter(|s| **s).count(), placed);
+    for (i, s) in seen.iter().enumerate() {
+      assert_eq!(*s, h.particles.state[i].in_fluid(), "particle {i}");
+    }
   }
 
   #[test]

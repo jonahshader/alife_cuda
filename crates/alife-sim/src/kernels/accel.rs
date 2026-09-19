@@ -1,5 +1,9 @@
 //! `calculate_accel`: pressure, near-pressure, viscosity, capillary suction
 //! and soil friction, integrated into the velocity.
+//!
+//! Body particles take the same forces as liquid — that is what makes a plant
+//! bend in flow — and the constraint pass afterwards projects them back onto
+//! their limb (`kernels::constraints`).
 
 use cubecl::prelude::*;
 
@@ -9,9 +13,10 @@ use super::{
   Cfg, GridArgs, P_BOUNDS_X, P_CAPILLARY_MULT, P_CELL_SIZE, P_DT, P_GRAVITY, P_NEAR_PRESSURE_MULT,
   P_PRESSURE_MULT, P_SMOOTHING_RADIUS, P_SOIL_SIZE, P_TARGET_DENSITY, P_VISCOSITY_STRENGTH,
   SoilArgs, SphArgs, clamp_i32, density_kernel_gradient_component,
-  density_kernel_gradient_component_ref, particle_to_cid, viscosity_kernel, viscosity_kernel_ref,
+  density_kernel_gradient_component_ref, in_fluid, particle_to_cid, viscosity_kernel,
+  viscosity_kernel_ref,
 };
-use crate::particles::{ParticleKind, SphHost};
+use crate::particles::SphHost;
 use crate::soil::SoilHost;
 
 /// Writes into `vel_next` rather than into `sph.vel`, which the caller then
@@ -36,9 +41,9 @@ pub fn calculate_accel(
   if pid >= cfg.num_particles as usize {
     terminate!();
   }
-  if sph.state[pid] != 0u32 {
-    // Vapor is not accelerated here, but `vel_next` becomes `vel`, so it
-    // still has to carry the value forward.
+  if !in_fluid(sph.state[pid]) {
+    // Vapor and free slots are not accelerated here, but `vel_next` becomes
+    // `vel`, so it still has to carry the value forward.
     vel_next[2 * pid] = sph.vel[2 * pid];
     vel_next[2 * pid + 1] = sph.vel[2 * pid + 1];
     terminate!();
@@ -161,7 +166,7 @@ pub fn calculate_accel_ref(
   let velocities = particles.vel.clone();
 
   for pid in 0..particles.len() {
-    if particles.state[pid] != ParticleKind::Liquid {
+    if !particles.state[pid].in_fluid() {
       continue;
     }
     let pos = positions[pid];

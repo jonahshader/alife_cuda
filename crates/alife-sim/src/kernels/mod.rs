@@ -159,6 +159,24 @@ pub fn soil_args<R: Runtime>(soil: &crate::soil::SoilDevice, cfg: &Cfg) -> SoilA
   )
 }
 
+// --- Particle kinds as the kernels see them ---
+
+/// [`crate::ParticleKind`] codes. A kernel reads `state` as a `u32`, and the
+/// C++ tests it with bare literals (`state != 0`, `state == 1`); these name
+/// the same numbers so the organism codes do not arrive as more literals.
+pub const KIND_LIQUID: u32 = crate::ParticleKind::Liquid as u32;
+pub const KIND_VAPOR: u32 = crate::ParticleKind::Vapor as u32;
+pub const KIND_BODY: u32 = crate::ParticleKind::Body as u32;
+pub const KIND_FREE: u32 = crate::ParticleKind::Free as u32;
+
+/// Whether the fluid kernels see this particle at all: it goes in the
+/// neighbour grid, it gets a density, and the integrator moves it. Liquid and
+/// body particles do; vapor has its own integrator and a free slot has none.
+#[cube]
+pub fn in_fluid(state: u32) -> bool {
+  state == KIND_LIQUID || state == KIND_BODY
+}
+
 // --- Shared device helpers, ported one-to-one from particle_fluid2.cu ---
 
 #[cube]
