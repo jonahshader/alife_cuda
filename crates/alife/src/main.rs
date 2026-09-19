@@ -122,12 +122,13 @@ fn main() -> Result<()> {
   };
   let seed = params.resolve_seed();
 
-  let sim = AnySim::new(kind, params, seed, initial, &wgpu_options)?;
-
-  if cli.headless {
-    return run_headless(sim, &cli);
+  if !cli.headless {
+    // The GUI builds its own sim on the device the window gives it.
+    return gui::run(params, initial, kind);
   }
-  gui::run(sim, params)
+
+  let sim = AnySim::new(kind, params, seed, initial, &wgpu_options)?;
+  run_headless(sim, &cli)
 }
 
 fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
