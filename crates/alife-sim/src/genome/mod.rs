@@ -10,6 +10,7 @@
 //! chunk is what calls the mutation kernel and the slot allocator.
 
 pub mod population;
+pub mod seed;
 pub mod shape;
 
 pub use population::{
