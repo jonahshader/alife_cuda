@@ -74,6 +74,11 @@ pub struct ColumnSample {
   /// Mean of (highest body particle y - anchor y).
   pub height: f32,
   pub leaf_count: f32,
+  /// Mean energy over the column's alive organisms — the transplant test's
+  /// measurement, since a specialist away from home is one that earns less.
+  /// Averaged over [`Self::alive`] rather than over the bodied organisms, so a
+  /// seedling that has not grown yet counts as the zero-ish energy it has.
+  pub energy_mean: f32,
   /// How many of the population's species are represented in this column.
   pub species: usize,
 }
@@ -195,14 +200,14 @@ impl Sampler {
     );
     let _ = writeln!(
       out,
-      "  {:<12} {:>5} {:>10} {:>9}",
-      "column", "alive", "root_frac", "height"
+      "  {:<12} {:>5} {:>10} {:>9} {:>9}",
+      "column", "alive", "root_frac", "height", "energy"
     );
     for (extent, column) in self.columns.iter().zip(&last.columns) {
       let _ = writeln!(
         out,
-        "  {:<12} {:>5} {:>10.4} {:>9.4}",
-        extent.label, column.alive, column.root_frac, column.height
+        "  {:<12} {:>5} {:>10.4} {:>9.4} {:>9.4}",
+        extent.label, column.alive, column.root_frac, column.height, column.energy_mean
       );
     }
     let _ = writeln!(
@@ -215,7 +220,7 @@ impl Sampler {
   }
 }
 
-/// The header row: the fixed columns, then five per soil column named after
+/// The header row: the fixed columns, then six per soil column named after
 /// its label.
 fn header(columns: &[ColumnExtent]) -> String {
   let mut names: Vec<String> = [
@@ -240,7 +245,14 @@ fn header(columns: &[ColumnExtent]) -> String {
   .map(|s| s.to_string())
   .collect();
   for extent in columns {
-    for field in ["alive", "root_frac", "height", "leaf_count", "species"] {
+    for field in [
+      "alive",
+      "root_frac",
+      "height",
+      "leaf_count",
+      "energy_mean",
+      "species",
+    ] {
       names.push(format!("{field}_{}", extent.label));
     }
   }
@@ -271,6 +283,7 @@ fn row(s: &Sample) -> String {
     cells.push(format!("{:.6}", column.root_frac));
     cells.push(format!("{:.6}", column.height));
     cells.push(format!("{:.6}", column.leaf_count));
+    cells.push(format!("{:.6}", column.energy_mean));
     cells.push(column.species.to_string());
   }
   cells.join(",")
@@ -403,6 +416,7 @@ fn measure<R: Runtime>(
       continue;
     };
     column_samples[c].alive += 1;
+    column_samples[c].energy_mean += pop.organisms.energy[o];
     if !column_species[c].contains(&species_of[k]) {
       column_species[c].push(species_of[k]);
     }
@@ -417,6 +431,9 @@ fn measure<R: Runtime>(
   }
   for (c, column) in column_samples.iter_mut().enumerate() {
     column.species = column_species[c].len();
+    if column.alive > 0 {
+      column.energy_mean /= column.alive as f32;
+    }
     let count = column_bodies[c];
     if count > 0 {
       column.root_frac /= count as f32;

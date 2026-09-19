@@ -8,6 +8,9 @@ use crate::bodies::spawn_founders;
 use crate::genome::{BrainShape, Genome, PartType};
 use crate::sim::Sim;
 
+/// Fields the time series writes per soil column.
+const PER_COLUMN: usize = 6;
+
 /// A world narrow enough that the capillary test's `width / 40` gap is zero,
 /// so its six columns tile the soil and every founder lands in one of them
 /// (`soil::tests::a_narrow_world_has_no_gaps_between_its_columns`).
@@ -112,14 +115,15 @@ fn the_time_series_counts_three_founders_one_per_column() {
       "species",
     ]
   );
-  assert_eq!(header.len(), 16 + 5 * columns.len());
+  assert_eq!(header.len(), 16 + PER_COLUMN * columns.len());
   for (c, extent) in columns.iter().enumerate() {
-    let base = 16 + 5 * c;
+    let base = 16 + PER_COLUMN * c;
     assert_eq!(header[base], format!("alive_{}", extent.label));
     assert_eq!(header[base + 1], format!("root_frac_{}", extent.label));
     assert_eq!(header[base + 2], format!("height_{}", extent.label));
     assert_eq!(header[base + 3], format!("leaf_count_{}", extent.label));
-    assert_eq!(header[base + 4], format!("species_{}", extent.label));
+    assert_eq!(header[base + 4], format!("energy_mean_{}", extent.label));
+    assert_eq!(header[base + 5], format!("species_{}", extent.label));
   }
 
   // 200 steps at K=100: two samples, the last of which is the final step.
@@ -165,7 +169,7 @@ fn the_time_series_counts_three_founders_one_per_column() {
 
   // One founder per column, and every founder accounted for.
   let alive_per_column: Vec<usize> = (0..columns.len())
-    .map(|c| last[16 + 5 * c].parse().unwrap())
+    .map(|c| last[16 + PER_COLUMN * c].parse().unwrap())
     .collect();
   assert_eq!(alive_per_column.iter().sum::<usize>(), 3);
   assert!(
@@ -174,13 +178,21 @@ fn the_time_series_counts_three_founders_one_per_column() {
   );
   // The seed plant is 2 root, 3 stem, 1 leaf particles.
   for (c, n) in alive_per_column.iter().enumerate() {
-    let root_frac: f32 = last[16 + 5 * c + 1].parse().unwrap();
-    let leaf_count: f32 = last[16 + 5 * c + 3].parse().unwrap();
-    let species: usize = last[16 + 5 * c + 4].parse().unwrap();
+    let root_frac: f32 = last[16 + PER_COLUMN * c + 1].parse().unwrap();
+    let leaf_count: f32 = last[16 + PER_COLUMN * c + 3].parse().unwrap();
+    let energy: f32 = last[16 + PER_COLUMN * c + 4].parse().unwrap();
+    let species: usize = last[16 + PER_COLUMN * c + 5].parse().unwrap();
     if *n == 0 {
       assert_eq!(root_frac, 0.0);
+      assert_eq!(energy, 0.0);
       assert_eq!(species, 0);
     } else {
+      // The life cycle is off in this world, so a founder still holds exactly
+      // the energy it was seeded with.
+      assert!(
+        (energy - sim.params().seed_energy).abs() < 1e-6,
+        "column {c}: {energy}"
+      );
       assert!(
         (root_frac - 2.0 / 6.0).abs() < 1e-5,
         "column {c}: {root_frac}"
@@ -252,7 +264,7 @@ fn another_terrain_gets_one_column_spanning_the_world() {
   sampler.flush().unwrap();
 
   let (header, rows) = read_csv(&path);
-  assert_eq!(header.len(), 16 + 5);
+  assert_eq!(header.len(), 16 + PER_COLUMN);
   assert_eq!(header[16], "alive_world");
   assert_eq!(rows[0][16], "2", "both founders are in the one column");
   let _ = std::fs::remove_file(&path);
@@ -274,7 +286,7 @@ fn a_seed_in_flight_counts_in_alive_and_in_no_column() {
     access.pop.organisms.stage[3] = crate::genome::population::STAGE_SEED;
     access.pop.upload_organisms(access.client);
   }
-  assert_eq!(sim.bodies().anchors[3], Vec2::ZERO);
+  assert_eq!(sim.bodies().anchors[3], glam::Vec2::ZERO);
 
   let path = temp_path("seed-in-flight");
   let mut sampler = Sampler::create(&path, 1, 0.25, sim.soil()).unwrap();
@@ -287,7 +299,9 @@ fn a_seed_in_flight_counts_in_alive_and_in_no_column() {
   let field = |name: &str| -> &str { &rows[0][header.iter().position(|h| h == name).expect(name)] };
   assert_eq!(field("alive"), "4");
   let per_column: usize = (0..columns.len())
-    .map(|c| rows[0][16 + 5 * c].parse::<usize>().unwrap())
+    .map(|c| rows[0][16 + PER_COLUMN * c].parse::<usize>().unwrap())
+    .collect::<Vec<_>>()
+    .iter()
     .sum();
   assert_eq!(per_column, 3, "the seed was binned into a column");
   // The three founders land in columns 1, 3 and 5 at this width, so the
