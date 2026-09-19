@@ -193,6 +193,12 @@ impl<R: Runtime> Sim<R> {
           &packed[base + pack::LIFE_FIXED..base + width],
         )
       {
+        // Charged here rather than after the growth batch: `grow_limbs`
+        // drops whole limbs off the end of a batch when the particle
+        // capacity is short, and this pays for one that was dropped. The
+        // capacity is `max_organisms x max_limbs x max_particles_per_limb`,
+        // so it is only short when every slot already holds a full body —
+        // at which point an over-charged sprout is the least of it.
         sprouts.push(GrowRequest { organism: o, limb });
         energy -= p.sprout_cost;
       }
