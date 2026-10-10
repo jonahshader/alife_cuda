@@ -5,6 +5,7 @@
 //! so the renderer binds CubeCL's buffers directly and nothing round-trips
 //! through the host.
 
+mod frame_stats;
 mod profiler;
 mod render;
 mod rolling;
@@ -273,6 +274,7 @@ struct SimApp {
   camera_height: f32,
 
   profiler: profiler::Profiler,
+  frame_stats: frame_stats::FrameStats,
 }
 
 impl SimApp {
@@ -324,6 +326,7 @@ impl SimApp {
       camera_centre: egui::vec2(bounds.x * 0.5, bounds.y * 0.5),
       camera_height: bounds.y,
       profiler: profiler::Profiler::new(),
+      frame_stats: frame_stats::FrameStats::new(),
     })
   }
 
@@ -392,6 +395,7 @@ impl SimApp {
       counters.births,
       counters.deaths,
     ));
+    self.frame_stats.show(ui);
 
     for (heading, controls) in SLIDERS {
       ui.separator();
@@ -447,6 +451,7 @@ impl eframe::App for SimApp {
       self.step_once = false;
       self.history.record(&self.sim);
     }
+    self.frame_stats.tick(self.sim.step_count());
 
     egui::Panel::right("controls")
       .default_size(320.0)
