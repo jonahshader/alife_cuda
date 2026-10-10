@@ -1,59 +1,51 @@
-# Handoff — the growth model is built; the energy balance is the next call (2026-09-19)
+# Handoff — retiring the C++ tree, paused mid-cycle (2026-10-10)
 
-The session of 2026-09-19 (interactive, after the overnight run) fixed the
-GUI (eframe's default device limits), the driver/toolchain workarounds, and
-the light grid (soil is opaque), and then designed and shipped the growth
-model in four delegation cycles. Read `docs/organism.md`'s *Growth* section
-and the decisions entry "Growth is continuous..." first; `docs/TODO.md` has
-what is left; `docs/perf.md` has every run's numbers.
+Jonah paused the session overnight with two builders stopped mid-work. Pick
+the cycle back up; the design below is settled.
 
-## What shipped (all on `main`, `8944ec9`; nothing pushed this session)
+## The plan (settled in chat 2026-10-09)
 
-1. **Continuous length** (`grown` per limb, fractional last segment), the
-   genome's `growth_bias` / `growth_rate` per limb, softmax allocation of
-   `energy − seed_cost` over growing limbs, child progress ≤ parent
-   progress. Whole-limb sprouting and `sprout_cost` are gone.
-2. **Thickness and volume**: `target_thickness` per limb, live thickness
-   `target × sqrt(progress)`, growth buys volume, upkeep is per volume
-   (`upkeep_per_volume` replaced `upkeep_per_particle`). Segments draw at
-   thickness.
-3. **Breaking**: the constraint pass keeps each joint's worst bend; a
-   non-root limb past `break_angle × clamp(thickness / break_thickness_ref,
-   0, 1)` sheds itself and its descendants as organic matter and regrows.
-4. **The brain's part**: `head_growth` (one logit per limb, added to
-   `growth_bias`) and the actuator's first output nudging the joint target
-   by `actuator_gain × tanh(a)`. Brain is 18,659 params; population file
-   version 4 reshapes older rows.
+1. Port what the C++ GUI has that Rust lacks — two builders, in parallel:
+   - **A: mouse tool + density overlay.** LMB attract / RMB repel at the
+     cursor (`attract_fluid` in `src/systems/particle_fluid2.cu`), keys
+     `+`/`-` radius ×1.25/×0.8, `[`/`]` strength ×0.8/×1.25, start radius
+     2.0 strength 0.15, cursor circle + "Strength: N" label. **Pan moves to
+     middle-mouse drag.** Density-grid overlay (`calculate_density_grid_kernel`)
+     behind a View checkbox, keeping red = cell over `max_particles_per_cell`,
+     blue = density over 300. Both kernels get plain-Rust references + tests;
+     headless `--founders 0` dumps must stay byte-identical.
+   - **B: live profiler panel** (timing on only while open, rolling window),
+     fps/frame-time readout, Esc quits, anti-aliased particle discs.
+2. Merge, rerun the claims, `code-review-find` over the range, fix.
+3. **Delete the C++** — `src/`, `CMakeLists.txt`, the C++-only files under
+   `resources/` (verify each is unused by Rust first), `tests/parity.rs` and
+   `resources/parity/` (Jonah: parity tests go with the C++; don't keep them
+   frozen). Before deleting, migrate the knowledge only the C++ holds:
+   the pressure-equation "mostly describes gas, not liquid" weakness →
+   `TODO.md` fluid section; the tree torque constants (thickness⁴ stiffness,
+   damping 0.96, 10 rad/s cap, I = mL²/3) → `organism.md` decisions, for
+   actuated limbs; the hard one-hot soil alternative and the friction
+   constants' meaning → `soil.rs` comments. Then rewrite every doc that
+   names the C++ build (root `CLAUDE.md`, `docs/CLAUDE.md`, `perf.md`,
+   `crates/alife-sim/README.md`, `TODO.md`'s C++ sections). The trees never
+   ran in the C++ binary (their screen is commented out), so nothing live
+   is lost with them. The tag `cpp-reference` (local, on `f56f9de`) keeps
+   the tree recoverable.
+4. Then Jonah's behavior reports from his GUI run (`--founders 20
+   --max-organisms 10000`): growth is exponential until the cap; some
+   plants spin wildly; plants clump where they start and spread very
+   slowly. Not yet investigated.
 
-Each cycle: Opus builder in a worktree → fast-forward merge → claims rerun
-→ Sonnet find-only review → verified fixes committed. 154 tests, clippy
-clean, `--founders 0` byte-identical throughout, ~1.46 ms/step at 64
-founders on CUDA.
+## State when paused
 
-## Open, and Jonah's to decide (also said in chat)
-
-- **The energy balance.** With volume pricing a seedling's first segment
-  is cheap, so nothing starves: the 64-founder run fills all 256 slots by
-  step 3000 and `max_organisms` is the ceiling, not light or space. The
-  knobs are what a root earns, what a seed germinates with, and whether the
-  growth reserve is `seed_cost` (`TODO.md`, first growth bullet, and the
-  `--column-top` bullet, which is the same question).
-- **`--actuator-gain`.** At the shipped 0.3 rad an untrained brain wanders
-  every joint and limb breaking more than doubles (109 → 238 in the
-  reference run); 0.1 gave the tallest, highest-energy bodies of the sweep
-  (`perf.md`). One flag, no code change.
-- **The window.** Plants should now grow visibly, thicken, and snap.
-  Nobody has watched it: `./target/release/alife --founders 64 --seed 42`.
-
-## What the next session should NOT do on its own
-
-Do not tune the energy constants or the actuator gain; both are Jonah's.
-
-## Machine notes
-
-- Driver 610 (CUDA 13.3), default toolchain 1.98.1: plain `cargo` and plain
-  `./target/release/alife --runtime cuda` work. No `+1.98.1`, no
-  `LD_LIBRARY_PATH` (builders' reports that mention it were setting a path
-  that no longer matters).
-- The `code-review-find` workflow ran four for four this session with a
-  target string (no staged diff); ~5 minutes and ~0.9M tokens each.
+- Builder B, worktree `.claude/worktrees/agent-a8d34101b5a78f889`: five
+  commits on its branch (profiler, fps, Esc, AA discs, and "a free body
+  slot's quad covers no pixel" — a pre-existing fix, check it). It had not
+  reported, so its verification is unconfirmed: rerun build, tests, clippy.
+- Builder A, worktree `.claude/worktrees/agent-abd54b71a60d5bd5d`: no
+  commits; uncommitted `kernels/attract.rs`, `kernels/density_grid.rs`,
+  edits to `kernels/mod.rs` and `sim.rs`. GUI side not started.
+- Same session: resume each builder with SendMessage ("resume from your
+  brief"). New session: brief fresh builders from step 1 into the existing
+  worktrees, telling them what's already there.
+- `main` is 25 commits ahead of `origin/main`, unpushed.
