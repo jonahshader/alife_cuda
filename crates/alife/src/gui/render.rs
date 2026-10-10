@@ -242,10 +242,25 @@ fn particle_vs(@builtin(vertex_index) vi: u32) -> ParticleOut {
 
 @fragment
 fn particle_fs(in: ParticleOut) -> @location(0) vec4<f32> {
-  if (dot(in.local, in.local) > 1.0) {
+  // The C++ `circle.frag` edge: coverage falls from 1 to 0 over about one
+  // screen pixel centred on the rim, so a disc reads round at any zoom
+  // rather than stair-stepped. `fwidth(local)` is how far `local` moves
+  // across one pixel, so its inverse is pixels per unit of `local` (the
+  // disc's radius), and `(1 - r)` times that is how many pixels inside the
+  // rim this fragment sits. The floor — one pixel per diameter, the C++'s
+  // `max(.., 1.0)` in its diameter-wide units — keeps a disc smaller than a
+  // pixel opaque at its centre instead of fading out as the view zooms
+  // away. The quad ends at the rim, as the C++ one did, so the outer
+  // half-pixel of the ramp is cut off where the disc touches its edges.
+  //
+  // Derivatives need uniform control flow, so they are taken before the
+  // branch.
+  let px_per_unit = max(0.5 * dot(vec2<f32>(1.0, 1.0), 1.0 / fwidth(in.local)), 0.5);
+  let coverage = clamp(px_per_unit * (1.0 - length(in.local)) + 0.5, 0.0, 1.0);
+  if (coverage <= 0.0) {
     discard;
   }
-  return in.color;
+  return vec4<f32>(in.color.rgb, in.color.a * coverage);
 }
 
 // Particles limb `l` of organism `o` actually holds: the leading run of its
