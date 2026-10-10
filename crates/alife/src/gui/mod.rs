@@ -5,7 +5,9 @@
 //! so the renderer binds CubeCL's buffers directly and nothing round-trips
 //! through the host.
 
+mod profiler;
 mod render;
+mod rolling;
 
 use alife_sim::runtime::RuntimeKind;
 use alife_sim::sim::{InitialState, Sim};
@@ -269,6 +271,8 @@ struct SimApp {
   /// World point at the centre of the view, and metres across the viewport.
   camera_centre: egui::Vec2,
   camera_height: f32,
+
+  profiler: profiler::Profiler,
 }
 
 impl SimApp {
@@ -319,6 +323,7 @@ impl SimApp {
       debug_evap: false,
       camera_centre: egui::vec2(bounds.x * 0.5, bounds.y * 0.5),
       camera_height: bounds.y,
+      profiler: profiler::Profiler::new(),
     })
   }
 
@@ -512,6 +517,9 @@ impl eframe::App for SimApp {
           },
         ));
       });
+
+    let ctx = ui.ctx().clone();
+    self.profiler.show(&ctx, &mut self.sim);
 
     if self.running {
       ui.ctx().request_repaint();

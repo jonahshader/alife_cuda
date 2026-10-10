@@ -184,6 +184,17 @@ impl<R: Runtime> Sim<R> {
     };
   }
 
+  /// Turn per-kernel timing back off, so the launches pipeline again. The
+  /// timings gathered so far are kept; a later [`Self::enable_timing`] adds to
+  /// them.
+  pub fn disable_timing(&mut self) {
+    self.timing = TimingChoice::Off;
+  }
+
+  pub fn timing_enabled(&self) -> bool {
+    self.timing != TimingChoice::Off
+  }
+
   pub fn params(&self) -> &SimParams {
     &self.params
   }
