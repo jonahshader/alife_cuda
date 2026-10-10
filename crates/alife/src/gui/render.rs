@@ -229,13 +229,13 @@ fn particle_vs(@builtin(vertex_index) vi: u32) -> ParticleOut {
   var out: ParticleOut;
   out.clip = to_clip(centre + corner * radius);
   out.color = color;
+  out.local = corner;
   // An unallocated body slot is parked outside the world and is not a
-  // particle at all: send its corners past the disc cutoff so every fragment
-  // is discarded.
+  // particle at all: collapse its quad to a point so it covers no pixel.
+  // Pushing only the corners' `local` past the disc cutoff is not enough —
+  // it is interpolated, so it still crosses zero in the middle of the quad.
   if (kind == 3u) {
-    out.local = corner * 4.0;
-  } else {
-    out.local = corner;
+    out.clip = to_clip(centre);
   }
   return out;
 }
