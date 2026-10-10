@@ -434,8 +434,18 @@ impl SimApp {
   }
 }
 
+/// Esc closes the window, as it stopped the C++ game — unless a text field
+/// has the keyboard, where Esc means "stop editing". Checked before any
+/// widget runs, while the field still holds the focus it gives up on Esc.
+fn quit_on_escape(ctx: &egui::Context) {
+  if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !ctx.text_edit_focused() {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+  }
+}
+
 impl eframe::App for SimApp {
   fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    quit_on_escape(ui.ctx());
     if self.running || self.step_once {
       let steps = if self.step_once {
         1
