@@ -15,7 +15,8 @@ use crate::bodies::{BodyCfg, BodyState, SimBodies};
 use crate::brain::{BrainCfg, BrainState};
 use crate::genome::Population;
 use crate::kernels::{
-  self, accel, constraints, density, evap, grid::GridDevice, limb_geometry, motion,
+  self, accel, attract, constraints, density, density_grid::DensityGrid, evap, grid::GridDevice,
+  limb_geometry, motion,
 };
 use crate::life::light::LightGrid;
 use crate::life::pack::LifePack;
@@ -55,6 +56,9 @@ pub struct Sim<R: Runtime> {
   pub(crate) counters: Counters,
   pub(crate) timings: KernelTimings,
   pub(crate) timing: TimingChoice,
+  /// The density overlay's texels, allocated the first time the window asks
+  /// for one; headless never does.
+  pub(crate) density_grid: Option<DensityGrid>,
 }
 
 /// Life-cycle events since this `Sim` was created, for the metrics time
@@ -166,6 +170,7 @@ impl<R: Runtime> Sim<R> {
       counters: Counters::default(),
       timings: KernelTimings::default(),
       timing: TimingChoice::Off,
+      density_grid: None,
     }
   }
 
@@ -344,6 +349,63 @@ impl<R: Runtime> Sim<R> {
 
   pub fn sync(&self) {
     pollster::block_on(self.client.sync()).expect("sync");
+  }
+
+  /// The mouse tool: add `strength` to the velocity of every fluid particle
+  /// within `radius` of `pos`, towards it (away from it when negative).
+  ///
+  /// Not a step and not a parameter — the window calls it after each step
+  /// while a button is held, where the C++ screen applied it, against the
+  /// grid that step built (`kernels::attract`).
+  pub fn attract(&mut self, pos: Vec2, strength: f32, radius: f32) {
+    let Self {
+      client,
+      sph,
+      grid,
+      params_buf,
+      cfg,
+      timings,
+      timing,
+      ..
+    } = self;
+    run_timed(client, *timing, timings, "attract_single", &mut || {
+      attract::launch(client, sph, grid, params_buf, *cfg, pos, strength, radius);
+    });
+  }
+
+  /// Sample the fluid's density onto a `width x height` overlay and return
+  /// its texels (`kernels::density_grid`, which says what the colours mean).
+  /// `max_density` is the density drawn as white.
+  ///
+  /// A diagnostic for the window, outside the step: it reads the grid the
+  /// last step built and changes nothing.
+  pub fn density_grid(&mut self, width: u32, height: u32, max_density: f32) -> DensityGrid {
+    let bounds_x = self.geom.bounds.x;
+    let out = match self.density_grid.take() {
+      Some(grid) if grid.width == width && grid.height == height => grid,
+      _ => DensityGrid::alloc(&self.client, width, height, bounds_x),
+    };
+    let Self {
+      client,
+      sph,
+      grid,
+      params_buf,
+      cfg,
+      timings,
+      timing,
+      ..
+    } = self;
+    run_timed(
+      client,
+      *timing,
+      timings,
+      "calculate_density_grid",
+      &mut || {
+        kernels::density_grid::launch(client, sph, grid, params_buf, *cfg, &out, max_density);
+      },
+    );
+    self.density_grid = Some(out.clone());
+    out
   }
 
   pub fn step(&mut self) {

@@ -12,8 +12,10 @@
 use cubecl::prelude::*;
 
 pub mod accel;
+pub mod attract;
 pub mod constraints;
 pub mod density;
+pub mod density_grid;
 pub mod evap;
 pub mod grid;
 pub mod limb_geometry;
