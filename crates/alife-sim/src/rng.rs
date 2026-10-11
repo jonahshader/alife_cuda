@@ -4,8 +4,8 @@
 //! rounds, keyed per particle and countered per kernel launch. This is a
 //! transcription of Random123's `_threefry4x_tpl(32)` macro, which is itself
 //! fully unrolled; the rounds below are generated from the same rotation
-//! constants, so the two agree bit for bit (checked against the C++ in
-//! `tests/threefry_parity.rs`).
+//! constants, so the two agree bit for bit (pinned against vectors printed by
+//! Random123 itself, `RANDOM123_VECTORS` in the tests below).
 
 use cubecl::prelude::*;
 
