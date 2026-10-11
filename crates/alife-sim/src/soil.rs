@@ -14,6 +14,8 @@ pub const SAND_CAPILLARY: f32 = 5.0;
 pub const SILT_CAPILLARY: f32 = 100.0;
 pub const CLAY_CAPILLARY: f32 = 8000.0;
 
+// Friction: a linear drag coefficient per second, applied to a particle in the
+// cell as `acc -= vel * friction` (`kernels::accel`).
 pub const SAND_FRICTION: f32 = 8.0;
 pub const SILT_FRICTION: f32 = 20.0;
 pub const CLAY_FRICTION: f32 = 50.0;
@@ -563,6 +565,9 @@ pub fn noise_terrain(width: usize, height: usize, seed: u64) -> SoilHost {
       silt = silt.exp();
       clay = clay.exp();
 
+      // The C++ kept an argmax here, commented out: hard one-hot soil types
+      // instead of this blend. At `sharpen` 50 the softmax is already nearly
+      // one-hot away from the boundaries between types.
       let density = 1.0 / (sand + silt + clay);
       soil.sand_density[id] = sand * density;
       soil.silt_density[id] = silt * density;

@@ -32,7 +32,8 @@ pub struct WorldGeometry {
   /// Neighbour grid. x wraps, so the columns must tile the width exactly:
   /// the column count rounds down and the cells widen to fit. `cell_size >=
   /// smoothing_radius`, so a 3x3 neighbourhood still covers every particle
-  /// within the radius.
+  /// within the radius, and because the columns tile the width exactly a
+  /// wrapped neighbourhood never needs to reach past `cell_x ± 1`.
   pub grid_width: usize,
   pub grid_height: usize,
   pub cell_size: f32,

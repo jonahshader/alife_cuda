@@ -85,6 +85,8 @@ pub fn calculate_accel(
     soil_props.capillary_strength * unsaturated * params[P_CAPILLARY_MULT as usize];
   let effective_target = target_density + capillary_bonus;
 
+  // A linear equation of state, `k (rho - rho0)`: it mostly describes a gas,
+  // not a liquid, and stiffer options (Tait) might serve better (`TODO.md`).
   let pressure = pressure_mult * (density - effective_target);
   let near_pressure = near_pressure_mult * near_density;
   let total_pressure = pressure + near_pressure;

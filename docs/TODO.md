@@ -162,6 +162,11 @@ them.
 - **Solver choice — on hold** (`organism.md`, decisions). FLIP/PIC is not on
   the path to emergence; revisit only if fluid behavior itself blocks an
   organism milestone.
+- **The pressure equation describes a gas.** `pressure_mult * (density -
+  target_density)` (`kernels/accel.rs`) is linear in density, which is a
+  gas's equation of state rather than a liquid's; the C++ carried the same
+  TODO. A stiffer one (Tait) is the obvious candidate, and belongs with the
+  solver question above rather than before it.
 - **Profile the SPH step.** Organism bodies are particles in this system,
   so the per-particle cost of the three neighbour-gather kernels (93% of the
   ~0.49 ms step for 51k particles, `docs/perf.md`) is now the cost of

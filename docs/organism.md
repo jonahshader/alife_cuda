@@ -842,3 +842,25 @@ uploads them.
   a grown one (volume goes as `grown²`) and that a seedling's one root
   segment, half way along a two-segment root, costs 0.0012 a step where one
   particle cost 0.003.
+- 2026-10-11 — **The C++ L-system trees' joint physics is the reference
+  for a torque-actuated joint (milestone 2's actuated limb), and nothing
+  else of them carries over.** The trees never ran in the shipped C++
+  binary — `main.cu` pushed only the fluid-soil screen, the tree screen's
+  line commented out — so their behavior was never seen and nothing live
+  was lost when the tree went (tag `cpp-reference`, `src/systems/trees.cu`
+  and `tree_types.cuh`). Per node, against its parent: torque
+  `rot_delta × min_thickness⁴ × TORQUE_PER_RAD` (100), with `min_thickness`
+  the thinner of node and parent — the fourth power is a beam's second
+  moment of area, so stiffness falls off fast toward the tips; mass
+  `length × π × thickness² × MASS_PER_CUBIC_CM`, where `MASS_PER_ENERGY` 1
+  and `CUBIC_CM_PER_ENERGY` 1000 give 0.001 per cubic unit; moment of
+  inertia `(1/3) m L²`, a rod about its end; angular acceleration
+  `torque / I` clamped to ±10 (named a rad/s cap but applied to the
+  acceleration); angular velocity damped ×0.96 per step, independent of
+  `dt`, then integrated; a zero-length or massless node does not
+  accelerate. A clamp of `rot_delta` to ±π/2 and a linear-in-thickness
+  torque were both present and commented out. Child target thickness
+  tapered ×0.95 per level. What the particle bodies use instead is a
+  stiff projected target angle (`project_constraints`); a torque joint is
+  the alternative when a limb must push against the world with a bounded
+  force.
