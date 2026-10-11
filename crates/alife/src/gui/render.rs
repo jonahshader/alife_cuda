@@ -19,6 +19,15 @@
 //! The root limb's first particle has no predecessor and draws nothing.
 //! The body discs stay, at the segment's half-width, so joints are round.
 //!
+//! **The density overlay is one quad.** It covers the sampled extent once,
+//! as the soil does — the world is drawn once, not tiled, so neither is the
+//! overlay (the C++ tiled it 3x3 because its camera showed neighbouring
+//! copies). Its fragment shader picks the texel under it straight out of the
+//! storage buffer the kernel wrote, which is a nearest-neighbour texture
+//! lookup without a texture. It is drawn over the soil and under the
+//! bodies and particles; the C++ drew it under the soil, whose opaque cells
+//! cover the whole world, so it only ever showed in the tiled copies.
+//!
 //! **A segment is as wide as its limb is thick.** The half-width is half the
 //! limb's live thickness — `target_thickness * sqrt(grown / length)`, the
 //! sim's own rule (`alife_sim::bodies::limb_thickness`) recomputed here from
@@ -55,6 +64,12 @@ pub struct ViewUniform {
   pub per_limb: u32,
   pub segment_count: u32,
   pub _pad2: u32,
+  /// The density overlay's shape (`alife_sim::kernels::density_grid`);
+  /// ignored while it is off.
+  pub density_width: u32,
+  pub density_height: u32,
+  pub density_interval: f32,
+  pub _pad3: u32,
 }
 
 const SHADER: &str = r#"
@@ -73,6 +88,10 @@ struct View {
   per_limb: u32,
   segment_count: u32,
   pad2: u32,
+  density_width: u32,
+  density_height: u32,
+  density_interval: f32,
+  pad3: u32,
 };
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -94,6 +113,9 @@ struct View {
 @group(0) @binding(13) var<storage, read> particle_organism: array<u32>;
 @group(0) @binding(14) var<storage, read> particle_limb: array<u32>;
 @group(0) @binding(15) var<storage, read> particle_index_in_limb: array<u32>;
+// The density overlay's packed RGBA8 texels. Bound only in the overlay's own
+// layout, which is the only pipeline that reads it.
+@group(0) @binding(16) var<storage, read> density_texels: array<u32>;
 
 const NO_PARTICLE: u32 = 0xffffffffu;
 const NO_ORGANISM: u32 = 0xffffffffu;
@@ -351,6 +373,32 @@ fn segment_vs(@builtin(vertex_index) vi: u32) -> SegmentOut {
 fn segment_fs(in: SegmentOut) -> @location(0) vec4<f32> {
   return in.color;
 }
+
+struct DensityOut {
+  @builtin(position) clip: vec4<f32>,
+  @location(0) world: vec2<f32>,
+};
+
+@vertex
+fn density_vs(@builtin(vertex_index) vi: u32) -> DensityOut {
+  let extent = vec2<f32>(f32(view.density_width), f32(view.density_height))
+    * view.density_interval;
+  let world = quad_corner(vi % 6u) * extent;
+  var out: DensityOut;
+  out.clip = to_clip(world);
+  out.world = world;
+  return out;
+}
+
+@fragment
+fn density_fs(in: DensityOut) -> @location(0) vec4<f32> {
+  // Texel (x, y) was sampled at its lower-left corner and covers the
+  // interval up and to the right of it.
+  let cell = max(floor(in.world / view.density_interval), vec2<f32>(0.0));
+  let x = min(u32(cell.x), view.density_width - 1u);
+  let y = min(u32(cell.y), view.density_height - 1u);
+  return unpack4x8unorm(density_texels[y * view.density_width + x]);
+}
 "#;
 
 /// Pipelines and layout, built once.
@@ -359,6 +407,8 @@ pub struct Pipelines {
   soil: wgpu::RenderPipeline,
   particles: wgpu::RenderPipeline,
   segments: wgpu::RenderPipeline,
+  density_layout: wgpu::BindGroupLayout,
+  density: wgpu::RenderPipeline,
 }
 
 impl Pipelines {
@@ -400,10 +450,43 @@ impl Pipelines {
       immediate_size: 0,
     });
 
-    let make = |name: &str, vs: &str, fs: &str| {
+    // The overlay's own layout: the view, which its fragment stage reads
+    // too, and the texels.
+    let density_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+      label: Some("alife density bindings"),
+      entries: &[
+        wgpu::BindGroupLayoutEntry {
+          binding: 0,
+          visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+          binding: 16,
+          visibility: wgpu::ShaderStages::FRAGMENT,
+          ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: None,
+          },
+          count: None,
+        },
+      ],
+    });
+    let density_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+      label: None,
+      bind_group_layouts: &[Some(&density_layout)],
+      immediate_size: 0,
+    });
+
+    let make = |name: &str, vs: &str, fs: &str, layout: &wgpu::PipelineLayout| {
       device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(name),
-        layout: Some(&pipeline_layout),
+        layout: Some(layout),
         vertex: wgpu::VertexState {
           module: &shader,
           entry_point: Some(vs),
@@ -431,10 +514,27 @@ impl Pipelines {
     };
 
     Self {
-      soil: make("alife soil", "soil_vs", "soil_fs"),
-      particles: make("alife particles", "particle_vs", "particle_fs"),
-      segments: make("alife segments", "segment_vs", "segment_fs"),
+      soil: make("alife soil", "soil_vs", "soil_fs", &pipeline_layout),
+      particles: make(
+        "alife particles",
+        "particle_vs",
+        "particle_fs",
+        &pipeline_layout,
+      ),
+      segments: make(
+        "alife segments",
+        "segment_vs",
+        "segment_fs",
+        &pipeline_layout,
+      ),
+      density: make(
+        "alife density",
+        "density_vs",
+        "density_fs",
+        &density_pipeline_layout,
+      ),
       layout,
+      density_layout,
     }
   }
 }
@@ -454,6 +554,9 @@ struct Frame {
   soil_vertices: u32,
   particle_vertices: u32,
   segment_vertices: u32,
+  /// The overlay's bind group and the texel window it binds, while the
+  /// overlay is on; kept across frames by the same rule as `bind_group`.
+  density: Option<(BoundWindow, wgpu::BindGroup)>,
 }
 
 /// The identity of one bound storage window: which buffer, and where in it.
@@ -474,6 +577,8 @@ pub struct SimCallback {
   pub soil_cells: u32,
   pub bodies: alife_sim::bodies::BodyDevice,
   pub limbs: alife_sim::genome::population::LimbDevice,
+  /// The density overlay's texels, when it is on.
+  pub density: Option<alife_sim::kernels::density_grid::DensityGrid>,
 }
 
 impl CallbackTrait for SimCallback {
@@ -551,10 +656,42 @@ impl CallbackTrait for SimCallback {
       }
     };
 
+    let density = self.density.as_ref().map(|grid| {
+      let texels = shared_buffer(&self.client, &grid.texels);
+      let window = BoundWindow {
+        buffer: texels.buffer.clone(),
+        offset: texels.offset,
+        size: texels.size,
+      };
+      let kept = resources
+        .get::<Frame>()
+        .and_then(|frame| frame.density.as_ref())
+        .filter(|(bound, _)| *bound == window)
+        .map(|(_, group)| group.clone());
+      let group = kept.unwrap_or_else(|| {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+          label: Some("alife density bind group"),
+          layout: &self.pipelines.density_layout,
+          entries: &[
+            wgpu::BindGroupEntry {
+              binding: 0,
+              resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+              binding: 16,
+              resource: texels.binding(),
+            },
+          ],
+        })
+      });
+      (window, group)
+    });
+
     resources.insert(Frame {
       uniform,
       bindings,
       bind_group,
+      density,
       soil_vertices: self.soil_cells * 6,
       particle_vertices: self.view.particle_count * 6,
       segment_vertices: self.view.segment_count * 6,
@@ -574,6 +711,12 @@ impl CallbackTrait for SimCallback {
     render_pass.set_bind_group(0, &frame.bind_group, &[]);
     render_pass.set_pipeline(&self.pipelines.soil);
     render_pass.draw(0..frame.soil_vertices, 0..1);
+    if let Some((_, group)) = &frame.density {
+      render_pass.set_bind_group(0, group, &[]);
+      render_pass.set_pipeline(&self.pipelines.density);
+      render_pass.draw(0..6, 0..1);
+      render_pass.set_bind_group(0, &frame.bind_group, &[]);
+    }
     // Segments under the discs, so a joint is a disc over two segment ends.
     render_pass.set_pipeline(&self.pipelines.segments);
     render_pass.draw(0..frame.segment_vertices, 0..1);
@@ -675,12 +818,17 @@ mod tests {
         per_limb: sim.body_cfg().max_particles_per_limb,
         segment_count: sim.body_cfg().particle_map_len() as u32,
         _pad2: 0,
+        density_width: 0,
+        density_height: 0,
+        density_interval: 0.0,
+        _pad3: 0,
       },
       sph,
       soil: sim.device_soil().clone(),
       soil_cells: sim.geometry().num_soil_cells() as u32,
       bodies: sim.bodies().device.clone(),
       limbs: sim.population().device.limbs.clone(),
+      density: None,
     };
 
     let screen = ScreenDescriptor {
@@ -732,5 +880,89 @@ mod tests {
       frame.bind_group, bind_group,
       "a bound window moved and the bind group was kept anyway"
     );
+  }
+
+  /// The window's two calls outside the step, on the window's runtime: the
+  /// mouse tool and the density overlay compile and run on wgpu, and the
+  /// overlay's bind group validates against its layout. Their arithmetic is
+  /// checked against the references in `alife_sim::kernels`.
+  #[test]
+  fn tool_and_density_overlay_run_on_wgpu() {
+    let Some(setup) = setup() else { return };
+    let (_device, client) = client_on(&setup);
+    let params = SimParams {
+      smoothing_radius: 2.0,
+      particles_per_cell: 2,
+      ..SimParams::default()
+    };
+    let mut sim = Sim::new(client, params, 42, None);
+    sim.step();
+    let before = sim.read_particles();
+    let centre = sim.geometry().bounds * glam::Vec2::new(0.5, 0.25);
+    sim.attract(centre, 0.15, 4.0);
+    let after = sim.read_particles();
+    assert_ne!(before.vel, after.vel, "the tool moved nothing");
+
+    let geom = *sim.geometry();
+    let (width, height) = ((geom.bounds.x * 2.0) as u32, (geom.bounds.y * 2.0) as u32);
+    let grid = sim.density_grid(width, height, 300.0);
+    let bytes = sim.client().read_one_unchecked(grid.texels.clone());
+    let texels = &bytemuck::cast_slice::<u8, u32>(&bytes)[..(width * height) as usize];
+    // Every texel is opaque, and the lower half of the world holds water.
+    assert!(texels.iter().all(|t| t >> 24 == 255));
+    assert!(texels.iter().any(|t| t & 0xFF_FF_FF != 0));
+
+    let pipelines = std::sync::Arc::new(Pipelines::new(
+      &setup.device,
+      wgpu::TextureFormat::Bgra8UnormSrgb,
+    ));
+    let callback = SimCallback {
+      pipelines,
+      client: sim.client().clone(),
+      view: ViewUniform {
+        scale: [1.0, 1.0],
+        offset: [0.0, 0.0],
+        soil_cell_size: geom.soil_cell_size,
+        particle_radius: 0.01,
+        world_width: geom.bounds.x,
+        _pad: 0.0,
+        soil_width: geom.soil_width as u32,
+        soil_height: geom.soil_height as u32,
+        particle_count: sim.live_particles().0 as u32,
+        debug_evap: 0,
+        max_limbs: sim.body_cfg().max_limbs,
+        per_limb: sim.body_cfg().max_particles_per_limb,
+        segment_count: sim.body_cfg().particle_map_len() as u32,
+        _pad2: 0,
+        density_width: grid.width,
+        density_height: grid.height,
+        density_interval: grid.sample_interval,
+        _pad3: 0,
+      },
+      sph: sim.device_particles().clone(),
+      soil: sim.device_soil().clone(),
+      soil_cells: geom.num_soil_cells() as u32,
+      bodies: sim.bodies().device.clone(),
+      limbs: sim.population().device.limbs.clone(),
+      density: Some(grid),
+    };
+    let mut resources = CallbackResources::default();
+    let mut encoder = setup
+      .device
+      .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    let scope = setup.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    callback.prepare(
+      &setup.device,
+      &setup.queue,
+      &ScreenDescriptor {
+        size_in_pixels: [64, 64],
+        pixels_per_point: 1.0,
+      },
+      &mut encoder,
+      &mut resources,
+    );
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "{error:?}");
+    assert!(resources.get::<Frame>().unwrap().density.is_some());
   }
 }

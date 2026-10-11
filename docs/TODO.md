@@ -217,11 +217,9 @@ downstream diverges, `REVIEW.md`). What is left:
   CUDA client, so no failed client exists to unwind.
 - **The GUI has never been looked at.** It builds and its shaders validate,
   but nobody has opened the window. Check it before trusting it: soil
-  colors, particle size and the evap debug ramp against the C++ screen, and
-  whether pan/zoom feel right.
-- **Interaction is not ported.** The C++ screen's mouse grab/repel
-  (`attract_fluid`, the `+`/`-`/`[`/`]` keys) and the density-grid overlay
-  (`calculate_fluid_density_grid`) have no Rust equivalent yet.
+  colors, particle size and the evap debug ramp against the C++ screen,
+  whether pan (middle drag) and zoom feel right, and the mouse tool (left
+  attracts, right repels, `+`/`-`/`[`/`]`) and the density-grid overlay.
 - **Soil has no update step.** `update_soil` is empty, as `update_soil_cuda`
   was. `calculate_soil_saturation` was defined and never launched in the
   C++, so it did not come along; the `saturation` field is still in the SoA
