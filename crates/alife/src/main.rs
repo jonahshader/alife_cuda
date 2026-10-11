@@ -1,7 +1,7 @@
 //! The `alife` binary: headless runs and the GUI.
 //!
-//! Flag names match the C++ tree's `src/main.cu`, so `--help` of both lists
-//! the same simulation flags.
+//! The simulation flags keep the names the C++ tree's `src/main.cu` gave them
+//! (tag `cpp-reference`).
 
 use std::path::PathBuf;
 use std::sync::Arc;

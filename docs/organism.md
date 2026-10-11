@@ -351,9 +351,9 @@ soil alone drives a split, and the controls must separate causes:
 20% of the world height, the same six columns at the same x extents, the same
 gaps, but the soil stops at `--column-top` of the world height and everything
 above is air. Mode 1 fills the columns to the top of the world and is
-therefore uninhabitable (decisions, 2026-09-19); it is also what every
-`resources/parity/*.bin` was generated from, so it is frozen rather than
-fixed. How far above the pool the columns end decides whether anything lives
+therefore uninhabitable (decisions, 2026-09-19); it is also frozen rather
+than fixed — the C++ parity references were generated from it, and
+`perf.md`'s measurements were taken on it. How far above the pool the columns end decides whether anything lives
 on them at all — see the `--column-top` decision entry.
 
 **The controls**, both mode 2 only; the validator rejects them on any other
@@ -597,7 +597,8 @@ uploads them.
   WebGPU, with tensor cores on the native backends if the brain ever
   becomes GEMM-shaped. It is alpha with breaking changes between minor
   versions; the mitigation is an exact version pin bumped deliberately.
-  The C++/CUDA tree is the reference until parity, then deleted.
+  The C++/CUDA tree was the reference until parity, then deleted (tag
+  `cpp-reference`).
 - 2026-09-18 — **Spike outcome (the deleted `crates/spike`, commit
   2a56cb0).** The
   CubeCL wgpu runtime adopts an existing `wgpu::Device` via `WgpuSetup` +
@@ -654,8 +655,9 @@ uploads them.
 - 2026-09-19 — **Mode 1 is frozen; the experiment's terrain is mode 2.** The
   fix for the entry below is a new `TerrainMode::CapillaryField` rather than a
   change to `capillary_test`, because mode 1 is what every
-  `resources/parity/*.bin` was generated from and `tests/parity.rs` measures
-  this port against the C++ binary through it. Mode 2 reuses
+  `resources/parity/*.bin` was generated from and `tests/parity.rs` measured
+  this port against the C++ binary through it (both since deleted with the
+  C++ tree). Mode 2 reuses
   `capillary_columns` for the x layout, so `SoilGrid::columns()` and every
   per-column metric work unchanged, and stops the soil at `--column-top`.
 - 2026-09-19 — **`--column-top` is 0.25, not the 0.55 the brief specified,
@@ -689,7 +691,7 @@ uploads them.
   --terrain-mode 1 --iterations 500`, 114 of 384 body particles sit exactly
   at `y = bounds.y` and the worst segment is 73% short of its rest length;
   the same run on the noise terrain is 0.08%. Terrain mode 2 is the answer,
-  above; mode 1 keeps this property and is only for the parity references.
+  above; mode 1 keeps this property and was only for the parity references.
 - 2026-09-19 — **The brain's latents need a normalization the slice table
   does not have.** One tick makes three residual adds onto the latent stream
   — the input cross-attention, the self-attention and the MLP — and the

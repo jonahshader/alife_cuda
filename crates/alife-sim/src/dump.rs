@@ -1,7 +1,7 @@
-//! The `--dump` / `--load` binary format, shared with the C++ binary.
+//! The `--dump` / `--load` binary format, which began as the C++ binary's.
 //!
-//! Layout (little-endian), identical to the writer documented above
-//! `write_particle_dump` in the C++ tree's `src/main.cu`:
+//! Layout (little-endian), extending the writer documented above
+//! `write_particle_dump` in the C++ tree's `src/main.cu` (tag `cpp-reference`):
 //!
 //! ```text
 //!   char[8]  magic "ALIFEDMP"
@@ -30,7 +30,7 @@ use crate::particles::SphHost;
 pub const MAGIC: &[u8; 8] = b"ALIFEDMP";
 pub const VERSION: u32 = 2;
 
-/// The version the C++ binary writes, and that `resources/parity/*.bin` are.
+/// The version the C++ binary wrote.
 pub const LEGACY_VERSION: u32 = 1;
 
 /// Arrays a version-1 dump holds: the C++ SoA, `pos` through `evap_prob`.
@@ -165,8 +165,8 @@ mod tests {
     assert_eq!(SphHost::FIELD_COUNT, LEGACY_FIELDS + 4);
   }
 
-  /// A version-1 dump — every `resources/parity/*.bin`, and anything the C++
-  /// binary writes — still loads, with the organism fields at their defaults.
+  /// A version-1 dump — anything the C++ binary wrote — still loads, with the
+  /// organism fields at their defaults.
   #[test]
   fn a_version_1_dump_loads_with_the_new_fields_defaulted() {
     let mut particles = SphHost::new(2);

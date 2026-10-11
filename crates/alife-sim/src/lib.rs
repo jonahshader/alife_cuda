@@ -1,9 +1,10 @@
 //! The simulation: state, CubeCL kernels and their plain-Rust references, and
 //! the step function. No windowing, no egui — see the `alife` binary for those.
 //!
-//! Ported from the C++/CUDA tree's `src/systems/particle_fluid2.cu` (the
-//! soil-coupled path) and `src/systems/soil.cu`, which stay as the reference
-//! until this port reaches parity.
+//! The fluid and soil are a port of the C++/CUDA tree's
+//! `src/systems/particle_fluid2.cu` (the soil-coupled path) and
+//! `src/systems/soil.cu`, checked against that binary until the tree was
+//! deleted; it survives at the git tag `cpp-reference`.
 
 pub mod bodies;
 pub mod brain;

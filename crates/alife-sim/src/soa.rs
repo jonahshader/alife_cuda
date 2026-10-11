@@ -1,7 +1,7 @@
 //! One field list per structure-of-arrays type.
 //!
-//! Mirrors `DEFINE_STRUCTS(Name, FIELDS)` in the C++ tree's
-//! `src/systems/soa_helper.h`: a single declaration generates the host struct,
+//! After `DEFINE_STRUCTS(Name, FIELDS)` in the C++ tree's
+//! `src/systems/soa_helper.h` (tag `cpp-reference`): a single declaration generates the host struct,
 //! the device buffers, the upload/download pair and the dump/load field order.
 //! Add a field by adding a line, never by hand-editing the generated structs.
 
@@ -13,7 +13,7 @@ use glam::Vec2;
 /// The device element type is deliberately allowed to differ from the host
 /// type: CubeCL kernels work in `f32`/`u32`, while the host side keeps the
 /// meaningful type (`Vec2`, an enum) and the dump keeps the C++ field layout so
-/// a dump written by either binary loads into the other.
+/// a dump the C++ binary wrote still loads.
 pub trait SoaField: Copy + Default + 'static {
   /// Element type of the device buffer backing this field.
   type Device: Pod + Default;

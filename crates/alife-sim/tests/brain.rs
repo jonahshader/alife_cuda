@@ -21,7 +21,7 @@ use alife_sim::runtime::{AnySim, RuntimeKind, WgpuOptions, available};
 const RUNTIMES: [RuntimeKind; 3] = [RuntimeKind::Cpu, RuntimeKind::Cuda, RuntimeKind::Wgpu];
 
 /// Two CubeCL backends coming up at once from two test threads segfaults
-/// inside the runtimes, as `parity.rs` found.
+/// inside the runtimes, as `reproducibility.rs` notes.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 fn serialised() -> MutexGuard<'static, ()> {

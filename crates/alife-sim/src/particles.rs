@@ -1,8 +1,8 @@
 //! The SPH particle state.
 //!
-//! The field list mirrors `FOR_SPH` in the C++ tree's
-//! `src/systems/particle_fluid2.cuh`, in the same order, so a dump written by
-//! either binary loads into the other.
+//! The field list starts with `FOR_SPH` from the C++ tree's
+//! `src/systems/particle_fluid2.cuh`, in the same order, so a dump the C++
+//! binary wrote still loads.
 
 use glam::Vec2;
 

@@ -134,29 +134,6 @@ Left open by the brain chunk:
   at the sim without parking a window. `egui_wgpu::capture` is the offscreen
   path.
 
-## Code health (C++ tree — reference only; fix nothing in place)
-
-Everything here is either already handled in the port or dies with the C++
-tree. Listed so a future session recognises them rather than re-deriving
-them.
-
-- `World` as a top-level composition of all systems (soil + fluid +
-  organisms) with one init and one step shared by headless and GUI. The
-  Rust `Sim` is that for fluid + soil; organisms join it.
-- `--extended-lambda` and `--expt-relaxed-constexpr` are set in
-  `CMakeLists.txt` but nothing uses device lambdas or device-side
-  `constexpr`. `FetchContent_Populate` is deprecated (CMake 4 warns) for
-  glad, artery_font, lodepng, FastNoiseLite, imgui.
-- `soil_render.cu` re-registers/unregisters its GL buffer every frame;
-  `rect_tex_renderer.cu` creates a `cudaTextureObject_t` no kernel samples;
-  `curand_kernel.h` is included in three files with every use commented out;
-  `screens/tree_test.cu` and `systems/trees.cu` carry large commented-out
-  blocks.
-- `--write-config` emits repeated `[fluid]`/`[world]` section headers, which
-  its own loader rejects, and prints floats with `%f`, so the `dt` it writes
-  reads back 2e-4 off 1/600. The Rust writer groups sections and prints
-  round-trippable literals.
-
 ## Fluid simulation
 
 - **Solver choice — on hold** (`organism.md`, decisions). FLIP/PIC is not on
@@ -164,16 +141,15 @@ them.
   organism milestone.
 - **The pressure equation describes a gas.** `pressure_mult * (density -
   target_density)` (`kernels/accel.rs`) is linear in density, which is a
-  gas's equation of state rather than a liquid's; the C++ carried the same
-  TODO. A stiffer one (Tait) is the obvious candidate, and belongs with the
+  gas's equation of state rather than a liquid's. A stiffer one (Tait) is the obvious candidate, and belongs with the
   solver question above rather than before it.
 - **Profile the SPH step.** Organism bodies are particles in this system,
   so the per-particle cost of the three neighbour-gather kernels (93% of the
   ~0.49 ms step for 51k particles, `docs/perf.md`) is now the cost of
   bodies too. Start with `ncu` on `calculate_accel`: occupancy, achieved
   bandwidth, and what CubeCL's generated CUDA does with the neighbour loop —
-  it is 3% slower than the hand-written `__device__` version, and
-  `calculate_evap_prob` is 9%. The per-kernel timing synchronises after
+  it measured 3% slower than the deleted C++ tree's hand-written
+  `__device__` version, and `calculate_evap_prob` 9% (`perf.md`). The per-kernel timing synchronises after
   every launch, so it hides any launch overlap; use `nsys` for the timeline.
 - Autotune kernel launch parameters (block size, particles per cell).
 - Spatial adaptive resolution — fewer particles where velocity is low.
@@ -197,21 +173,9 @@ them.
   it is ever on by default.
 - **Reserved brain features**, added only on a plateau that looks like the
   missing piece: tree-distance attention bias, per-limb memory head.
-- The existing L-system trees (`systems/trees.cu`, `tree_types.cuh`) are
-  superseded by the plant milestone; delete or absorb once particle-body
-  plants render.
 
 ## Substrate: Rust + CubeCL (decided 2026-09-18, see `organism.md` decisions)
 
-The fluid and soil are ported and at parity (`perf.md`) on the CPU and CUDA
-runtimes; on wgpu one field, `evap_prob`, lands at 3.2× the C++ run-to-run
-floor instead of 1× (float contraction in the shader compiler; nothing
-downstream diverges, `REVIEW.md`). What is left:
-
-- **Delete the C++ tree.** It is reference-only now. It still owns the
-  L-system trees, which the plant milestone supersedes, so it goes when
-  particle-body plants render — together with `src/`, `CMakeLists.txt`, the
-  SDL/ImGui/GL dependencies and the parity references that check against it.
 - **Segfault at exit when CUDA is present but unusable.**
   `CUDA_VISIBLE_DEVICES="" ./target/release/alife --headless --iterations 1`
   runs on wgpu and then dies with SIGSEGV in teardown (exit 139,
@@ -222,9 +186,10 @@ downstream diverges, `REVIEW.md`). What is left:
   CUDA client, so no failed client exists to unwind.
 - **The GUI has never been looked at.** It builds and its shaders validate,
   but nobody has opened the window. Check it before trusting it: soil
-  colors, particle size and the evap debug ramp against the C++ screen,
-  whether pan (middle drag) and zoom feel right, and the mouse tool (left
-  attracts, right repels, `+`/`-`/`[`/`]`) and the density-grid overlay.
+  colors, particle size and the evap debug ramp, whether pan (middle drag)
+  and zoom feel right, the mouse tool (left attracts, right repels,
+  `+`/`-`/`[`/`]`), the density-grid overlay, the profiler window, the fps
+  readout and Esc to quit (`REVIEW.md`).
 - **Soil has no update step.** `update_soil` is empty, as `update_soil_cuda`
   was. `calculate_soil_saturation` was defined and never launched in the
   C++, so it did not come along; the `saturation` field is still in the SoA

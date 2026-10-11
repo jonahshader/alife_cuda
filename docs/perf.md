@@ -7,31 +7,34 @@ command is not a baseline.
 ## How to measure
 
 ```
-cd build && ./alife_cuda --headless --iterations 100
+cargo build --release -j16
+./target/release/alife --headless --seed 42 --runtime cuda --iterations 201
 ```
 
-prints per-kernel timings in milliseconds from `TimingProfiler` on exit.
-Each section is bracketed by a CUDA event pair and synchronized, so trivial
-kernels report a floor of a few microseconds and the run is serialized; for
-launch overlap or sub-kernel detail use Nsight:
+prints per-kernel timings in milliseconds on exit; the first step is a
+warm-up and is not counted, because every kernel is JIT-compiled on its
+first launch. Each launch is synchronised, so the run is serialised, and
+only wgpu reports device time — CUDA and CPU report wall time around the
+sync, with a ~11 µs floor per launch. For like-for-like CUDA numbers or
+launch overlap use Nsight:
 
 ```
-nsys profile -o /tmp/hl --stats=true ./alife_cuda --headless --iterations 20
+nsys profile -o /tmp/hl --stats=false --force-overwrite=true \
+  ./target/release/alife --headless --seed 42 --runtime cuda --iterations 21
 nsys stats --report cuda_gpu_kern_sum /tmp/hl.nsys-rep
 ```
 
-The two agree to within a few percent for the neighbor kernels. A run that
-finishes did execute its kernels: `check_cuda` is fatal, so a failed launch
-exits non-zero instead of printing plausible numbers for kernels that never
-ran.
+The sections below that name `./build/alife_cuda` measured the C++ tree,
+which is deleted (tag `cpp-reference`); they are kept because the Rust
+numbers after them are compared against them.
 
 ## dev box — RTX 5090 (sm_120) / 16-core / 76 GB
 
 Toolchain (2026-09-19): CUDA 13.3 toolkit, driver 610.57.04 (Ubuntu's
-`nvidia-driver-610-open`, CUDA 13.3), CMake 4.2, GCC host. **The driver and
-the default toolkit must agree on the CUDA version**: the C++ tree never
-notices a mismatch because nvcc emits SASS ahead of time, but the CubeCL
-CUDA runtime JITs from PTX via nvrtc, and a driver older than the toolkit
+`nvidia-driver-610-open`, CUDA 13.3). **The driver and the default toolkit
+must agree on the CUDA version**: the CubeCL CUDA runtime JITs from PTX via
+nvrtc (the C++ tree never noticed a mismatch, because nvcc emitted SASS
+ahead of time), and a driver older than the toolkit
 rejects it with `CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. That was the case
 until 2026-09-19 (driver 595 at CUDA 13.2 against the 13.3 toolkit), and
 every CUDA run needed `LD_LIBRARY_PATH=/usr/local/cuda-13.2/lib64` to load
@@ -44,12 +47,13 @@ prebuilt LLVM 22.1.4 (36 MB, cached under `~/.cache/tracel`) and ignores
 the system LLVM. Clean release build of the whole workspace with the bundle
 cached: **1 m 32 s at `-j16`**.
 
-**Build ceiling: `-j16` is fine for this project** — a full rebuild
-including SDL2 and the CUDA translation units completed at `-j16` with
-headroom (2026-09-18). Unlike `mg-rl-rewrite`, no OOM has been observed
-here; re-measure if translation units grow.
+**Build ceiling: `-j16` is fine for this project** — the clean workspace
+build above, and before it a full rebuild of the C++ tree with SDL2 and
+its CUDA translation units (2026-09-18), completed at `-j16` with headroom.
+Unlike `mg-rl-rewrite`, no OOM has been observed here; re-measure if a
+dependency grows.
 
-### Headless baseline, default config (2026-09-18, commit after 4454b4a)
+### Headless baseline, default config — the C++ tree (2026-09-18, commit after 4454b4a)
 
 World 32×16 m, smoothing radius 0.2 → 160×80 cells × 4 particles per cell =
 **51,200 particles**. Nsight kernel summary over 20 steps, GPU otherwise
@@ -70,7 +74,7 @@ About **0.45 ms of GPU time per simulation step**, 98% of it in the three
 neighbor-gather kernels. The GUI reports ~1.95 ms per frame including
 rendering and the density-grid pass.
 
-### Neighbor kernels after the grid-tiling fix (2026-09-18)
+### Neighbor kernels after the grid-tiling fix — the C++ tree (2026-09-18)
 
 Same machine, same default config as the table above. Commits: `6a2e26c`
 (before), `2233423` (grid tiles the width exactly, seam widening gone),
@@ -202,8 +206,9 @@ the CPU runtime from 292.7 ms to 9.7 ms per step and cost the GPU backends
 The C++ is not bit-reproducible run to run — `populate_grid_indices`'s
 atomics fix each cell's summation order, and `calculate_accel` reads
 `sph.vel` while writing it — so parity is stated against that binary's own
-floor. `crates/alife-sim/README.md` has the commands; `tests/parity.rs`
-runs the check.
+floor. The check was `crates/alife-sim/tests/parity.rs` against C++ dumps
+in `resources/parity/`, both deleted with the C++ tree; `git log` has
+them.
 
 One step from `ref1.bin`, max absolute difference per field against a C++
 run of the same two steps, as a multiple of the spread across three C++

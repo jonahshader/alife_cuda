@@ -1,8 +1,9 @@
 //! Simulation parameters: one declaration per parameter.
 //!
-//! Mirrors the X-macro in the C++ tree's `src/config/sim_params.h`. A single
-//! line yields the struct field, the compiled default, the TOML key, the CLI
-//! flag and the help text shared by `--help` and `--write-config`.
+//! After the X-macro in the C++ tree's `src/config/sim_params.h` (tag
+//! `cpp-reference`). A single line yields the struct field, the compiled
+//! default, the TOML key, the CLI flag and the help text shared by `--help`
+//! and `--write-config`.
 //! Precedence is CLI > TOML > compiled default.
 
 use std::fmt::Write as _;
@@ -339,8 +340,8 @@ impl SimParams {
   /// The terrain half. `--column-top` and the two soil-specialization controls
   /// describe terrain mode 2 and nothing else; a run that asks for them on
   /// another mode is asking for a terrain that does not exist, and mode 1 in
-  /// particular is what every `resources/parity/*.bin` was generated from and
-  /// stays byte for byte as it is.
+  /// particular is frozen (`TerrainMode::CapillaryTest`) and stays byte for
+  /// byte as it is.
   fn validate_terrain(&self) -> Result<(), String> {
     if !(0.0..=1.0).contains(&self.column_top) || self.column_top <= 0.0 {
       return Err(format!(

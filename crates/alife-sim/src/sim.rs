@@ -605,7 +605,7 @@ pub(crate) fn run_timed<R: Runtime>(
 ///
 /// The C++ draws from `std::default_random_engine` with libstdc++'s own
 /// distributions, which no other implementation reproduces, so this cannot be
-/// and is not the same field at the same seed. Parity against the C++ is
+/// and is not the same field at the same seed. Parity against the C++ was
 /// therefore checked by loading a C++ dump (`--load`), not by seeding alike.
 pub fn initial_particles(geom: &WorldGeometry, params: &SimParams, seed: u64) -> SphHost {
   let n = geom.fluid_particles;

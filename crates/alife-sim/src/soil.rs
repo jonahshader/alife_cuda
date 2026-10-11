@@ -42,8 +42,9 @@ pub enum TerrainMode {
   /// Noise heightmap with a softmax blend of sand/silt/clay.
   Noise,
   /// Capillary tube test: a shared water pool under separate soil columns,
-  /// each filled to the very top of the world. What every
-  /// `resources/parity/*.bin` was generated from, so it never changes.
+  /// each filled to the very top of the world. Frozen: the C++ parity
+  /// references were generated from it and measurements in `docs/perf.md`
+  /// were taken on it, so a new terrain need is a new mode.
   CapillaryTest,
   /// The same layout with air above the columns, so a plant anchored on a
   /// column's surface has somewhere to grow: the soil-specialization
@@ -129,7 +130,7 @@ impl std::str::FromStr for UniformSoil {
 ///
 /// The two controls apply to [`TerrainMode::CapillaryField`] only; the
 /// parameter validator rejects them on any other mode, so mode 1 stays the
-/// terrain the parity references were generated from.
+/// frozen terrain it is ([`TerrainMode::CapillaryTest`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TerrainSpec {
   pub mode: TerrainMode,
@@ -513,8 +514,8 @@ fn fill_columns(
 ///
 /// The two noise generators are seeded from a `std::mt19937_64` drawn in the
 /// same order as the C++, and `fastnoise-lite` is a port of the same
-/// FastNoiseLite, so the same world seed produces the same terrain in both
-/// trees — see `docs/perf.md` for the measured agreement.
+/// FastNoiseLite, so the same world seed produces the terrain the C++ tree
+/// did — see `docs/perf.md` for the measured agreement.
 pub fn noise_terrain(width: usize, height: usize, seed: u64) -> SoilHost {
   use fastnoise_lite::{FastNoiseLite, FractalType, NoiseType};
 
@@ -642,7 +643,8 @@ mod tests {
 
   /// Values printed by a probe that makes the same calls as the C++
   /// `reset_soil`, built against the FastNoiseLite and libstdc++ the C++ tree
-  /// uses. Regenerating them is described in `crates/alife-sim/README.md`.
+  /// used (tag `cpp-reference`). That tree is gone, so they are a frozen
+  /// regression pin on the terrain rather than something to regenerate.
   // The literals are the C++ probe's printout verbatim, at the nine
   // significant digits that round-trip an `f32`; truncating them to what
   // clippy considers the shortest form would lose that provenance.

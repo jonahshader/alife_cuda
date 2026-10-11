@@ -9,17 +9,3 @@ insert_final_newline = true
 trim_trailing_whitespace = true
 indent_style = space
 indent_size = 2
-
-# C++ files
-[*.{cpp,hpp,h,cc}]
-indent_size = 2
-indent_style = space
-
-# CMake files
-[CMakeLists.txt]
-indent_size = 2
-indent_style = space
-
-[*.cmake]
-indent_size = 2
-indent_style = space

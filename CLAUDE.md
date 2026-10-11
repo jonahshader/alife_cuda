@@ -2,18 +2,18 @@
 
 Artificial-life simulation: an SPH particle fluid with an
 evaporation/condensation cycle, a soil grid with porosity and capillary
-action, L-system trees, and (planned) creatures driven by evolved policy
-networks. The sibling repo `alife_cuda_2` is the source of several ports
-still listed in `docs/TODO.md`.
+action, and plants (later creatures) driven by evolved policy networks. The
+sibling repo `alife_cuda_2` is the source of several ports still listed in
+`docs/TODO.md`.
 
-The fluid and soil run on **Rust + CubeCL** (`crates/`), on CPU, CUDA or
-wgpu. The C++/CUDA tree (`src/`) is the reference the port is checked
-against and still owns the L-system trees; it is not where new sim work
-goes. See *Build, test & run*.
+The sim is **Rust + CubeCL** (`crates/`), on CPU, CUDA or wgpu. It began as
+a port of a C++/CUDA tree, which is deleted; the local git tag
+`cpp-reference` keeps it, for when a comment's "as the C++ did" needs
+looking up.
 
 **What belongs here:** cross-cutting conventions and non-obvious invariants a
-session needs *before* editing. Subsystem APIs live in the owning header (the
-source of truth) or in `docs/`; **link to them, don't restate them here** — a
+session needs *before* editing. Subsystem APIs live in the owning module's
+doc comments (the source of truth) or in `docs/`; **link to them, don't restate them here** — a
 copy in this file just goes stale. See `docs/CLAUDE.md` for the doc index +
 maintenance contract (which doc to update for which kind of change, including
 how `TODO.md` is kept current).
@@ -24,21 +24,17 @@ Keep **simulation state** and **rendering** separate. `crates/alife-sim`
 holds the state, the kernels and the step function and knows nothing about
 windows; `crates/alife` owns the CLI, the headless loop and the egui window.
 Headless mode builds the state and steps it without ever creating a window —
-keep it that way. (The C++ tree draws the same line between `src/systems/`,
-`src/graphics/` and `src/screens/`.)
+keep it that way.
 
 Structure-of-arrays types come from one field list: `define_soa!` in
-`crates/alife-sim/src/soa.rs` (and `DEFINE_STRUCTS` in
-`src/systems/soa_helper.h` on the C++ side). One declaration generates the
-host struct, the device buffers and the dump order. Add a field by adding a
-line, never by hand-editing a generated struct — and add it in both trees
-while both exist, or a dump stops loading across them.
+`crates/alife-sim/src/soa.rs`. One declaration generates the host struct,
+the device buffers and the dump order. Add a field by adding a line, never
+by hand-editing a generated struct.
 
 Simulation parameters are one declaration each in
-`crates/alife-sim/src/params.rs` (and `src/config/sim_params.h`) — that
-single line produces the struct field, the TOML key, the CLI flag, the help
-text and the default-config writer. Precedence is CLI > TOML > compiled
-default.
+`crates/alife-sim/src/params.rs` — that single line produces the struct
+field, the TOML key, the CLI flag, the help text and the default-config
+writer. Precedence is CLI > TOML > compiled default.
 
 Every CubeCL kernel has a plain-Rust reference next to it and a test that
 runs both over one fixed input. That is not belt and braces: the CPU
@@ -46,7 +42,7 @@ runtime's LLVM JIT emits no symbols, so a debugger never sees a kernel, and
 the reference is the only way to find out what a kernel actually computed.
 
 Naming is snake_case for functions/variables/files, PascalCase for types
-(`.clang-tidy` enforces it on the C++ side, `rustfmt`/`clippy` on the Rust).
+(rustc's naming lints enforce it).
 Comments explain *why*, not what; skip them when names and structure already
 say it. **Never silently drop existing comments when refactoring** — carry
 them to the new location or say why they went.
@@ -86,11 +82,6 @@ ignore.
 
 ## Build, test & run
 
-The fluid and soil sim is **Rust + CubeCL** (`crates/alife-sim`, the
-`alife` binary). The C++/CUDA tree is now **reference only**: it stays
-buildable so the port can be checked against it, and it is what the
-L-system trees still live in. New sim work goes in the Rust tree.
-
 - Build: `cargo build --release -j16`. The pinned CubeCL needs rustc ≥ 1.95
   (`docs/perf.md` has the box's toolchain); `Cargo.lock` is authoritative,
   **don't regenerate it** (`cargo add` is fine). Before committing:
@@ -104,7 +95,7 @@ L-system trees still live in. New sim work goes in the Rust tree.
   per-kernel timings on exit. `--runtime cpu|cuda|wgpu` picks the backend
   (default: CUDA if available, else wgpu, else CPU); `--dump <path>` writes
   the particle SoA and `--load <path>` resumes from one — version 2 of the
-  C++ `--dump` format, and it still reads version 1
+  format, and it still reads the C++ binary's version 1
   (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
   soil surface and the life cycle takes it from there — they gain energy,
   grow, seed and die on their own; the default 0 leaves the world exactly
@@ -124,32 +115,15 @@ L-system trees still live in. New sim work goes in the Rust tree.
   (genomes, lineage, energy, anchors; bodies are re-grown, seeds dropped),
   and `--transplant <from>:<to>` moves a soil column's organisms into
   another.
-- **Same-seed runs are bit-reproducible** on a given backend, unlike the
-  C++, so a change to sim code can be checked by diffing dumps.
-  `cargo test` runs each kernel against its plain-Rust reference and,
-  when the C++ reference dumps are present, against the C++ binary itself
-  (`crates/alife-sim/README.md` regenerates them).
+- **Same-seed runs are bit-reproducible** on a given backend, so a change
+  to sim code can be checked by diffing dumps against the previous
+  binary's. `cargo test` runs each kernel against its plain-Rust reference
+  and checks same-seed reproducibility on every backend the box has.
 - **Never leave a GUI run open on the user's desktop.** The app has no frame
   cap flag yet, so an uncapped window pegs the GPU. An agent starts a GUI run
   only when the user asked for one, under `timeout`, and says so. What an
   agent *can* check without a window is that the shaders and pipelines
   validate, which `cargo test -p alife` does.
-
-The C++ reference tree:
-
-- Configure once: `cmake -S . -B build -DCMAKE_BUILD_TYPE=Release`. Build:
-  `cmake --build build -j<N>` with the **measured** per-machine job count
-  from `docs/perf.md`. Before committing: `cmake --build build --target
-  format`.
-- `CMAKE_CUDA_ARCHITECTURES` defaults to `native` (the local GPU). Pass it
-  explicitly for a cross-machine binary; the generated `.clangd` follows
-  whichever arch was resolved.
-- **Run its GUI from `resources/` as CWD** (`cd resources &&
-  ../build/alife_cuda`) — shaders load by relative path.
-- `./build/alife_cuda --headless --iterations N --dump <path>` is how the
-  parity references are made. It is not bit-reproducible run to run (atomic
-  grid insertion order, and `calculate_accel` races on `sph.vel`), so
-  compare aggregates or compare against its own run-to-run spread.
 
 ## Working with Claude
 

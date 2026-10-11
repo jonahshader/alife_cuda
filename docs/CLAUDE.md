@@ -62,10 +62,10 @@ failure mode. If an entry describes *what* shipped rather than *why* or
   from and the description of what runs. Update it in the same commit as
   any implementation that diverges.
 
-The fluid, soil, and tree models are still documented in their owning
-headers (`src/systems/particle_fluid2.cuh`, `soil.cuh`, `tree_types.cuh`)
-and in `git log`. Create `docs/<topic>.md` and add it here when a design
-outgrows header comments: a model with tunables
+The fluid and soil models are documented in the doc comments of the Rust
+modules that own them (`crates/alife-sim/src/kernels/`, `soil.rs`,
+`world.rs`) and in `git log`. Create `docs/<topic>.md` and add it here when
+a design outgrows code comments: a model with tunables
 whose *rationale* matters (why these porosity / capillary constants), a
 cross-system contract (how erosion moves material between fluid and soil),
 or a measured comparison a future session would otherwise redo.
@@ -80,7 +80,7 @@ or a measured comparison a future session would otherwise redo.
 
 | Change                                          | Doc(s) to update                          |
 |-------------------------------------------------|-------------------------------------------|
-| New sim parameter                               | none — the X-macro line in `sim_params.h` *is* the doc; `--write-config` regenerates the TOML |
+| New sim parameter                               | none — its line in `crates/alife-sim/src/params.rs` *is* the doc; `--write-config` regenerates the TOML |
 | New CLI mode or flag                            | root `CLAUDE.md` *Build, test & run* if it changes how agents run the app |
 | Build ceiling / toolchain / baseline re-measured | `perf.md`                                 |
 | New machine set up                              | `perf.md` (its own section)               |
