@@ -21,6 +21,7 @@ use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
 use super::constraints::{limb_axis, limb_len, particle_at, rotate, segment_fraction, wrap_x};
+use super::motion::VAPOR_RISE;
 use super::{
   BodyArgs, Cfg, KIND_BODY, KIND_FREE, KIND_VAPOR, P_BOUNDS_X, P_BOUNDS_Y, P_LIMB_SEGMENT_LENGTH,
   PARAM_COUNT, body_args, cube_count, whole,
@@ -190,7 +191,7 @@ pub fn layout_limbs(
 /// death carries the dead organism's values, which is the same problem.
 ///
 /// Every kind starts at rest except vapor, which starts rising at the
-/// `(0, 0.5)` that `evaporate_particles` gives a particle it turns to vapor:
+/// [`VAPOR_RISE`] `evaporate_particles` gives a particle it turns to vapor:
 /// transpired water leaves a leaf exactly as evaporated water leaves the pool.
 #[cube(launch)]
 #[allow(clippy::too_many_arguments)]
@@ -217,7 +218,7 @@ pub fn place_particles(
   sph.vel[2 * id] = 0.0f32;
   sph.vel[2 * id + 1] = 0.0f32;
   if kind[k] == KIND_VAPOR {
-    sph.vel[2 * id + 1] = 0.5f32;
+    sph.vel[2 * id + 1] = VAPOR_RISE;
   }
   sph.mass[id] = 1.0f32;
   sph.density[id] = 0.0f32;
@@ -249,7 +250,15 @@ pub fn free_particles(sph: &mut BodyArgs, ids: &[u32], freed: &mut [f32], count:
   let id = ids[k] as usize;
   freed[2 * k] = sph.ppos[2 * id];
   freed[2 * k + 1] = sph.ppos[2 * id + 1];
+  free_slot(sph, id);
+}
 
+/// Leave slot `id` exactly as a slot that has never been used: parked, no
+/// mass, no state, no owner. The one definition of what `Free` means on the
+/// device — a death, a break, a discarded seed and a drink all go through it,
+/// so a field added to the SoA is cleared in one place or none.
+#[cube]
+pub fn free_slot(sph: &mut BodyArgs, id: usize) {
   sph.pos[2 * id] = PARKED_X;
   sph.pos[2 * id + 1] = PARKED_Y;
   sph.ppos[2 * id] = PARKED_X;
@@ -297,20 +306,25 @@ pub fn free_particles_ref(particles: &mut SphHost, ids: &[u32]) -> Vec<glam::Vec
   for id in ids {
     let id = *id as usize;
     freed.push(particles.ppos[id]);
-    particles.pos[id] = crate::particles::PARKED_POS;
-    particles.ppos[id] = crate::particles::PARKED_POS;
-    particles.vel[id] = glam::Vec2::ZERO;
-    particles.mass[id] = 0.0;
-    particles.density[id] = 0.0;
-    particles.near_density[id] = 0.0;
-    particles.evap_prob[id] = 0.0;
-    particles.state[id] = ParticleKind::Free;
-    particles.organism[id] = crate::particles::NO_ORGANISM;
-    particles.limb[id] = 0;
-    particles.index_in_limb[id] = 0;
-    particles.part_type[id] = crate::genome::PartType::Absent;
+    free_slot_ref(particles, id);
   }
   freed
+}
+
+/// Host twin of [`free_slot`].
+pub fn free_slot_ref(particles: &mut SphHost, id: usize) {
+  particles.pos[id] = crate::particles::PARKED_POS;
+  particles.ppos[id] = crate::particles::PARKED_POS;
+  particles.vel[id] = glam::Vec2::ZERO;
+  particles.mass[id] = 0.0;
+  particles.density[id] = 0.0;
+  particles.near_density[id] = 0.0;
+  particles.evap_prob[id] = 0.0;
+  particles.state[id] = ParticleKind::Free;
+  particles.organism[id] = crate::particles::NO_ORGANISM;
+  particles.limb[id] = 0;
+  particles.index_in_limb[id] = 0;
+  particles.part_type[id] = crate::genome::PartType::Absent;
 }
 
 /// Fill a per-particle occupancy flag buffer from the particle kinds.
@@ -570,7 +584,7 @@ pub fn place_particles_ref(particles: &mut SphHost, placement: &Placement, posit
     particles.pos[id] = p;
     particles.ppos[id] = p;
     particles.vel[id] = if kind == ParticleKind::Vapor {
-      Vec2::new(0.0, 0.5)
+      Vec2::new(0.0, VAPOR_RISE)
     } else {
       Vec2::ZERO
     };

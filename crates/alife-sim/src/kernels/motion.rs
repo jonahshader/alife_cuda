@@ -15,6 +15,11 @@ use super::{
 use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{RngCounter, threefry4x32_20, threefry4x32_20_ref, u01, u01_ref};
 
+/// The upward velocity a particle starts with the moment it becomes vapor —
+/// here when it evaporates, and in `spawn::place_particles` when a leaf
+/// transpires it, so the two kinds of vapor rise alike.
+pub const VAPOR_RISE: f32 = 0.5;
+
 /// Flip qualifying liquid particles to vapor state.
 ///
 /// The Threefry counter arrives as four scalars rather than a buffer: it is
@@ -50,7 +55,7 @@ pub fn evaporate_particles(
   if roll < prob {
     sph.state[i] = 1u32;
     sph.vel[2 * i] = 0.0f32;
-    sph.vel[2 * i + 1] = 0.5f32;
+    sph.vel[2 * i + 1] = VAPOR_RISE;
   }
 }
 
@@ -207,7 +212,7 @@ pub fn evaporate_particles_ref(
     let result = threefry4x32_20_ref(ctr.0, [i as u32, 1, 0, 0]);
     if u01_ref(result[0]) < prob {
       particles.state[i] = ParticleKind::Vapor;
-      particles.vel[i] = glam::Vec2::new(0.0, 0.5);
+      particles.vel[i] = glam::Vec2::new(0.0, VAPOR_RISE);
     }
   }
 }

@@ -47,20 +47,23 @@ use crate::kernels::{
 use crate::particles::{SphDevice, SphHost};
 use crate::soil::{SoilDevice, SoilGrid, SoilHost};
 
-/// One whole occluding particle in the fixed-point count.
+/// One whole occluding particle in the fixed-point count. The kernels and
+/// their twins all scale by this one constant, so a fully grown particle
+/// counts exactly one wherever the count is read.
 pub const OCCLUDER_ONE: u32 = 256;
+const OCCLUDER_ONE_F32: f32 = OCCLUDER_ONE as f32;
 
-/// What one stem or leaf particle adds to its cell: `round(256 x
+/// What one stem or leaf particle adds to its cell: `round(OCCLUDER_ONE x
 /// segment_fraction)`, by adding a half and truncating, which for a value in
-/// `[0, 256]` is the same rounding on every backend.
+/// `[0, OCCLUDER_ONE]` is the same rounding on every backend.
 #[cube]
 pub fn occluder_weight(grown: f32, k: u32) -> u32 {
-  (256.0f32 * segment_fraction(grown, k) + 0.5f32) as u32
+  (OCCLUDER_ONE_F32 * segment_fraction(grown, k) + 0.5f32) as u32
 }
 
 /// Host twin of [`occluder_weight`].
 pub fn occluder_weight_ref(grown: f32, k: usize) -> u32 {
-  (256.0f32 * segment_fraction_ref(grown, k) + 0.5) as u32
+  (OCCLUDER_ONE_F32 * segment_fraction_ref(grown, k) + 0.5) as u32
 }
 
 /// What a cell's fixed-point count lets through: `attenuation` per whole
@@ -68,15 +71,15 @@ pub fn occluder_weight_ref(grown: f32, k: usize) -> u32 {
 #[cube]
 pub fn transmit(light: f32, count: u32, attenuation: f32) -> f32 {
   let mut l = light;
-  let whole_particles = count / 256u32;
-  let rest = count % 256u32;
+  let whole_particles = count / OCCLUDER_ONE;
+  let rest = count % OCCLUDER_ONE;
   // Repeated multiplication rather than `powf`: exact, and identical on
   // every backend, where a transcendental is not (`docs/organism.md`,
   // decisions, 2026-09-19). A cell is 0.1 m, so the loop is short.
   for _ in 0..whole_particles {
     l *= attenuation;
   }
-  l * (1.0f32 - (rest as f32 / 256.0f32) * (1.0f32 - attenuation))
+  l * (1.0f32 - (rest as f32 / OCCLUDER_ONE_F32) * (1.0f32 - attenuation))
 }
 
 /// Host twin of [`transmit`].
@@ -85,7 +88,7 @@ pub fn transmit_ref(light: f32, count: u32, attenuation: f32) -> f32 {
   for _ in 0..count / OCCLUDER_ONE {
     l *= attenuation;
   }
-  l * (1.0 - ((count % OCCLUDER_ONE) as f32 / 256.0) * (1.0 - attenuation))
+  l * (1.0 - ((count % OCCLUDER_ONE) as f32 / OCCLUDER_ONE_F32) * (1.0 - attenuation))
 }
 
 /// Part-type codes that block light. Stem and leaf stand above ground; a root

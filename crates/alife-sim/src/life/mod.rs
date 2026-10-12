@@ -180,9 +180,13 @@ impl<R: Runtime> Sim<R> {
   }
 
   /// Which organisms may drink this tick: a plant whose pool is below its
-  /// capacity, `water_capacity_per_volume` times its volume. A drink is a
-  /// whole particle, so a pool may end a tick above its capacity by less than
-  /// one; it just does not drink again until it is back under.
+  /// capacity, `water_capacity_per_volume` times its volume. The flag gates
+  /// *starting* drinks, not finishing them: every liquid particle in reach of
+  /// the organism's roots rolls against the same flag this tick, so a pool
+  /// just under capacity can end the tick over it by the whole tick's drinks
+  /// — on average `drink_rate` times the liquid particles in reach, a
+  /// particle or so at the defaults. It then does not drink again until it
+  /// is back under.
   fn thirsty_flags(&self) -> Vec<u32> {
     let p = &self.params;
     (0..self.pop.max_organisms)
@@ -200,6 +204,12 @@ impl<R: Runtime> Sim<R> {
   /// Let every liquid particle by a thirsty root decide whether it is drunk.
   fn drink(&mut self) {
     let thirsty = self.thirsty_flags();
+    if thirsty.iter().all(|flag| *flag == 0) {
+      // Nobody can drink, so no particle's decision could differ from "no":
+      // the gather over every liquid particle is skipped, and the drink
+      // counters stay at the zero the pack kernel left them.
+      return;
+    }
     let thirsty = self
       .client
       .create_from_slice(bytemuck::cast_slice(&thirsty));
@@ -404,7 +414,9 @@ impl<R: Runtime> Sim<R> {
       // short when every slot already holds a full body — at which point an
       // over-charged tick is the least of it. The volume grown locks
       // `water_per_volume` of the pool into the body, and the allocation
-      // never spends more than the pool can lock.
+      // never spends more than the pool can lock; the water of a dropped
+      // limb is over-charged the same way, and the ledger's residual shows
+      // it, because no tissue holds it and nothing counts it as leaked.
       let charged = allocate_growth(
         &self.pop,
         &self.bodies,

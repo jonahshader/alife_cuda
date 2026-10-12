@@ -199,8 +199,11 @@ organism's transpiration accumulator — and it moves between them only here:
 - **The pool**, `water` in the organism SoA, in particles, holds up to
   `water_capacity_per_volume` (3000) times the organism's volume — about 5.2
   particles for a grown founder. A drink is whole and the capacity a float,
-  so a root starts a drink only while the pool is below capacity, and the
-  pool may sit above it by less than one particle. It is mastered like
+  so the flag gates *starting* drinks: a root drinks only while the pool is
+  below capacity, and because every liquid particle in reach rolls against
+  the same flag within one tick, the pool can end a tick above capacity by
+  that tick's drinks — on average `drink_rate` times the liquid particles
+  in reach, a particle or so at the defaults. It is mastered like
   `energy`: the energy kernel credits the tick's drinks and spends light
   income from it, the packed readback carries it to the host, the decision
   walk charges growth to it and uploads it.

@@ -42,12 +42,13 @@ use crate::bodies::{BodyCfg, BodyState};
 use crate::genome::PartType;
 use crate::kernels::constraints::{segment_fraction, segment_fraction_ref};
 use crate::kernels::grid::{GridDevice, GridRef, neighbour_cell, neighbours, unwrap_x};
+use crate::kernels::spawn::free_slot;
 use crate::kernels::{
-  BodyArgs, CUBE_DIM, Cfg, GridArgs, KIND_BODY, KIND_FREE, KIND_LIQUID, LiveParticles, P_CELL_SIZE,
+  BodyArgs, CUBE_DIM, Cfg, GridArgs, KIND_BODY, KIND_LIQUID, LiveParticles, P_CELL_SIZE,
   P_DRINK_RATE, P_SMOOTHING_RADIUS, PARAM_COUNT, body_args, cube_count, grid_args, particle_to_cid,
   particle_to_cid_ref, whole,
 };
-use crate::particles::{NO_ORGANISM, PARKED_POS, ParticleKind, SphDevice, SphHost};
+use crate::particles::{ParticleKind, SphDevice, SphHost};
 use crate::rng::{threefry4x32_20, threefry4x32_20_ref, u01, u01_ref};
 
 /// The Threefry stream word a drink draws from. `evaporate_particles` keys
@@ -55,8 +56,6 @@ use crate::rng::{threefry4x32_20, threefry4x32_20_ref, u01, u01_ref};
 pub const STREAM_DRINK: u32 = 3;
 
 const TYPE_ROOT: u32 = PartType::Root as u32;
-const PARKED_X: f32 = PARKED_POS.x;
-const PARKED_Y: f32 = PARKED_POS.y;
 
 /// One unit per particle slot; only a liquid one does anything.
 #[cube(launch)]
@@ -133,23 +132,9 @@ pub fn drink_particles(
   }
 
   drinks[organism as usize].fetch_add(1u32);
-  // `free_particles`, for one slot: a drunk particle is a free slot like any
-  // other, and the next claim may hand it to a body.
-  sph.pos[2 * i] = PARKED_X;
-  sph.pos[2 * i + 1] = PARKED_Y;
-  sph.ppos[2 * i] = PARKED_X;
-  sph.ppos[2 * i + 1] = PARKED_Y;
-  sph.vel[2 * i] = 0.0f32;
-  sph.vel[2 * i + 1] = 0.0f32;
-  sph.mass[i] = 0.0f32;
-  sph.density[i] = 0.0f32;
-  sph.near_density[i] = 0.0f32;
-  sph.evap_prob[i] = 0.0f32;
-  sph.state[i] = KIND_FREE;
-  sph.organism[i] = NO_ORGANISM;
-  sph.limb[i] = 0u32;
-  sph.index_in_limb[i] = 0u32;
-  sph.part_type[i] = 0u32;
+  // A drunk particle is a free slot like any other, and the next claim may
+  // hand it to a body.
+  free_slot(sph, i);
 }
 
 /// Launch over the live prefix. `thirsty` is one `u32` per organism slot and
