@@ -700,7 +700,7 @@ pub fn claim_particles<R: Runtime>(access: &mut SimBodies<'_, R>, n: usize) -> V
 /// habitat the experiment is asking about.
 ///
 /// Returns how many were actually seeded, which is capped by the organism
-/// slots. `--founders 0` does nothing at all, which is the default.
+/// slots. `--founders 0` does nothing at all.
 pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) -> usize {
   let count = count.min(sim.population().max_organisms);
   if count == 0 {
