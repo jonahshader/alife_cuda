@@ -46,7 +46,8 @@ struct Cli {
   load: Option<PathBuf>,
 
   /// Seed this many founder plants, evenly spaced along the soil surface
-  #[arg(long, default_value_t = 0, value_name = "N")]
+  /// (0 = a world without organisms)
+  #[arg(long, default_value_t = 20, value_name = "N")]
   founders: usize,
 
   /// Write the population (genomes, lineage, energy, anchors) at the end of a

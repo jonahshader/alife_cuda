@@ -28,11 +28,11 @@ if [ ! -x "$ALIFE" ]; then
 fi
 mkdir -p "$OUT"
 
-# Every run shares these. `--max-organisms 1024` rather than the default 256
-# because a run left to itself fills every organism slot (`organism.md`,
-# decisions); raising it here moves the wall without moving the default.
-# `--founders 60` is ten per column, since founders are spread over the soil
-# and not over the world.
+# Every run shares these. `--max-organisms 1024` is spelled out so the
+# experiment's conditions do not move with the default; it was raised here
+# first, because a run left to itself filled every organism slot
+# (`organism.md`, decisions). `--founders 60` is ten per column, since
+# founders are spread over the soil and not over the world.
 COMMON="--headless --runtime $RUNTIME --terrain-mode 2 --founders 60 \
         --max-organisms 1024 --metrics-every 100"
 

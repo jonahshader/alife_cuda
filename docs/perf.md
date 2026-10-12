@@ -282,10 +282,13 @@ slots — not over the whole capacity; launching over the capacity cost the
 three neighbour kernels 6–9% each and the step 5.8%. The organism passes are
 skipped outright when nothing is alive, so they do not appear at all.
 
-`project_constraints` is one unit per organism over `max_organisms` = 256
-units, so it is a single cube on one SM regardless of how many organisms are
-alive: 0.109 ms whether 64 or 256 slots are filled. It is 14% of the step at
-`--founders 64` and is the obvious thing to split if organism counts grow.
+`project_constraints` is one unit per organism over `max_organisms` units,
+so at the 256 slots this was measured with it is a single cube on one SM
+regardless of how many organisms are alive: 0.109 ms whether 64 or 256
+slots are filled. It is 14% of the step at `--founders 64` and is the
+obvious thing to split if organism counts grow. The default is 1024 slots
+since 2026-10-12, four cubes, and the whole step is unchanged by it: 1.639
+ms at 256 against 1.651 at 1024, 3000 steps at `--founders 20 --seed 1`.
 
 Byte-for-byte fluid parity at `--founders 0` against main, checked by
 dumping both binaries and comparing the fluid prefix field by field: CUDA

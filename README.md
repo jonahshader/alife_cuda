@@ -28,7 +28,8 @@ new as the CUDA toolkit; without one the binary falls back to wgpu.
 ./target/release/alife --help                         # every flag
 ```
 
-`--runtime cpu|cuda|wgpu` picks the backend; `--founders N` seeds N plants.
+`--runtime cpu|cuda|wgpu` picks the backend; `--founders N` seeds N plants
+(default 20, so a bare run evolves; 0 is a world without organisms).
 Every simulation parameter is also a `config.toml` key, read from the
 working directory; `--write-config` writes the defaults.
 

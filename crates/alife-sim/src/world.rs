@@ -141,7 +141,7 @@ mod tests {
   fn body_slots_sit_on_top_of_the_fluid() {
     let params = SimParams::default();
     let geom = WorldGeometry::from_params(&params);
-    assert_eq!(geom.body_slots, 256 * 16 * 8);
+    assert_eq!(geom.body_slots, 1024 * 16 * 8);
     assert_eq!(geom.num_particles, geom.fluid_particles + geom.body_slots);
 
     // A dump replaces the fluid count and leaves the capacity alone.

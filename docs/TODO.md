@@ -40,9 +40,9 @@ Left open by the soil-specialization experiment:
 
 Left open by the bodies chunk:
 
-- `project_constraints` is one unit per organism and so one cube at the
-  default `max_organisms` of 256: 0.099 ms of the 1.378 ms step at
-  `--founders 64` with the life cycle running (`perf.md`), on one SM.
+- `project_constraints` is one unit per organism and so one cube per 256
+  slots: 0.099 ms of the 1.378 ms step at `--founders 64 --max-organisms
+  256` with the life cycle running (`perf.md`), on one SM.
   Splitting a unit per limb needs the sweeps to become separate launches,
   which is only worth it if organism counts stay this low.
 

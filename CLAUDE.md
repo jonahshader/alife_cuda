@@ -98,8 +98,9 @@ ignore.
   format, and it still reads the C++ binary's version 1
   (`crates/alife-sim/README.md`). `--founders N` seeds N plants along the
   soil surface and the life cycle takes it from there — they gain energy,
-  grow, seed and die on their own; the default 0 leaves the world exactly
-  as it was before organisms existed, life cycle included.
+  grow, seed and die on their own. The default is 20, so a bare run
+  evolves; `--founders 0` leaves the world exactly as it was before
+  organisms existed, life cycle included.
   `--metrics <path>` writes the evolutionary time series
   as CSV every `--metrics-every K` steps (default 100) and prints a summary
   at exit (`docs/organism.md`, *Metrics*). `config.toml` is read from the

@@ -494,7 +494,7 @@ Sizes are sim params with these defaults; a flag changes them.
 **Particle system.** `ParticleKind` gains `Body` and `Free`. A `Free` slot
 is unallocated: every kernel skips it, its position is parked outside the
 grid. Capacity is fixed at start: fluid particles plus `max_organisms ×
-max_limbs × max_particles_per_limb` (defaults 256 × 16 × 8); the comptime
+max_limbs × max_particles_per_limb` (defaults 1024 × 16 × 8); the comptime
 particle count is that capacity, but the per-particle kernels are launched
 only over the live prefix — the fluid plus the high-water mark of claimed
 body slots — because slots are claimed ascending and everything above the
@@ -1036,3 +1036,10 @@ uploads them.
   root-heavy, which is what a water-limited plant should be but is also
   what the old loophole produced, so the body shape is not yet evidence of
   anything.
+- 2026-10-12 — **The defaults are the run the ledger was calibrated on:
+  `--founders 20` and `max_organisms` 1024.** A bare `alife` or `alife
+  --headless` evolves without flags to remember; `--founders 0` is the
+  fluid-only world. The slots are free: 3000 steps at `--founders 20
+  --seed 1` on CUDA cost 1.639 ms a step at 256 slots and 1.651 at 1024,
+  because the per-particle kernels run over the claimed prefix and the
+  per-organism passes are launch-bound either way (`perf.md`).

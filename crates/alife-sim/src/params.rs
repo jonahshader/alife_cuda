@@ -173,7 +173,7 @@ sim_params! {
     condense_altitude_power: f32 = 2.0, "fluid.condense_altitude_power", "condense-alt-power",
         "Power curve for altitude-based condensation";
     seed: i64 = 0, "world.seed", "seed", "RNG seed (0 = random)";
-    max_organisms: i32 = 256, "organism.max_organisms", "max-organisms",
+    max_organisms: i32 = 1024, "organism.max_organisms", "max-organisms",
         "Organism slots; the population tensors are sized from it";
     max_limbs: i32 = 16, "organism.max_limbs", "max-limbs",
         "Limb records per organism (a limb index is a u8, so at most 255)";
