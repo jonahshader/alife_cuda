@@ -60,18 +60,18 @@ Left open by the metrics chunk:
 
 Left open by the life-cycle chunk:
 
-- **No population settles between extinction and the cap yet.** Before the
-  water ledger a run either filled every organism slot or went extinct,
-  which one depending on the seed, with `max_organisms` the binding
-  constraint. The ledger is the density dependence that was missing — water
-  is finite, a drink removes it, and it comes back only through the fluid's
-  own cycle (`organism.md`, *Water*) — but at the shipped constants every
-  seed goes extinct by step 600 (`perf.md`): with roots earning nothing, a
-  founder-shaped body's one leaf earns 0.012 a step against 0.0174 of
-  upkeep, and no founder reaches `seed_threshold`. The water knobs do not
-  move that; the energy scale (`light_gain`, `upkeep_per_volume`,
-  `seed_energy`) does, and the band the ledger then holds a population in
-  is the thing to measure.
+- **A population now settles between extinction and the cap, and what it
+  looks like there is unexamined.** At `light_gain` 0.025 every seed holds
+  79 to 304 plants for most of 15000 steps with water binding
+  (`organism.md`, decisions, 2026-10-11; `perf.md` has the sweep). Three
+  things the table shows and nobody has looked at: two thirds of `alive`
+  is seeds in flight, which hold organism slots for up to `seed_lifetime`
+  steps; the water-limited bodies are short and root-heavy (root fraction
+  0.6–0.85, height 0.1–0.2 m), which is right for a water-limited plant but
+  is also the shape the old loophole produced, so it is not yet evidence of
+  adaptation; and up to half the fluid is in the air as vapor at once, so
+  the condensation cycle's return rate is part of the carrying capacity and
+  has not been tuned as one. The window is where to look first.
 - **The `stage` field is not in the dump**, because the population tensors
   are not: `--load` resumes the fluid and reserves body capacity on top
   (`crates/alife-sim/README.md`). A run cannot be checkpointed and resumed

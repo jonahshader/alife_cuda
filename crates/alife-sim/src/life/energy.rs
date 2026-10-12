@@ -46,13 +46,15 @@
 //! 1-particle leaf; fully grown at `limb_segment_length` 0.15 and the
 //! `--thickness-*` defaults its volume is 0.00174, so at `upkeep_per_volume`
 //! 10 it costs 0.0174 a step. Its one leaf in open light earns
-//! `light_gain` 0.012 a step, so a founder-shaped body runs at -0.0054 a step
-//! even with a full pool and starves from `seed_energy` 3.0 in about 550
-//! steps: on light alone, a plant has to carry more leaf per unit of volume
-//! than the founder does to pay for itself. Its pool holds
+//! `light_gain` 0.025 a step, so a founder-shaped body with a full pool
+//! clears 0.0076 a step and reaches `seed_threshold` 5.0 from `seed_energy`
+//! 3.0 in about 260 steps; in shade, or with an empty pool, it runs at
+//! -0.0174 and starves in about 170. The gain was 0.012 when roots earned
+//! energy from wetness, and on light alone that starved every founder
+//! (`docs/organism.md`, decisions, 2026-10-11). Its pool holds
 //! `water_capacity_per_volume` 3000 times its volume, 5.2 particles, and the
-//! leaf spends 0.12 of them a tick at `water_per_energy` 1, so a full pool
-//! lasts about 43 ticks without a drink.
+//! leaf spends 0.25 of them a tick at `water_per_energy` 1, so a full pool
+//! lasts about 21 ticks without a drink.
 //!
 //! One unit per organism and a serial walk over its particles: no float
 //! atomic, so the sum order is the slot order and the result is the same on

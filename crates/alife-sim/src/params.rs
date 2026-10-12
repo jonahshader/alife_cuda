@@ -233,7 +233,7 @@ sim_params! {
         "Light left after passing one stem or leaf particle";
     light_soil_opacity: f32 = 2.0, "life.light_soil_opacity", "light-soil-opacity",
         "Light lost per soil cell per unit solid fraction; a cell at 1/opacity or more is opaque";
-    light_gain: f32 = 0.012, "life.light_gain", "light-gain",
+    light_gain: f32 = 0.025, "life.light_gain", "light-gain",
         "Energy a leaf particle gains per step at full light";
     drink_rate: f32 = 0.05, "life.drink_rate", "drink-rate",
         "Probability per life tick that a liquid particle by a thirsty root is drunk";

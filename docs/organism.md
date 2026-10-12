@@ -1008,9 +1008,31 @@ uploads them.
   `seed_threshold` alone, and a seed costs exactly what it carries (3.0).
   **A death floors its water to whole particles** and drops the fraction:
   the ledger's one leak, under a particle per death or break, against the
-  alternative of a fractional particle or a per-cell float sum. What the
-  shipped constants do with it is in `perf.md`: every seed extinct by step
-  600, because a founder-shaped body's one leaf earns 0.012 a step against
-  0.0174 of upkeep — the root term was carrying it — and `water_per_energy`
-  from 0.25 to 4 does not move that, so the next knob is the energy scale
-  (`light_gain`, `upkeep_per_volume`), not the water.
+  alternative of a fractional particle or a per-cell float sum. At the
+  `light_gain` it shipped with, 0.012, every seed was extinct by step 600
+  (`perf.md`), because a founder-shaped body's one leaf earns 0.012 a step
+  against 0.0174 of upkeep — the root term had been carrying it — and
+  `water_per_energy` from 0.25 to 4 does not move that; the entry below
+  sets the energy scale.
+- 2026-10-11 — **`light_gain` is 0.025, because that is where the water
+  ledger holds a population between extinction and the cap on every
+  seed.** Measured, `--founders 20 --max-organisms 1024`, 15000 steps on
+  CUDA, eight seeds at each of three gains (`perf.md` has the table). At
+  0.02 no seed goes extinct or hits the cap but the populations are small
+  — 9 to 89 plants, 43 to 202 organisms with seeds in flight — pools sit
+  at 1.5 to 4.7 particles, so water is not what limits them, and the
+  bodies are the leafiest of the three (leaf count 0.5–0.9, height
+  0.19–0.40 m). At 0.025 every seed holds 79 to 304 plants (182 to 827
+  organisms) and spends 9,400 to 12,800 of the 15,000 steps between a
+  tenth and nine tenths of the cap, with 5 to 14 lineages standing at the
+  end; mean pools are 0.3 to 2.2 particles, so water is binding, which is
+  the density dependence the ledger was built for. At 0.03 the plants are
+  131 to 378, the bodies go root-heavy (root fraction 0.73–0.85, height
+  about 0.1 m) and up to half the fluid is in the air as vapor at once
+  (27,496 liquid against 23,367 vapor on seed 4). 0.025 is the middle: the
+  first gain at which the cap is never the ceiling and water is. What the
+  ledger does not yet do is also in the table: two thirds of a saturated
+  `alive` is seeds in flight, and the water-limited bodies are short and
+  root-heavy, which is what a water-limited plant should be but is also
+  what the old loophole produced, so the body shape is not yet evidence of
+  anything.
