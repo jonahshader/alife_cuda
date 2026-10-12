@@ -1,51 +1,77 @@
-# Handoff — retiring the C++ tree, paused mid-cycle (2026-10-10)
+# Handoff — tuning the evolution loop, interactively with Jonah (2026-10-11)
 
-Jonah paused the session overnight with two builders stopped mid-work. Pick
-the cycle back up; the design below is settled.
+Next session is an **interactive investigation**, not a delegation cycle:
+Jonah and Claude watch, measure and tune the evolution loop that exists now
+until it behaves like an ecology. Work one question at a time with a short
+recommendation (root `CLAUDE.md`, *Design discussions*). Jonah runs the
+window; Claude measures headless and reads the code. Don't build new
+features unless a tuning question turns out to need one — if it does,
+settle the design in chat first.
 
-## The plan (settled in chat 2026-10-09)
+## Where things stand
 
-1. Port what the C++ GUI has that Rust lacks — two builders, in parallel:
-   - **A: mouse tool + density overlay.** LMB attract / RMB repel at the
-     cursor (`attract_fluid` in `src/systems/particle_fluid2.cu`), keys
-     `+`/`-` radius ×1.25/×0.8, `[`/`]` strength ×0.8/×1.25, start radius
-     2.0 strength 0.15, cursor circle + "Strength: N" label. **Pan moves to
-     middle-mouse drag.** Density-grid overlay (`calculate_density_grid_kernel`)
-     behind a View checkbox, keeping red = cell over `max_particles_per_cell`,
-     blue = density over 300. Both kernels get plain-Rust references + tests;
-     headless `--founders 0` dumps must stay byte-identical.
-   - **B: live profiler panel** (timing on only while open, rolling window),
-     fps/frame-time readout, Esc quits, anti-aliased particle discs.
-2. Merge, rerun the claims, `code-review-find` over the range, fix.
-3. **Delete the C++** — `src/`, `CMakeLists.txt`, the C++-only files under
-   `resources/` (verify each is unused by Rust first), `tests/parity.rs` and
-   `resources/parity/` (Jonah: parity tests go with the C++; don't keep them
-   frozen). Before deleting, migrate the knowledge only the C++ holds:
-   the pressure-equation "mostly describes gas, not liquid" weakness →
-   `TODO.md` fluid section; the tree torque constants (thickness⁴ stiffness,
-   damping 0.96, 10 rad/s cap, I = mL²/3) → `organism.md` decisions, for
-   actuated limbs; the hard one-hot soil alternative and the friction
-   constants' meaning → `soil.rs` comments. Then rewrite every doc that
-   names the C++ build (root `CLAUDE.md`, `docs/CLAUDE.md`, `perf.md`,
-   `crates/alife-sim/README.md`, `TODO.md`'s C++ sections). The trees never
-   ran in the C++ binary (their screen is commented out), so nothing live
-   is lost with them. The tag `cpp-reference` (local, on `f56f9de`) keeps
-   the tree recoverable.
-4. Then Jonah's behavior reports from his GUI run (`--founders 20
-   --max-organisms 10000`): growth is exponential until the cap; some
-   plants spin wildly; plants clump where they start and spread very
-   slowly. Not yet investigated.
+The C++ tree is gone (tag `cpp-reference`); the Rust sim on `main` is the
+whole project. This session also added the GUI's mouse water tool (LMB
+pull, RMB push, `+`/`-` radius, `[`/`]` strength, **middle-drag pans**),
+a density-grid overlay (View), a live profiler window, an fps readout and
+Esc to quit — all untested by eye, so say if anything looks wrong.
 
-## State when paused
+Read first: `docs/organism.md` (*Growth*, *Energy*, the decisions log),
+`crates/alife-sim/src/life/mod.rs` (`life_tick` → `decide` → `apply`) and
+`life/energy.rs`. The parameters are the `organism.*` and `life.*` lines in
+`crates/alife-sim/src/params.rs`; each is a CLI flag and a TOML key.
 
-- Builder B, worktree `.claude/worktrees/agent-a8d34101b5a78f889`: five
-  commits on its branch (profiler, fps, Esc, AA discs, and "a free body
-  slot's quad covers no pixel" — a pre-existing fix, check it). It had not
-  reported, so its verification is unconfirmed: rerun build, tests, clippy.
-- Builder A, worktree `.claude/worktrees/agent-abd54b71a60d5bd5d`: no
-  commits; uncommitted `kernels/attract.rs`, `kernels/density_grid.rs`,
-  edits to `kernels/mod.rs` and `sim.rs`. GUI side not started.
-- Same session: resume each builder with SendMessage ("resume from your
-  brief"). New session: brief fresh builders from step 1 into the existing
-  worktrees, telling them what's already there.
-- `main` is 25 commits ahead of `origin/main`, unpushed.
+## What Jonah saw (`alife --founders 20 --max-organisms 10000`, GUI)
+
+1. **The population grows exponentially until it hits the cap.** Nothing
+   limits it but `max_organisms` — not light, not water, not space.
+2. **Some plants spin around wildly.**
+3. **Plants stay where they started and spread very slowly.**
+
+None of this has been investigated yet. Likely starting points, unverified:
+
+- (1) is the energy balance the 2026-09-19 session flagged: under volume
+  pricing a seedling's first segment is cheap, so nothing starves. Knobs:
+  `light_gain`, `water_gain`, `upkeep_per_volume`, `volume_per_energy`,
+  `seed_cost` / `seed_energy` / `seed_threshold`, and whether the growth
+  reserve should be `seed_cost`. Light competition (`light_*`) is the
+  mechanism that *should* cap density — check whether shading actually
+  bites. `docs/TODO.md`'s first growth bullet and its `--column-top`
+  bullet are the same question.
+- (2) may be `actuator_gain` (0.3 rad by default): an untrained brain
+  wanders every joint, and the 2026-09-19 sweep (`docs/perf.md`) saw limb
+  breaks double at 0.3 and the tallest, best-fed bodies at 0.1. It may also
+  be a constraint-solver instability (`kernels/constraints.rs`) — tell the
+  two apart before tuning.
+- (3) is seed dispersal: how far a seed drifts before it lands slow enough
+  to germinate (`germinate_speed`, `seed_lifetime`, and how seeds are
+  launched in `life/mod.rs`).
+
+## How to investigate
+
+- **Headless with metrics is the measuring tool**: `./target/release/alife
+  --headless --founders 20 --iterations N --seed S --metrics run.csv`
+  writes the time series (alive, births, deaths, breaks, height, energy,
+  species …) and prints a summary (`docs/organism.md`, *Metrics*). Compare
+  settings by seed-matched runs, a few seeds each — one run is an anecdote.
+- **The window is Jonah's**: never start a GUI run unless he asks
+  (root `CLAUDE.md`). When he reports what he sees, turn it into a
+  headless measurement that captures it.
+- Record each settled tuning call as a dated entry in `organism.md`'s
+  *Decisions & dead ends* with the numbers that justified it, and change
+  the default in `params.rs` in the same commit. Runs worth keeping go in
+  `docs/perf.md`.
+- Ask Jonah how many cores builds may use; last session he capped it at
+  four (`taskset -c 0-3 cargo … -j4` — `-j` alone does not cap the test
+  harness or the CubeCL CPU backend).
+
+## Parked, not for this session unless it comes up
+
+- **Tool palette** for the GUI: a default Select tool (hover stats, click to
+  inspect, right-click menu) with the water grabber as a tool you switch
+  to, so its circle isn't always drawn. Agreed in principle, not built.
+  An inspector would help tuning — raise it if watching single plants
+  becomes the bottleneck.
+- **No test compares backends with each other** since the parity test went;
+  a CPU/CUDA/wgpu aggregate comparison would close it.
+- `docs/REVIEW.md` still has Jonah's older review items.
