@@ -13,7 +13,20 @@
 //! whose seed sank into the soil read full light underground and was the
 //! best-fed plant in the world (2026-09-19).
 //!
-//! **The count is an integer atomic on purpose.** Adding 1 to a `u32` is
+//! **A particle shades as much as it has grown.** A limb's last particle
+//! exists from the moment `grown` passes its index, but the segment it ends
+//! is only `segment_fraction(grown, k)` long (the rest length the constraint
+//! pass holds it at), and it counts for that much: each stem or leaf particle
+//! adds `round(256 x segment_fraction)` to its cell, a fixed-point count in
+//! 256ths of a particle. The column scan applies `light_attenuation` once per
+//! whole 256 and, for the remainder `r`, multiplies by `1 - (r / 256) x (1 -
+//! light_attenuation)` — linear between "not there" and "one particle", with
+//! no `powf` or `exp`, because a transcendental is not bit-identical across
+//! backends (`docs/organism.md`, decisions, 2026-09-19). A grown particle adds
+//! exactly 256, so a world of grown limbs is lit exactly as it was when every
+//! particle counted 1.
+//!
+//! **The count is an integer atomic on purpose.** Adding to a `u32` is
 //! associative and exact, so the order the units arrive in cannot change the
 //! result — which is what `docs/organism.md`'s "no atomics that decide order"
 //! rules out, and this is not that. A float accumulation here, or an atomic
@@ -22,14 +35,58 @@
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
+use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
 use crate::genome::PartType;
+use crate::genome::population::{LimbArgs, Population, limb_args};
+use crate::kernels::constraints::{limb_len, particle_at, segment_fraction, segment_fraction_ref};
 use crate::kernels::soil_sample::{solid_fraction, solid_fraction_ref};
 use crate::kernels::{
-  CUBE_DIM, Cfg, KIND_BODY, LiveParticles, P_LIGHT_ATTENUATION, P_LIGHT_SOIL_OPACITY, P_LIGHT_TOP,
-  P_SOIL_SIZE, PARAM_COUNT, SoilArgs, clamp_i32, cube_count, soil_args, whole,
+  CUBE_DIM, Cfg, P_LIGHT_ATTENUATION, P_LIGHT_SOIL_OPACITY, P_LIGHT_TOP, P_SOIL_SIZE, PARAM_COUNT,
+  SoilArgs, clamp_i32, cube_count, soil_args, whole,
 };
 use crate::particles::{SphDevice, SphHost};
 use crate::soil::{SoilDevice, SoilGrid, SoilHost};
+
+/// One whole occluding particle in the fixed-point count.
+pub const OCCLUDER_ONE: u32 = 256;
+
+/// What one stem or leaf particle adds to its cell: `round(256 x
+/// segment_fraction)`, by adding a half and truncating, which for a value in
+/// `[0, 256]` is the same rounding on every backend.
+#[cube]
+pub fn occluder_weight(grown: f32, k: u32) -> u32 {
+  (256.0f32 * segment_fraction(grown, k) + 0.5f32) as u32
+}
+
+/// Host twin of [`occluder_weight`].
+pub fn occluder_weight_ref(grown: f32, k: usize) -> u32 {
+  (256.0f32 * segment_fraction_ref(grown, k) + 0.5) as u32
+}
+
+/// What a cell's fixed-point count lets through: `attenuation` per whole
+/// particle, then the remainder's share of one more, linearly.
+#[cube]
+pub fn transmit(light: f32, count: u32, attenuation: f32) -> f32 {
+  let mut l = light;
+  let whole_particles = count / 256u32;
+  let rest = count % 256u32;
+  // Repeated multiplication rather than `powf`: exact, and identical on
+  // every backend, where a transcendental is not (`docs/organism.md`,
+  // decisions, 2026-09-19). A cell is 0.1 m, so the loop is short.
+  for _ in 0..whole_particles {
+    l *= attenuation;
+  }
+  l * (1.0f32 - (rest as f32 / 256.0f32) * (1.0f32 - attenuation))
+}
+
+/// Host twin of [`transmit`].
+pub fn transmit_ref(light: f32, count: u32, attenuation: f32) -> f32 {
+  let mut l = light;
+  for _ in 0..count / OCCLUDER_ONE {
+    l *= attenuation;
+  }
+  l * (1.0 - ((count % OCCLUDER_ONE) as f32 / 256.0) * (1.0 - attenuation))
+}
 
 /// Part-type codes that block light. Stem and leaf stand above ground; a root
 /// is in the soil, where there is nothing to shade, and a seed is in flight.
@@ -54,34 +111,51 @@ pub fn soil_cell_index_ref(pos: glam::Vec2, soil_size: f32, cfg: &Cfg) -> usize 
   (y * cfg.soil_w + x) as usize
 }
 
-/// One unit per particle slot: count the stem and leaf particles per soil cell.
+/// One unit per organism slot, serial over its stem and leaf limbs: add each
+/// of their particles' [`occluder_weight`] to the soil cell it stands in.
+///
+/// Through the limb map rather than over the particle slots, because how far
+/// a particle has grown is the limb's `grown`, which the map is the key to;
+/// a seed in flight is in no limb and shades nothing.
 #[cube(launch)]
+#[allow(clippy::too_many_arguments)]
 pub fn count_occluders(
   ppos: &[f32],
-  state: &[u32],
-  part_type: &[u32],
+  limbs: &LimbArgs,
+  map: &[u32],
+  grown: &[f32],
+  alive: &[u32],
   counts: &[Atomic<u32>],
   params: &[f32],
-  #[comptime] cfg: Cfg,
+  #[comptime] body: BodyCfg,
+  #[comptime] world: Cfg,
 ) {
-  let i = ABSOLUTE_POS;
-  if i >= cfg.num_particles as usize {
+  let o = ABSOLUTE_POS as u32;
+  if o >= comptime!(body.max_organisms) {
     terminate!();
   }
-  if state[i] != KIND_BODY {
+  if alive[o as usize] == 0u32 {
     terminate!();
   }
-  let t = part_type[i];
-  if t != TYPE_STEM && t != TYPE_LEAF {
-    terminate!();
+  let ml = comptime!(body.max_limbs);
+  let base = o * ml;
+  let pbase = o * ml * comptime!(body.max_particles_per_limb);
+  let soil_size = params[P_SOIL_SIZE as usize];
+  for l in 0..ml {
+    let t = limbs.part_type[(base + l) as usize];
+    if t == TYPE_STEM || t == TYPE_LEAF {
+      let g = grown[(base + l) as usize];
+      let n = limb_len(map, pbase, l, body);
+      for i in 0..n {
+        let id = particle_at(map, pbase, l, i, body);
+        if id != NO_PARTICLE {
+          let id = id as usize;
+          let cell = soil_cell_index(ppos[2 * id], ppos[2 * id + 1], soil_size, world);
+          counts[cell as usize].fetch_add(occluder_weight(g, i));
+        }
+      }
+    }
   }
-  let cell = soil_cell_index(
-    ppos[2 * i],
-    ppos[2 * i + 1],
-    params[P_SOIL_SIZE as usize],
-    cfg,
-  );
-  counts[cell as usize].fetch_add(1u32);
 }
 
 /// One unit per soil column: light arriving at each cell, top row first.
@@ -109,17 +183,13 @@ pub fn column_light(
     light[cell] = l;
     let n = counts[cell];
     counts[cell] = 0u32;
-    // Repeated multiplication rather than `powf`: exact, and identical on
-    // every backend, where a transcendental is not (`docs/organism.md`,
-    // decisions, 2026-09-19). `n` is the occluders in one 0.1 m cell.
-    for _ in 0..n {
-      l *= attenuation;
-    }
+    l = transmit(l, n, attenuation);
     l *= f32::max(1.0f32 - solid_fraction(soil, cell) * opacity, 0.0f32);
   }
 }
 
-/// The occlusion grid: one `u32` count and one `f32` light value per soil cell.
+/// The occlusion grid: one `u32` fixed-point count and one `f32` light value
+/// per soil cell.
 #[derive(Debug, Clone)]
 pub struct LightGrid {
   pub counts: Handle,
@@ -145,25 +215,31 @@ impl LightGrid {
 }
 
 /// Rebuild the grid: count, then scan each column.
+#[allow(clippy::too_many_arguments)]
 pub fn launch<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   soil: &SoilDevice,
   grid: &LightGrid,
+  bodies: &BodyState,
+  pop: &Population,
   params: &Handle,
   cfg: Cfg,
-  live: LiveParticles,
 ) {
   let n = cfg.num_particles as usize;
+  let body = bodies.cfg;
   count_occluders::launch::<R>(
     client,
-    cube_count(live.get()),
+    cube_count(body.max_organisms as usize),
     CubeDim::new_1d(CUBE_DIM),
     whole(&sph.ppos, n * 2),
-    whole(&sph.state, n),
-    whole(&sph.part_type, n),
+    limb_args(&pop.device.limbs),
+    whole(&bodies.device.limb_particles, body.particle_map_len()),
+    whole(&bodies.device.grown, body.limb_count()),
+    whole(&pop.device.organisms.alive, body.max_organisms as usize),
     whole(&grid.counts, grid.cells),
     whole(params, PARAM_COUNT),
+    body,
     cfg,
   );
   column_light::launch::<R>(
@@ -183,8 +259,11 @@ pub fn launch<R: Runtime>(
 /// Returns the occluder counts as the first pass leaves them — the kernel
 /// zeroes them in the second pass, so a test compares the light against this
 /// and the counts against a run of the first pass alone.
+#[allow(clippy::too_many_arguments)]
 pub fn light_grid_ref(
   particles: &SphHost,
+  pop: &Population,
+  bodies: &BodyState,
   soil: &SoilHost,
   soil_size: f32,
   light_top: f32,
@@ -194,14 +273,25 @@ pub fn light_grid_ref(
 ) -> (Vec<u32>, Vec<f32>) {
   let cells = (cfg.soil_w * cfg.soil_h) as usize;
   let mut counts = vec![0u32; cells];
-  for i in 0..particles.len() {
-    if particles.state[i] != crate::ParticleKind::Body {
+  let body = bodies.cfg;
+  for o in 0..body.max_organisms as usize {
+    if pop.organisms.alive[o] == 0 {
       continue;
     }
-    if !matches!(particles.part_type[i], PartType::Stem | PartType::Leaf) {
-      continue;
+    for l in 0..body.max_limbs as usize {
+      if !matches!(
+        pop.limbs.part_type[pop.limb_index(o, l)],
+        PartType::Stem | PartType::Leaf
+      ) {
+        continue;
+      }
+      let grown = bodies.grown[body.limb_index(o, l)];
+      for k in 0..bodies.limb_len(o, l) {
+        let id = bodies.particle(o, l, k) as usize;
+        counts[soil_cell_index_ref(particles.ppos[id], soil_size, cfg)] +=
+          occluder_weight_ref(grown, k);
+      }
     }
-    counts[soil_cell_index_ref(particles.ppos[i], soil_size, cfg)] += 1;
   }
 
   let mut light = vec![0.0f32; cells];
@@ -210,9 +300,7 @@ pub fn light_grid_ref(
     for row in 0..cfg.soil_h as usize {
       let cell = (cfg.soil_h as usize - 1 - row) * cfg.soil_w as usize + x;
       light[cell] = l;
-      for _ in 0..counts[cell] {
-        l *= attenuation;
-      }
+      l = transmit_ref(l, counts[cell], attenuation);
       l *= (1.0 - solid_fraction_ref(soil, cell) * soil_opacity).max(0.0);
     }
   }
@@ -224,41 +312,81 @@ mod tests {
   use super::*;
   use crate::kernels::test_support::{OrganismHarness, assert_close};
 
-  /// A world with a plant in it, so the counting pass has occluders and the
-  /// column scan has a column that is darker at the bottom than at the top.
-  #[test]
-  fn matches_reference() {
-    let h = OrganismHarness::new();
-    let grid = LightGrid::new(&h.client, &h.soil, h.params.light_top);
+  fn rebuild(h: &OrganismHarness, grid: &LightGrid) {
     launch(
       &h.client,
       &h.sph,
       &h.soil_dev,
-      &grid,
+      grid,
+      &h.bodies,
+      &h.pop,
       &h.params_buf,
       h.cfg,
-      crate::kernels::LiveParticles(h.geom.num_particles),
     );
-    let actual = grid.read(&h.client);
-    let (counts, expected) = light_grid_ref(
+  }
+
+  fn reference(h: &OrganismHarness) -> (Vec<u32>, Vec<f32>) {
+    light_grid_ref(
       &h.particles,
+      &h.pop,
+      &h.bodies,
       &h.soil.cells,
       h.geom.soil_cell_size,
       h.params.light_top,
       h.params.light_attenuation,
       h.params.light_soil_opacity,
       &h.cfg,
-    );
-    assert_eq!(actual.len(), expected.len());
-    assert_close(&actual, &expected, 1e-6, "light");
-    assert!(
-      counts.iter().sum::<u32>() > 0,
-      "the fixture has stem and leaf particles to count"
-    );
-    assert!(
-      expected.iter().any(|l| *l < h.params.light_top),
-      "something is shaded"
-    );
+    )
+  }
+
+  /// A world with a plant in it, so the counting pass has occluders and the
+  /// column scan has a column that is darker at the bottom than at the top.
+  /// Twice: grown whole, and with the stem part way into its last segment,
+  /// so the fixed-point remainder is exercised too.
+  #[test]
+  fn matches_reference() {
+    for stem in [3.0f32, 2.375] {
+      let mut h = OrganismHarness::new();
+      h.bodies.grown[h.body_cfg.limb_index(0, 1)] = stem;
+      h.bodies.upload(&h.client);
+      let grid = LightGrid::new(&h.client, &h.soil, h.params.light_top);
+      rebuild(&h, &grid);
+      let actual = grid.read(&h.client);
+      let (counts, expected) = reference(&h);
+      assert_eq!(actual.len(), expected.len());
+      assert_close(&actual, &expected, 1e-6, "light");
+      assert!(
+        counts.iter().sum::<u32>() > 0,
+        "the fixture has stem and leaf particles to count"
+      );
+      assert!(
+        expected.iter().any(|l| *l < h.params.light_top),
+        "something is shaded"
+      );
+    }
+  }
+
+  /// A particle counts for as much of a particle as its segment has grown:
+  /// a whole one is 256, the last one of a limb three eighths into its
+  /// segment is 96, and the cell it stands in lets through a linear share of
+  /// one more attenuation.
+  #[test]
+  fn a_part_grown_particle_shades_in_proportion() {
+    let mut h = OrganismHarness::new();
+    let (whole, _) = reference(&h);
+    assert!(whole.iter().all(|c| c % OCCLUDER_ONE == 0), "{whole:?}");
+
+    h.bodies.grown[h.body_cfg.limb_index(0, 1)] = 2.375;
+    let (part, _) = reference(&h);
+    let last = h.bodies.particle(0, 1, 2) as usize;
+    let cell = soil_cell_index_ref(h.particles.ppos[last], h.geom.soil_cell_size, &h.cfg);
+    assert_eq!(whole[cell] - part[cell], 256 - 96);
+
+    let a = h.params.light_attenuation;
+    assert_eq!(transmit_ref(1.0, 256, a), a);
+    assert_eq!(transmit_ref(1.0, 0, a), 1.0);
+    assert!((transmit_ref(1.0, 128, a) - (1.0 + a) / 2.0).abs() < 1e-7);
+    assert!((transmit_ref(1.0, 256 + 64, a) - a * (1.0 - 0.25 * (1.0 - a))).abs() < 1e-7);
   }
 
   /// The counts are consumed by the column scan, so a second rebuild over the
@@ -267,26 +395,9 @@ mod tests {
   fn a_rebuild_does_not_accumulate() {
     let h = OrganismHarness::new();
     let grid = LightGrid::new(&h.client, &h.soil, h.params.light_top);
-    let live = crate::kernels::LiveParticles(h.geom.num_particles);
-    launch(
-      &h.client,
-      &h.sph,
-      &h.soil_dev,
-      &grid,
-      &h.params_buf,
-      h.cfg,
-      live,
-    );
+    rebuild(&h, &grid);
     let first = grid.read(&h.client);
-    launch(
-      &h.client,
-      &h.sph,
-      &h.soil_dev,
-      &grid,
-      &h.params_buf,
-      h.cfg,
-      live,
-    );
+    rebuild(&h, &grid);
     assert_eq!(grid.read(&h.client), first);
   }
 
@@ -296,15 +407,7 @@ mod tests {
   #[test]
   fn light_attenuates_monotonically_down_a_column() {
     let h = OrganismHarness::new();
-    let (counts, light) = light_grid_ref(
-      &h.particles,
-      &h.soil.cells,
-      h.geom.soil_cell_size,
-      h.params.light_top,
-      h.params.light_attenuation,
-      h.params.light_soil_opacity,
-      &h.cfg,
-    );
+    let (counts, light) = reference(&h);
     let (w, hgt) = (h.cfg.soil_w as usize, h.cfg.soil_h as usize);
     for x in 0..w {
       assert_eq!(light[(hgt - 1) * w + x], h.params.light_top);
@@ -313,7 +416,10 @@ mod tests {
         let here = light[row * w + x];
         let cell_above = (row + 1) * w + x;
         let expected = above
-          * h.params.light_attenuation.powi(counts[cell_above] as i32)
+          * h
+            .params
+            .light_attenuation
+            .powi((counts[cell_above] / OCCLUDER_ONE) as i32)
           * (1.0 - solid_fraction_ref(&h.soil.cells, cell_above) * h.params.light_soil_opacity)
             .max(0.0);
         assert!((here - expected).abs() <= 1e-6, "column {x} row {row}");
@@ -330,15 +436,7 @@ mod tests {
     let h = OrganismHarness::new();
     let soil = &h.soil.cells;
     let (w, hgt) = (h.cfg.soil_w as usize, h.cfg.soil_h as usize);
-    let (_, light) = light_grid_ref(
-      &h.particles,
-      soil,
-      h.geom.soil_cell_size,
-      h.params.light_top,
-      h.params.light_attenuation,
-      h.params.light_soil_opacity,
-      &h.cfg,
-    );
+    let (_, light) = reference(&h);
     let mut checked = 0;
     for x in 0..w {
       let mut buried = false;

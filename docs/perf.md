@@ -751,3 +751,12 @@ The drink kernel is a 3x3 gather over the liquid particles every tenth
 step, 0.008 ms a step amortised — inside the noise of the step total.
 `--founders 0` is byte-identical to `a9de21b` (300 CUDA steps, dumps
 compared with `cmp`).
+
+**Continuous sampling** (the commit after) weights a particle's light,
+shade and drinking by `segment_fraction(grown, k)` and counts the light
+grid in 256ths. A grown particle counts exactly 256 and weighs exactly 1, so
+a world of whole founders is untouched: `--founders 64 --seed 42`, 400
+steps, dumps byte-identical to the commit before, and the fate table above
+is the same to the last particle on all eight seeds — nobody in it ever
+grows. `light_grid`, now one unit per organism over the limb map rather
+than one per particle slot, is 0.069 ms a tick against 0.067.

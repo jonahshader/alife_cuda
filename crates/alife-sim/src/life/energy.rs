@@ -7,7 +7,8 @@
 //!
 //! ```text
 //! water     += drinks                                  (this tick's, whole particles)
-//! income     = SUM_leaf light_gain * light(cell of particle) * life_interval
+//! income     = SUM_leaf light_gain * light(cell) * segment_fraction(grown, k)
+//!              * life_interval
 //! earned     = min(income, water / water_per_energy)
 //! water     -= earned * water_per_energy
 //! transpired += earned * water_per_energy
@@ -33,8 +34,12 @@
 //! plant is cheaper than a tall thick one and a half-grown limb costs a
 //! quarter of what it will (`docs/organism.md`, *Growth*). Income is still per
 //! particle: what a leaf catches is a surface phenomenon, and a particle is
-//! the only place light is sampled. A seed in flight is in no limb, so it has
-//! no volume and costs nothing.
+//! the only place light is sampled. A leaf particle earns in proportion to
+//! how far its segment has grown — `segment_fraction(grown, k)`, the same
+//! share the constraint pass gives its rest length and the light grid its
+//! shade — so a limb's last particle does not earn a whole particle's light
+//! the moment it is claimed. A seed in flight is in no limb, so it has no
+//! volume and costs nothing.
 //!
 //! **The balance at the defaults.** The founder plant
 //! (`Genome::seed_plant`) is a 2-particle root, a 3-particle stem and a
@@ -62,7 +67,7 @@ use crate::SimParams;
 use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE, limb_volume};
 use crate::genome::PartType;
 use crate::genome::population::{LimbArgs, Population, limb_args};
-use crate::kernels::constraints::{limb_len, particle_at};
+use crate::kernels::constraints::{limb_len, particle_at, segment_fraction, segment_fraction_ref};
 use crate::kernels::{
   CUBE_DIM, Cfg, P_LIFE_INTERVAL, P_LIGHT_GAIN, P_LIMB_SEGMENT_LENGTH, P_SOIL_SIZE,
   P_UPKEEP_PER_VOLUME, P_WATER_PER_ENERGY, PARAM_COUNT, cube_count, whole,
@@ -133,7 +138,7 @@ pub fn organism_energy(
         if id != NO_PARTICLE {
           let id = id as usize;
           let cell = soil_cell_index(ppos[2 * id], ppos[2 * id + 1], soil_size, world);
-          gain += light_gain * light[cell as usize];
+          gain += light_gain * light[cell as usize] * segment_fraction(grown[record], i);
         }
       }
     }
@@ -251,7 +256,8 @@ pub fn organism_energy_ref(
           continue;
         }
         let cell = soil_cell_index_ref(particles.ppos[id as usize], geom.soil_cell_size, &world);
-        gain += params.light_gain * light[cell];
+        let share = segment_fraction_ref(bodies.grown[cfg.limb_index(o, l)], i);
+        gain += params.light_gain * light[cell] * share;
       }
     }
     let interval = params.life_interval as f32;
@@ -366,6 +372,38 @@ mod tests {
     // `one` started from zero energy too, so its delta is one interval's
     // worth.
     assert!((three.energy[0] - 3.0 * one.energy[0]).abs() <= 1e-5 * three.energy[0].abs().max(1.0));
+  }
+
+  /// A leaf particle earns as much of a particle's light as its segment has
+  /// grown: the fixture's one-particle leaf half way into its segment
+  /// transpires — earns — half of what it does whole, on the device and in
+  /// the reference alike.
+  #[test]
+  fn a_half_grown_leaf_earns_half() {
+    let earned = |leaf: f32| {
+      let mut h = OrganismHarness::new();
+      h.bodies.grown[h.body_cfg.limb_index(0, 2)] = leaf;
+      h.bodies.upload(&h.client);
+      h.pop.organisms.water[0] = 1000.0;
+      h.pop.upload(&h.client);
+      let (light, light_host) = lit(&h);
+      let actual = run(&h, &light, &[0, 0]);
+      let expected = organism_energy_ref(
+        &h.particles,
+        &h.pop,
+        &h.bodies,
+        &[0, 0],
+        &light_host,
+        &h.params,
+        &h.geom,
+      );
+      assert_close(&actual.energy, &expected.energy, 1e-6, "energy");
+      assert_close(&actual.transpired, &expected.transpired, 1e-6, "transpired");
+      actual.transpired[0]
+    };
+    let (whole, half) = (earned(1.0), earned(0.5));
+    assert!(whole > 0.0);
+    assert!((half - 0.5 * whole).abs() < 1e-6, "{half} against {whole}");
   }
 
   /// No light, or no water, and the organism only loses: upkeep is all that

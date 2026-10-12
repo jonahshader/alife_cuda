@@ -151,12 +151,13 @@ impl<R: Runtime> Sim<R> {
 
   /// Rebuild the per-soil-cell light grid from the bodies standing in it.
   fn rebuild_light(&mut self) {
-    let live = self.live_particles();
     let Self {
       client,
       sph,
       soil_device,
       light,
+      bodies,
+      pop,
       params_buf,
       cfg,
       timings,
@@ -165,7 +166,16 @@ impl<R: Runtime> Sim<R> {
     } = self;
     let (cfg, timing) = (*cfg, *timing);
     run_timed(client, timing, timings, "light_grid", &mut || {
-      light::launch(client, sph, soil_device, light, params_buf, cfg, live);
+      light::launch(
+        client,
+        sph,
+        soil_device,
+        light,
+        bodies,
+        pop,
+        params_buf,
+        cfg,
+      );
     });
   }
 
@@ -195,11 +205,11 @@ impl<R: Runtime> Sim<R> {
       .create_from_slice(bytemuck::cast_slice(&thirsty));
     let live = self.live_particles();
     let (step, seed) = (self.step_count, self.seed);
-    let max_organisms = self.pop.max_organisms;
     let Self {
       client,
       sph,
       grid,
+      bodies,
       drinks,
       params_buf,
       cfg,
@@ -210,17 +220,7 @@ impl<R: Runtime> Sim<R> {
     let (cfg, timing) = (*cfg, *timing);
     run_timed(client, timing, timings, "drink_particles", &mut || {
       drink::launch(
-        client,
-        sph,
-        grid,
-        &thirsty,
-        drinks,
-        max_organisms,
-        params_buf,
-        step,
-        seed,
-        cfg,
-        live,
+        client, sph, grid, bodies, &thirsty, drinks, params_buf, step, seed, cfg, live,
       );
     });
   }

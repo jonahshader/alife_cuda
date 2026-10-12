@@ -131,11 +131,16 @@ assumes one MLP architecture per population and is not ported.
 The whole cycle runs on one cadence: every `life_interval` steps (default
 10), after the brain. `crates/alife-sim/src/life/` is it.
 
-- **Light.** A per-soil-cell occlusion grid, rebuilt each tick. One kernel
-  counts the stem and leaf particles per cell into a `u32` grid; a second,
-  one unit per soil column, walks from the top down and multiplies the
-  light by `light_attenuation` (default 0.7) once per particle it has
-  passed, starting at `light_top` (1.0), and by the soil of each cell it
+- **Light.** A per-soil-cell occlusion grid, rebuilt each tick. One kernel,
+  one unit per organism over its stem and leaf limbs, counts their
+  particles per cell into a `u32` grid in fixed point: a particle adds
+  `round(256 × segment_fraction(grown, k))`, so it shades as much as its
+  segment has grown and a grown one adds exactly 256. A second, one unit
+  per soil column, walks from the top down and multiplies the light by
+  `light_attenuation` (default 0.7) once per whole 256 it has passed and,
+  for a cell's remainder `r`, by `1 − (r/256)(1 − light_attenuation)` —
+  linear, because a `powf` would not be bit-identical across backends —
+  starting at `light_top` (1.0), and by the soil of each cell it
   passes: a cell transmits `1 − solid_fraction × light_soil_opacity`,
   floored at zero, so at the default opacity (2.0) one full cell of any
   soil type is opaque and nothing under it earns light. A leaf in the top
@@ -143,7 +148,8 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   the same grid, so between rebuilds a limb's light reading is up to
   `life_interval` steps stale.
 - **Energy and water.** One unit per organism, serial over its particles.
-  Leaves earn `light_gain` times the light in their cell, but only as far
+  Leaves earn `light_gain` times the light in their cell times how far
+  their segment has grown (`segment_fraction`, as for shade), but only as far
   as the organism's water pool pays for it, at `water_per_energy` particles
   per unit of energy; roots earn nothing — they drink, and the pool is
   what they drink into (*Water*, below). Upkeep is `upkeep_per_volume`
@@ -185,7 +191,8 @@ organism's transpiration accumulator — and it moves between them only here:
   below capacity, a per-organism flag the host uploads every tick — a
   Threefry draw keyed by the particle id, the step and stream word 3 (the
   evaporation and vapor kernels use 1 and 2) drinks the particle with
-  probability `drink_rate` (0.05 per tick): its slot becomes `Free`, exactly
+  probability `drink_rate` (0.05 per tick) times the root particle's
+  `segment_fraction` (*Growth*): its slot becomes `Free`, exactly
   as a freed body slot is, and the organism's `u32` drink count goes up by
   one with an integer atomic. The free-slot scan covers the fluid range, so
   a drunk slot is the first thing the next claim hands out.
@@ -301,6 +308,10 @@ built; the two together are the model below.
   seed in flight is in no limb, has no volume, and costs nothing beyond
   `seed_cost` at emission. Income stays per particle: what a leaf catches
   is sampled at its particles, and what a root drinks is found from its.
+  Each particle counts for `segment_fraction(grown, k)` of one — its light,
+  its shade and its drinking alike — so a limb's newest particle earns,
+  shades and drinks in proportion to its growing segment rather than
+  wholly from the tick it is claimed.
 - *Particles* are claimed when `ceil(grown)` rises, placed at the
   predecessor plus the rest offset along the limb's direction, by the
   existing growth kernel over a list of `(organism, limb, first index,

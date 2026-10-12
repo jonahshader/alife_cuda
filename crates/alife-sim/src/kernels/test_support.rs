@@ -265,9 +265,10 @@ impl OrganismHarness {
       &sph,
       &soil_dev,
       &light,
+      &bodies,
+      &pop,
       &params_buf,
       cfg,
-      super::LiveParticles(geom.num_particles),
     );
 
     let mut harness = Self {

@@ -8,9 +8,13 @@
 //! the running), and if that root's organism is *thirsty* — a flag the host
 //! uploads every tick, 1 while the organism's pool is below its capacity —
 //! roll a Threefry draw keyed by the particle id, the step and
-//! [`STREAM_DRINK`]. With probability `drink_rate` the particle is drunk: its
-//! slot becomes `Free`, exactly as `free_particles` leaves one, and
-//! `drinks[organism]` goes up by one.
+//! [`STREAM_DRINK`]. With probability `drink_rate` times the root particle's
+//! `segment_fraction(grown, k)` the particle is drunk: its slot becomes
+//! `Free`, exactly as `free_particles` leaves one, and `drinks[organism]`
+//! goes up by one. The fraction is the same share a leaf particle earns light
+//! by and a stem particle shades by: a root's newest particle drinks as much
+//! as its segment has grown, not a whole particle's worth the moment it is
+//! claimed.
 //!
 //! **Why the liquid particle decides.** A root reaching for the nearest
 //! water would have two roots grab one particle, and settling that is a slot
@@ -34,7 +38,9 @@
 use cubecl::prelude::*;
 use cubecl_runtime::server::Handle;
 
+use crate::bodies::{BodyCfg, BodyState};
 use crate::genome::PartType;
+use crate::kernels::constraints::{segment_fraction, segment_fraction_ref};
 use crate::kernels::grid::{GridDevice, GridRef, neighbour_cell, neighbours, unwrap_x};
 use crate::kernels::{
   BodyArgs, CUBE_DIM, Cfg, GridArgs, KIND_BODY, KIND_FREE, KIND_LIQUID, LiveParticles, P_CELL_SIZE,
@@ -59,10 +65,12 @@ pub fn drink_particles(
   sph: &mut BodyArgs,
   grid: &GridArgs,
   thirsty: &[u32],
+  grown: &[f32],
   drinks: &[Atomic<u32>],
   params: &[f32],
   step: u32,
   seed: u32,
+  #[comptime] body: BodyCfg,
   #[comptime] cfg: Cfg,
 ) {
   let i = ABSOLUTE_POS;
@@ -116,8 +124,11 @@ pub fn drink_particles(
     terminate!();
   }
 
+  let root = best as usize;
+  let limb = organism * comptime!(body.max_limbs) + sph.limb[root];
+  let share = segment_fraction(grown[limb as usize], sph.index_in_limb[root]);
   let r = threefry4x32_20(0u32, 0u32, 0u32, 0u32, i as u32, step, STREAM_DRINK, seed);
-  if u01(r.x0) >= params[P_DRINK_RATE as usize] {
+  if u01(r.x0) >= params[P_DRINK_RATE as usize] * share {
     terminate!();
   }
 
@@ -148,26 +159,30 @@ pub fn launch<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   grid: &GridDevice,
+  bodies: &BodyState,
   thirsty: &Handle,
   drinks: &Handle,
-  max_organisms: usize,
   params: &Handle,
   step: u32,
   seed: u64,
   cfg: Cfg,
   live: LiveParticles,
 ) {
+  let body = bodies.cfg;
+  let organisms = body.max_organisms as usize;
   drink_particles::launch::<R>(
     client,
     cube_count(live.get()),
     CubeDim::new_1d(CUBE_DIM),
     body_args(sph),
     grid_args(grid, &cfg),
-    whole(thirsty, max_organisms),
-    whole(drinks, max_organisms),
+    whole(thirsty, organisms),
+    whole(&bodies.device.grown, body.limb_count()),
+    whole(drinks, organisms),
     whole(params, PARAM_COUNT),
     step,
     seed as u32,
+    body,
     cfg,
   );
 }
@@ -181,6 +196,7 @@ pub fn launch<R: Runtime>(
 pub fn drink_particles_ref(
   particles: &mut SphHost,
   grid: &GridRef,
+  bodies: &BodyState,
   thirsty: &[u32],
   params: &crate::SimParams,
   geom: &crate::world::WorldGeometry,
@@ -223,8 +239,12 @@ pub fn drink_particles_ref(
     if thirsty[organism] == 0 {
       continue;
     }
+    let grown = bodies.grown[bodies
+      .cfg
+      .limb_index(organism, particles.limb[root] as usize)];
+    let share = segment_fraction_ref(grown, particles.index_in_limb[root] as usize);
     let r = threefry4x32_20_ref([0, 0, 0, 0], [i as u32, step, STREAM_DRINK, seed as u32]);
-    if u01_ref(r[0]) >= params.drink_rate {
+    if u01_ref(r[0]) >= params.drink_rate * share {
       continue;
     }
     drinks[organism] += 1;
@@ -299,9 +319,9 @@ mod tests {
       &h.client,
       &h.sph,
       grid,
+      &h.bodies,
       &thirsty_buf,
       &drinks,
-      thirsty.len(),
       &h.params_buf,
       step,
       0xABCD_1234_5678,
@@ -324,6 +344,7 @@ mod tests {
     let drinks = drink_particles_ref(
       &mut expected,
       &grid_ref,
+      &h.bodies,
       &thirsty,
       &h.params,
       &h.geom,
@@ -344,6 +365,40 @@ mod tests {
     assert_eq!(
       expected.count_of(ParticleKind::Liquid) + drinks[0] as usize,
       h.particles.count_of(ParticleKind::Liquid)
+    );
+  }
+
+  /// A root's newest particle drinks as much as its segment has grown: at a
+  /// rate of one, with the root a thousandth of the way into its second
+  /// segment, the water whose nearest root is that second particle stays,
+  /// and the device agrees with the reference about which.
+  #[test]
+  fn a_root_particle_drinks_as_much_as_its_segment_has_grown() {
+    let (whole_h, grid) = wet_harness(1.0);
+    let whole = run(&whole_h, &grid, &[1, 0, 0], 5)[0];
+
+    let (mut h, grid) = wet_harness(1.0);
+    h.bodies.grown[h.body_cfg.limb_index(0, 0)] = 1.001;
+    h.bodies.upload(&h.client);
+    let actual = run(&h, &grid, &[1, 0, 0], 5);
+    let mut expected = h.particles.clone();
+    let grid_ref = crate::kernels::grid::build_ref(&h.particles, h.geom.cell_size, &h.cfg);
+    let drinks = drink_particles_ref(
+      &mut expected,
+      &grid_ref,
+      &h.bodies,
+      &[1, 0, 0],
+      &h.params,
+      &h.geom,
+      5,
+      0xABCD_1234_5678,
+    );
+    assert_eq!(actual, drinks);
+    assert_eq!(h.read_particles(), expected);
+    assert!(
+      drinks[0] > 0 && drinks[0] < whole,
+      "{} drank against {whole} whole",
+      drinks[0]
     );
   }
 
