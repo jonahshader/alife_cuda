@@ -12,7 +12,7 @@ use crate::sim::Sim;
 const PER_COLUMN: usize = 6;
 
 /// Fields the time series writes before the first soil column's.
-const FIXED: usize = 17;
+const FIXED: usize = 21;
 
 /// A world narrow enough that the capillary test's `width / 40` gap is zero,
 /// so its six columns tile the soil and every founder lands in one of them
@@ -110,9 +110,13 @@ fn the_time_series_counts_three_founders_one_per_column() {
       "births",
       "deaths",
       "breaks",
+      "drinks",
+      "transpired",
+      "returned",
       "energy_mean",
       "energy_min",
       "energy_max",
+      "water_mean",
       "lineages",
       "generation_max",
       "generation_mean",
@@ -158,6 +162,15 @@ fn the_time_series_counts_three_founders_one_per_column() {
   assert_eq!(field("deaths"), "0");
   assert_eq!(field("generation_max"), "0");
   assert_eq!(field("generation_mean"), "0.0000");
+  // No life tick ran, so no root drank and no leaf transpired, and every
+  // founder still holds the full pool it was seeded with.
+  assert_eq!(field("drinks"), "0");
+  assert_eq!(field("transpired"), "0");
+  assert_eq!(field("returned"), "0");
+  let water_mean: f32 = field("water_mean").parse().unwrap();
+  let pool = |o: usize| sim.population().organisms.water[o];
+  assert!(pool(0) > 0.0, "a founder starts with an empty pool");
+  assert!((water_mean - (pool(0) + pool(1) + pool(2)) / 3.0).abs() < 1e-4);
   // The founders differ only in their identity vectors, which at the default
   // `max_limbs` keeps them inside the default 0.25 threshold.
   for (a, b) in [(0, 1), (0, 2), (1, 2)] {
@@ -234,6 +247,8 @@ fn a_run_with_no_organisms_writes_the_fluid_columns_and_zeros() {
   assert_eq!(field("lineages"), "0");
   assert_eq!(field("species"), "0");
   assert_eq!(field("energy_mean"), "0.000000");
+  assert_eq!(field("water_mean"), "0.000000");
+  assert_eq!(field("drinks"), "0");
   assert!(field("fluid_liquid").parse::<usize>().unwrap() > 0);
   assert!(field("mean_density").parse::<f32>().unwrap() > 0.0);
   for cell in &row[FIXED..] {

@@ -330,5 +330,23 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
   if let Some(sampler) = &metrics {
     print!("{}", sampler.summary());
   }
+  // The water ledger closes to rounding (`docs/organism.md`, *Water*); a run
+  // that never had an organism has nothing in it to show.
+  let water = sim.water_balance();
+  if water.endowed > 0.0 {
+    println!(
+      "\n=== Water ledger (particles) ===\n  endowed={:.3} + drunk={} = transpired={} + returned={} \
+       + leaked={:.3} + pools={:.3} + tissue={:.3} + pending={:.3}  (residual {:.3e})",
+      water.endowed,
+      water.drunk,
+      water.transpired,
+      water.returned,
+      water.leaked,
+      water.pools,
+      water.tissue,
+      water.pending,
+      water.residual(),
+    );
+  }
   Ok(())
 }

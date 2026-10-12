@@ -8,33 +8,19 @@ what shipped.
 Milestone 1, plants. Each bullet is one delegation-cycle chunk; build from
 the spec, don't re-derive it.
 
-Left open by growth (`organism.md`, *Growth*, all four chunks built):
-
-- **A seedling's surplus is whatever is left over `seed_cost`, and nothing
-  sets it deliberately.** Growth is funded by `energy − seed_cost`, and a
-  seedling germinates on `seed_energy` 0.5 against a `seed_cost` of 1.0 —
-  below the floor, living on what its first root segment drinks. Charging
-  upkeep by volume made that segment cost 0.0012 a step instead of 0.003
-  and was enough to get offspring to a leaf (`perf.md`: height 0.13 m →
-  0.22 m, every organism slot full by step 3000), so the drift to root-only
-  bodies is gone — but by accident of a constant chosen for a grown
-  founder, not by design, and the population now hits `max_organisms`
-  rather than any ecological ceiling. It is the same energy-balance
-  question as the `--column-top` band below and wants answering with it:
-  what a root earns, what a seed germinates with, or whether the growth
-  reserve is `seed_cost` at all.
-
 Left open by the soil-specialization experiment:
 
-- **A plant lives only in a 0.8 m band above the pool.** `--column-top`
-  0.25 works, 0.30 is total extinction, and the difference is whether
-  capillary suction lifts water to a root at the column's surface
-  (`organism.md`, decisions). Every column the experiment can use is
-  therefore short, and a plant that grows a taller stem is growing away
-  from the only thing paying for it. Widening that band — deeper roots
-  worth more, a leaf that earns more, a wetter world — is what a terrain
-  with real vertical structure needs, and it is a change to the energy
-  balance rather than to the terrain.
+- **A plant lives only where liquid reaches its roots, which on terrain
+  mode 2 was a 0.8 m band above the pool.** `--column-top` 0.25 worked and
+  0.30 was total extinction when roots earned energy from wetness
+  (`organism.md`, decisions, 2026-09-19); a root now drinks only the liquid
+  particles within a smoothing radius of it, which is the same question —
+  whether capillary suction lifts water to the column's surface — and has
+  not been re-measured. Every column the experiment can use is therefore
+  short. Widening the band — deeper roots, a wetter world, the transpired
+  vapor that now rains back down — is what a terrain with real vertical
+  structure needs, and it is a change to the water and energy balance
+  rather than to the terrain.
 - **Once every organism slot is full, `energy_mean` stops meaning
   fitness.** A plant over `seed_threshold` with no free slot to seed into
   keeps its energy, so a saturated column's mean energy measures how long
@@ -74,13 +60,18 @@ Left open by the metrics chunk:
 
 Left open by the life-cycle chunk:
 
-- **A run left to itself either fills every organism slot or goes extinct,
-  and which one is the seed** (`organism.md`, decisions, 2026-09-19, and
-  `REVIEW.md`). The soil-specialization runs tested this on the experiment's
-  own terrain at `--max-organisms 1024`: some seeds saturate, some lose the
-  whole population, and nothing settles in between. The binding constraint
-  is still `max_organisms` rather than light or space, and most of a
-  saturated population is seeds in flight rather than plants.
+- **No population settles between extinction and the cap yet.** Before the
+  water ledger a run either filled every organism slot or went extinct,
+  which one depending on the seed, with `max_organisms` the binding
+  constraint. The ledger is the density dependence that was missing — water
+  is finite, a drink removes it, and it comes back only through the fluid's
+  own cycle (`organism.md`, *Water*) — but at the shipped constants every
+  seed goes extinct by step 600 (`perf.md`): with roots earning nothing, a
+  founder-shaped body's one leaf earns 0.012 a step against 0.0174 of
+  upkeep, and no founder reaches `seed_threshold`. The water knobs do not
+  move that; the energy scale (`light_gain`, `upkeep_per_volume`,
+  `seed_energy`) does, and the band the ledger then holds a population in
+  is the thing to measure.
 - **The `stage` field is not in the dump**, because the population tensors
   are not: `--load` resumes the fluid and reserves body capacity on top
   (`crates/alife-sim/README.md`). A run cannot be checkpointed and resumed
@@ -109,9 +100,7 @@ Left open by the brain chunk:
   `sph.density` does (`kernels::density` adds `solid_density_at_pos`, which
   is `target_density` in air). The reading therefore sits near 1 in free air
   rather than near 0. It is a usable signal as it stands; subtracting the
-  offset would mean sampling the soil twice per limb. The energy kernel
-  takes the same quantity and subtracts 1 from it, so the two agree about
-  what "wet" means and moving one moves the other.
+  offset would mean sampling the soil twice per limb.
 - **22 launches, ~6% of the step, and entirely launch-bound** (`perf.md`).
   Merging them buys back microseconds against a step the three neighbour
   kernels dominate, so it is not worth doing until organism counts or brain

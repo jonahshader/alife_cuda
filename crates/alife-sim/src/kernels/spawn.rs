@@ -1,5 +1,7 @@
 //! The kernels a body spawn needs: which particle slots are claimable, where
-//! a limb's particles go, and turning claimed slots into body particles.
+//! a limb's particles go, and turning claimed slots into particles — body
+//! particles for growth and seeds, and liquid or vapor for the water an
+//! organism gives back (`docs/organism.md`, *Water*).
 //!
 //! Slot allocation is a prefix scan over an occupancy flag, never an atomic
 //! claim (`docs/organism.md`, *Implementation layout*): the ids have to come
@@ -9,7 +11,7 @@
 //!
 //! Growth is two launches over a list of `(organism, limb)` requests.
 //! [`layout_limbs`] needs the device's `ppos` — where the parent limb's last
-//! particle actually ended up — so it runs on the device; [`place_body_particles`]
+//! particle actually ended up — so it runs on the device; [`place_particles`]
 //! then writes the claimed slots from what it computed plus the per-particle
 //! fields the host already knows. A request's parent limb must already be
 //! grown, which is why [`crate::bodies::spawn`] lays a whole body out in
@@ -20,8 +22,8 @@ use cubecl_runtime::server::Handle;
 
 use super::constraints::{limb_axis, limb_len, particle_at, rotate, segment_fraction, wrap_x};
 use super::{
-  BodyArgs, Cfg, KIND_BODY, KIND_FREE, P_BOUNDS_X, P_BOUNDS_Y, P_LIMB_SEGMENT_LENGTH, PARAM_COUNT,
-  body_args, cube_count, whole,
+  BodyArgs, Cfg, KIND_BODY, KIND_FREE, KIND_VAPOR, P_BOUNDS_X, P_BOUNDS_Y, P_LIMB_SEGMENT_LENGTH,
+  PARAM_COUNT, body_args, cube_count, whole,
 };
 use crate::bodies::BodyCfg;
 use crate::genome::population::{LimbArgs, limb_args};
@@ -179,18 +181,24 @@ pub fn layout_limbs(
   }
 }
 
-/// Turn claimed slots into body particles. One unit per entry of the list.
+/// Turn claimed slots into particles of the kind each entry asks for. One
+/// unit per entry of the list.
 ///
 /// Everything the fluid kernels read is set here, not only the position: a
 /// slot that has been free since startup carries whatever `client.empty` gave
 /// it in `density`, and `calculate_accel` divides by that. A slot freed by a
 /// death carries the dead organism's values, which is the same problem.
+///
+/// Every kind starts at rest except vapor, which starts rising at the
+/// `(0, 0.5)` that `evaporate_particles` gives a particle it turns to vapor:
+/// transpired water leaves a leaf exactly as evaporated water leaves the pool.
 #[cube(launch)]
 #[allow(clippy::too_many_arguments)]
-pub fn place_body_particles(
+pub fn place_particles(
   sph: &mut BodyArgs,
   ids: &[u32],
   positions: &[f32],
+  kind: &[u32],
   organism: &[u32],
   limb: &[u32],
   index_in_limb: &[u32],
@@ -208,11 +216,14 @@ pub fn place_body_particles(
   sph.ppos[2 * id + 1] = positions[2 * k + 1];
   sph.vel[2 * id] = 0.0f32;
   sph.vel[2 * id + 1] = 0.0f32;
+  if kind[k] == KIND_VAPOR {
+    sph.vel[2 * id + 1] = 0.5f32;
+  }
   sph.mass[id] = 1.0f32;
   sph.density[id] = 0.0f32;
   sph.near_density[id] = 0.0f32;
   sph.evap_prob[id] = 0.0f32;
-  sph.state[id] = KIND_BODY;
+  sph.state[id] = kind[k];
   sph.organism[id] = organism[k];
   sph.limb[id] = limb[k];
   sph.index_in_limb[id] = index_in_limb[k];
@@ -329,6 +340,9 @@ pub struct Placement {
   pub ids: Vec<u32>,
   /// Interleaved x, y, one pair per id.
   pub positions: Vec<f32>,
+  /// The [`ParticleKind`] each slot becomes, as its `u32` code.
+  pub kind: Vec<u32>,
+  /// [`crate::particles::NO_ORGANISM`] for a fluid particle.
   pub organism: Vec<u32>,
   pub limb: Vec<u32>,
   pub index_in_limb: Vec<u32>,
@@ -338,6 +352,41 @@ pub struct Placement {
 impl Placement {
   pub fn len(&self) -> usize {
     self.ids.len()
+  }
+
+  /// Append one body particle of `organism`, with no id or position yet:
+  /// growth claims its slots and lays them out once the whole batch is known.
+  pub fn push_body(&mut self, organism: u32, limb: u32, index_in_limb: u32, part_type: u32) {
+    self.kind.push(KIND_BODY);
+    self.organism.push(organism);
+    self.limb.push(limb);
+    self.index_in_limb.push(index_in_limb);
+    self.part_type.push(part_type);
+  }
+
+  /// Append one fluid particle — liquid or vapor, owned by no organism — into
+  /// slot `id` at `at`.
+  pub fn push_fluid(&mut self, id: u32, kind: ParticleKind, at: glam::Vec2) {
+    self.ids.push(id);
+    self.positions.push(at.x);
+    self.positions.push(at.y);
+    self.kind.push(kind as u32);
+    self.organism.push(NO_ORGANISM);
+    self.limb.push(0);
+    self.index_in_limb.push(0);
+    self.part_type.push(0);
+  }
+
+  /// Keep the first `n` entries. `positions` is cut only where the host
+  /// filled it.
+  pub fn truncate(&mut self, n: usize) {
+    self.ids.truncate(n);
+    self.positions.truncate(2 * n);
+    self.kind.truncate(n);
+    self.organism.truncate(n);
+    self.limb.truncate(n);
+    self.index_in_limb.truncate(n);
+    self.part_type.truncate(n);
   }
 
   pub fn is_empty(&self) -> bool {
@@ -403,8 +452,8 @@ pub fn launch_layout<R: Runtime>(
   positions
 }
 
-/// Write a batch of body particles. `positions` overrides
-/// `placement.positions` when the device computed them.
+/// Write a batch of particles. `positions` overrides `placement.positions`
+/// when the device computed them.
 pub fn launch_place<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
@@ -417,6 +466,7 @@ pub fn launch_place<R: Runtime>(
   }
   let upload = |v: &[u32]| client.create_from_slice(bytemuck::cast_slice(v));
   let ids = upload(&placement.ids);
+  let kind = upload(&placement.kind);
   let organism = upload(&placement.organism);
   let limb = upload(&placement.limb);
   let index_in_limb = upload(&placement.index_in_limb);
@@ -430,13 +480,14 @@ pub fn launch_place<R: Runtime>(
     }
   };
 
-  place_body_particles::launch::<R>(
+  place_particles::launch::<R>(
     client,
     cube_count(n),
     CubeDim::new_1d(super::CUBE_DIM),
     body_args(sph),
     whole(&ids, n),
     whole(positions, n * 2),
+    whole(&kind, n),
     whole(&organism, n),
     whole(&limb, n),
     whole(&index_in_limb, n),
@@ -509,20 +560,25 @@ pub fn layout_limbs_ref(
   positions
 }
 
-/// Plain-Rust twin of [`place_body_particles`].
-pub fn place_body_particles_ref(particles: &mut SphHost, placement: &Placement, positions: &[f32]) {
+/// Plain-Rust twin of [`place_particles`].
+pub fn place_particles_ref(particles: &mut SphHost, placement: &Placement, positions: &[f32]) {
   use glam::Vec2;
   for k in 0..placement.len() {
     let id = placement.ids[k] as usize;
     let p = Vec2::new(positions[2 * k], positions[2 * k + 1]);
+    let kind = ParticleKind::from_byte(placement.kind[k] as u8);
     particles.pos[id] = p;
     particles.ppos[id] = p;
-    particles.vel[id] = Vec2::ZERO;
+    particles.vel[id] = if kind == ParticleKind::Vapor {
+      Vec2::new(0.0, 0.5)
+    } else {
+      Vec2::ZERO
+    };
     particles.mass[id] = 1.0;
     particles.density[id] = 0.0;
     particles.near_density[id] = 0.0;
     particles.evap_prob[id] = 0.0;
-    particles.state[id] = ParticleKind::Body;
+    particles.state[id] = kind;
     particles.organism[id] = placement.organism[k];
     particles.limb[id] = placement.limb[k] as u8;
     particles.index_in_limb[id] = placement.index_in_limb[k] as u8;
@@ -647,6 +703,7 @@ mod tests {
     let placement = Placement {
       ids: ids.clone(),
       positions: expected_pos.clone(),
+      kind: vec![KIND_BODY; 5],
       organism: vec![0; 5],
       limb: vec![1, 1, 1, 3, 3],
       index_in_limb: vec![0, 1, 2, 0, 1],
@@ -655,8 +712,31 @@ mod tests {
     launch_place(&h.client, &h.sph, &placement, Some(&positions));
     let actual = h.read_particles();
     let mut expected = h.particles.clone();
-    place_body_particles_ref(&mut expected, &placement, &expected_pos);
+    place_particles_ref(&mut expected, &placement, &expected_pos);
     assert_eq!(actual, expected);
+  }
+
+  /// Water an organism gives back is placed through the same kernel as a
+  /// body: a liquid particle at rest and a vapor particle rising, both owned
+  /// by no organism, into slots a body just gave up.
+  #[test]
+  fn fluid_placement_matches_reference() {
+    let h = OrganismHarness::new();
+    let ids: Vec<u32> = (0..2).map(|i| h.bodies.particle(0, 0, 0) + i).collect();
+    launch_free(&h.client, &h.sph, &ids);
+    let mut expected = h.particles.clone();
+    free_particles_ref(&mut expected, &ids);
+
+    let mut placement = Placement::default();
+    placement.push_fluid(ids[0], ParticleKind::Liquid, glam::Vec2::new(1.25, 0.5));
+    placement.push_fluid(ids[1], ParticleKind::Vapor, glam::Vec2::new(0.75, 1.5));
+    launch_place(&h.client, &h.sph, &placement, None);
+    place_particles_ref(&mut expected, &placement, &placement.positions);
+    let actual = h.read_particles();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.state[ids[0] as usize], ParticleKind::Liquid);
+    assert_eq!(actual.vel[ids[1] as usize], glam::Vec2::new(0.0, 0.5));
+    assert_eq!(actual.organism[ids[1] as usize], NO_ORGANISM);
   }
 
   /// The ordinary case once a body is standing: one more particle on the end

@@ -115,10 +115,11 @@ kernel_params! {
     "" P_LIGHT_ATTENUATION = |p, _g| p.light_attenuation;
     "" P_LIGHT_SOIL_OPACITY = |p, _g| p.light_soil_opacity;
     "" P_LIGHT_GAIN = |p, _g| p.light_gain;
-    "" P_WATER_GAIN = |p, _g| p.water_gain;
     "" P_UPKEEP_PER_VOLUME = |p, _g| p.upkeep_per_volume;
     "" P_SEED_THRESHOLD = |p, _g| p.seed_threshold;
     "" P_ACTUATOR_GAIN = |p, _g| p.actuator_gain;
+    "" P_DRINK_RATE = |p, _g| p.drink_rate;
+    "" P_WATER_PER_ENERGY = |p, _g| p.water_per_energy;
 }
 
 /// The particle SoA as kernel arguments. Field order matches `SphHost`.

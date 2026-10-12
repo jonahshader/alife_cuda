@@ -4,7 +4,10 @@
 //! From `docs/organism.md`'s *Metrics*: "lineage count and phylogenetic depth
 //! over time; distributions of a few genome and body traits (root fraction,
 //! height, leaf count) over time, and whether they bimodalize; population,
-//! births, deaths, and energy flux." The traits are reported per soil column
+//! births, deaths, and energy flux." The water ledger rides along — the
+//! plants' mean pool and the cumulative drinks, transpired vapor and returned
+//! liquid (`docs/organism.md`, *Water*) — beside the fluid counts it moves
+//! between. The traits are reported per soil column
 //! ([`crate::soil::SoilGrid::columns`]) because the first experiment asks
 //! whether they split by soil.
 //!
@@ -50,6 +53,9 @@ pub struct Sample {
   pub energy_mean: f32,
   pub energy_min: f32,
   pub energy_max: f32,
+  /// Mean water pool over germinated plants, in particles; 0 when there are
+  /// none. Seeds carry no water and are left out.
+  pub water_mean: f32,
   /// Distinct `lineage_id` among alive organisms.
   pub lineages: usize,
   pub generation_max: u32,
@@ -196,6 +202,16 @@ impl Sampler {
     );
     let _ = writeln!(
       out,
+      "  water: drunk={} transpired={} returned={} mean pool={:.4} liquid={} vapor={}",
+      last.counters.drinks,
+      last.counters.transpired,
+      last.counters.returned,
+      last.water_mean,
+      last.fluid_liquid,
+      last.fluid_vapor
+    );
+    let _ = writeln!(
+      out,
       "  fluid mean density over all samples: {mean_density:.4}"
     );
     let _ = writeln!(
@@ -220,7 +236,7 @@ impl Sampler {
   }
 }
 
-/// The header row: the seventeen fixed columns, then six per soil column
+/// The header row: the twenty-one fixed columns, then six per soil column
 /// named after its label.
 fn header(columns: &[ColumnExtent]) -> String {
   let mut names: Vec<String> = [
@@ -234,9 +250,13 @@ fn header(columns: &[ColumnExtent]) -> String {
     "births",
     "deaths",
     "breaks",
+    "drinks",
+    "transpired",
+    "returned",
     "energy_mean",
     "energy_min",
     "energy_max",
+    "water_mean",
     "lineages",
     "generation_max",
     "generation_mean",
@@ -272,9 +292,13 @@ fn row(s: &Sample) -> String {
     s.counters.births.to_string(),
     s.counters.deaths.to_string(),
     s.counters.breaks.to_string(),
+    s.counters.drinks.to_string(),
+    s.counters.transpired.to_string(),
+    s.counters.returned.to_string(),
     format!("{:.6}", s.energy_mean),
     format!("{:.6}", s.energy_min),
     format!("{:.6}", s.energy_max),
+    format!("{:.6}", s.water_mean),
     s.lineages.to_string(),
     s.generation_max.to_string(),
     format!("{:.4}", s.generation_mean),
@@ -382,7 +406,12 @@ fn measure<R: Runtime>(
   let (mut energy_sum, mut energy_min, mut energy_max) = (0.0f64, f32::INFINITY, f32::NEG_INFINITY);
   let mut lineages: Vec<u32> = Vec::new();
   let (mut generation_sum, mut generation_max) = (0u64, 0u32);
+  let (mut water_sum, mut plants) = (0.0f64, 0usize);
   for &o in &alive {
+    if pop.organisms.stage[o] == STAGE_PLANT {
+      water_sum += pop.organisms.water[o] as f64;
+      plants += 1;
+    }
     let energy = pop.organisms.energy[o];
     energy_sum += energy as f64;
     energy_min = energy_min.min(energy);
@@ -460,6 +489,11 @@ fn measure<R: Runtime>(
     },
     energy_min: if n > 0 { energy_min } else { 0.0 },
     energy_max: if n > 0 { energy_max } else { 0.0 },
+    water_mean: if plants > 0 {
+      (water_sum / plants as f64) as f32
+    } else {
+      0.0
+    },
     lineages: lineages.len(),
     generation_max,
     generation_mean: if n > 0 {

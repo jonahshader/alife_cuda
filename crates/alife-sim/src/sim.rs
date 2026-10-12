@@ -49,6 +49,12 @@ pub struct Sim<R: Runtime> {
   pub(crate) light: LightGrid,
   /// Scratch for the life tick's one readback.
   pub(crate) life_pack: LifePack,
+  /// `[max_organisms]` `u32`: particles each organism's roots drank this
+  /// tick. The drink kernel counts into it, the energy kernel adds it to the
+  /// pool, and the pack kernel reads and clears it.
+  pub(crate) drinks: Handle,
+  /// The water that came from nowhere or went nowhere (`life::WaterLedger`).
+  pub(crate) water_ledger: crate::life::WaterLedger,
   pub(crate) params_buf: Handle,
   pub(crate) rng_counter: RngCounter,
   pub(crate) step_count: u32,
@@ -74,6 +80,12 @@ pub struct Counters {
   /// Limbs shed by a base joint breaking, descendants counted one by one
   /// (`docs/organism.md`, *Growth*).
   pub breaks: u64,
+  /// Liquid particles roots drank (`docs/organism.md`, *Water*).
+  pub drinks: u64,
+  /// Vapor particles emitted at leaves.
+  pub transpired: u64,
+  /// Liquid particles given back by deaths and breaks.
+  pub returned: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +155,11 @@ impl<R: Runtime> Sim<R> {
     let brain = BrainState::new(&client, BrainCfg::new(&shape, &params));
     let light = LightGrid::new(&client, &soil, params.light_top);
     let life_pack = LifePack::new(&client, body_cfg);
+    let drinks = client.create_from_slice(bytemuck::cast_slice(&vec![
+      0u32;
+      body_cfg.max_organisms
+        as usize
+    ]));
     let params_buf = upload_params(&client, &params, &geom);
 
     let sim = Self {
@@ -161,6 +178,8 @@ impl<R: Runtime> Sim<R> {
       brain,
       light,
       life_pack,
+      drinks,
+      water_ledger: crate::life::WaterLedger::default(),
       params_buf,
       // Two launches consume a counter value per step: `evaporate_particles`
       // and `move_vapor_particles`, exactly as the C++ increments twice.

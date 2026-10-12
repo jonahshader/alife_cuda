@@ -235,16 +235,23 @@ sim_params! {
         "Light lost per soil cell per unit solid fraction; a cell at 1/opacity or more is opaque";
     light_gain: f32 = 0.012, "life.light_gain", "light-gain",
         "Energy a leaf particle gains per step at full light";
-    water_gain: f32 = 0.004, "life.water_gain", "water-gain",
-        "Energy a root particle gains per step per unit of wetness";
+    drink_rate: f32 = 0.05, "life.drink_rate", "drink-rate",
+        "Probability per life tick that a liquid particle by a thirsty root is drunk";
+    water_capacity_per_volume: f32 = 3000.0, "life.water_capacity_per_volume",
+        "water-capacity-per-volume",
+        "Water, in particles, a unit of limb volume lets an organism's pool hold";
+    water_per_energy: f32 = 1.0, "life.water_per_energy", "water-per-energy",
+        "Water, in particles, transpired per unit of energy earned from light";
+    water_per_volume: f32 = 1000.0, "life.water_per_volume", "water-per-volume",
+        "Water, in particles, a unit of limb volume locks into the body as it grows";
     upkeep_per_volume: f32 = 10.0, "life.upkeep_per_volume", "upkeep-per-volume",
         "Energy a unit of limb volume costs its organism per step";
     volume_per_energy: f32 = 0.0006, "life.volume_per_energy", "volume-per-energy",
         "Limb volume one unit of growth energy buys";
-    seed_threshold: f32 = 2.0, "life.seed_threshold", "seed-threshold",
+    seed_threshold: f32 = 5.0, "life.seed_threshold", "seed-threshold",
         "Energy above which an organism emits a seed";
-    seed_cost: f32 = 1.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
-    seed_energy: f32 = 0.5, "life.seed_energy", "seed-energy",
+    seed_cost: f32 = 3.0, "life.seed_cost", "seed-cost", "Energy a seed costs its parent";
+    seed_energy: f32 = 3.0, "life.seed_energy", "seed-energy",
         "Energy a seed germinates with, and the energy a founder starts with";
     germinate_speed: f32 = 0.5, "life.germinate_speed", "germinate-speed",
         "Speed below which a landed seed germinates";
@@ -417,6 +424,7 @@ impl SimParams {
     }
     for (name, value) in [
       ("structural-rate", self.structural_rate),
+      ("drink-rate", self.drink_rate),
       ("joint-stiffness", self.joint_stiffness),
       ("bend-stiffness", self.bend_stiffness),
     ] {
@@ -454,7 +462,8 @@ impl SimParams {
       ("light-top", self.light_top),
       ("light-soil-opacity", self.light_soil_opacity),
       ("light-gain", self.light_gain),
-      ("water-gain", self.water_gain),
+      ("water-capacity-per-volume", self.water_capacity_per_volume),
+      ("water-per-volume", self.water_per_volume),
       ("upkeep-per-volume", self.upkeep_per_volume),
       ("growth-rate", self.growth_rate),
       ("break-angle", self.break_angle),
@@ -478,13 +487,15 @@ impl SimParams {
     // length back out of a volume by dividing by it, so a founder thickness
     // of zero is a limb that grows an unbounded length for nothing. The
     // growth charge divides by `volume_per_energy`, and the break threshold
-    // by `break_thickness_ref`, so those are divisors too.
+    // by `break_thickness_ref`, so those are divisors too, and light income
+    // is capped at the pool divided by `water_per_energy`.
     for (name, value) in [
       ("thickness-root", self.thickness_root),
       ("thickness-stem", self.thickness_stem),
       ("thickness-leaf", self.thickness_leaf),
       ("volume-per-energy", self.volume_per_energy),
       ("break-thickness-ref", self.break_thickness_ref),
+      ("water-per-energy", self.water_per_energy),
     ] {
       if value <= 0.0 || !value.is_finite() {
         return Err(format!(

@@ -161,6 +161,14 @@ define_soa! {
         /// body, no energy budget and no place in the population counts until
         /// it germinates.
         stage: u32,
+        /// The organism's water pool, in particles (`docs/organism.md`,
+        /// *Water*). Written by the energy kernel — a drink is credited
+        /// there and light income spends it — then adjusted by the host's
+        /// decision walk for growth and uploaded, the way `energy` is.
+        water: f32,
+        /// Water transpired by light income and not yet emitted: a vapor
+        /// particle leaves at the organism's top for every whole one.
+        transpired: f32,
     }
 }
 

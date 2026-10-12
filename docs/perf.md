@@ -685,3 +685,69 @@ what does it.
 `--founders 0` is byte-identical to `393aa96`: 300 CUDA steps, whole dumps
 compared with `cmp`, and 0.616 ms a step against 0.619. Two same-seed
 `--founders 64` runs of the new binary are byte-identical to each other.
+
+### The water ledger (2026-10-11, commit after a9de21b)
+
+Roots drink liquid particles, leaves spend the pool and transpire vapor,
+deaths give water back (`organism.md`, *Water*); roots earn no energy, the
+growth reserve is gone, and `seed_energy` / `seed_cost` / `seed_threshold`
+are 3 / 3 / 5.
+
+```
+./target/release/alife --headless --runtime cuda --founders 20 \
+  --max-organisms 1024 --iterations 15000 --seed <S> \
+  --metrics m.csv --metrics-every 100
+```
+
+The fate table, seeds 1–8 one after another, values at step 15000
+(`extinct@` and `cap@` at the 100-step sampling; "in band" is steps spent
+between a tenth and nine tenths of the cap):
+
+| seed | plants | alive | extinct@ | cap@ | in band | births | deaths | breaks | lineages | gen max | drinks | transpired | returned | liquid | vapor |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 82 | 112 | 90 | 51194 | 126 |
+| 2 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 104 | 113 | 111 | 51168 | 152 |
+| 3 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 92 | 113 | 99 | 51186 | 134 |
+| 4 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 164 | 119 | 165 | 50957 | 363 |
+| 5 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 108 | 114 | 114 | 51131 | 189 |
+| 6 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 101 | 114 | 107 | 51156 | 164 |
+| 7 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 105 | 114 | 111 | 51146 | 174 |
+| 8 | 0 | 0 | 600 | – | 0 | 0 | 20 | 0 | 0 | 0 | 71 | 110 | 81 | 51169 | 151 |
+
+Root fraction, height, leaf count and `water_mean` are all 0 at the end,
+with nothing left to measure. **Every seed is extinct by step 600, and no
+founder ever seeds.** The founders die of energy, not water: on seed 1 mean
+energy falls 3.00 → 2.46 → 1.92 → 1.38 → 0.84 over the first 400 steps, a
+steady 0.0054 a step — exactly a founder's one leaf in open light (0.012)
+against its upkeep (0.0174) — while the mean pool only drifts 5.4 → 3.5
+particles. The one sweep run, `--water-per-energy` on seed 1, confirms it:
+0.25 and 4.0 both end extinct at step 600 (20 deaths, no births; 36 and 263
+drinks). The root term was what kept a founder alive.
+
+The ledger closes on every run. Seed 1 stopped at step 550, with 8 plants
+still standing:
+
+```
+endowed=139.200 + drunk=82 = transpired=112 + returned=8 + leaked=7.680
+  + pools=65.440 + tissue=20.880 + pending=7.200   (residual -1.0e-4)
+```
+
+Endowed is 20 founders × (5.22 pool + 1.74 tissue); each death returns
+floor(6.96) = 6 particles and leaks 0.96. At step 15000 every run reads
+`leaked=19.200` with nothing held and a residual of 1e-4 or less.
+
+Per step, `--headless --seed 42 --runtime cuda --iterations 201 --founders
+64`, against `a9de21b` (the life kernels' first launch is the JIT and is
+left out of their averages, which otherwise read 2.5–6 ms):
+
+| | `a9de21b` | water ledger |
+|---|---:|---:|
+| `light_grid` (per tick) | 0.079 ms | 0.067 ms |
+| `drink_particles` (per tick) | — | 0.078 ms |
+| `organism_energy` (per tick) | 0.023 ms | 0.022 ms |
+| profiler total per step | 1.075 ms | 1.047 ms |
+
+The drink kernel is a 3x3 gather over the liquid particles every tenth
+step, 0.008 ms a step amortised — inside the noise of the step total.
+`--founders 0` is byte-identical to `a9de21b` (300 CUDA steps, dumps
+compared with `cmp`).

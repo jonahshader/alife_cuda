@@ -2,8 +2,9 @@
 //!
 //! The kernel-versus-reference tests live next to the kernels; this is the
 //! other half — that a population left to itself gains and spends energy,
-//! sprouts, seeds, germinates and dies without leaking a particle slot or an
-//! organism slot, and that the whole thing is still bit-reproducible.
+//! drinks and transpires, sprouts, seeds, germinates and dies without leaking
+//! a particle slot, an organism slot or a drop of water, and that the whole
+//! thing is still bit-reproducible.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -144,6 +145,35 @@ fn check_consistent(sim: &AnySim, name: &str) {
       bodies.high_water
     );
   }
+  // And the live prefix covers every occupied slot of any kind: water an
+  // organism gave back or transpired can sit above the fluid range in no
+  // organism's map, and a kernel launched short of it would never see it.
+  let live = sim.geometry().fluid_particles.max(bodies.high_water);
+  if let Some(top) = (0..particles.len())
+    .rev()
+    .find(|i| particles.state[*i] != ParticleKind::Free)
+  {
+    assert!(
+      top < live,
+      "{name}: slot {top} is {:?} but the live prefix ends at {live}",
+      particles.state[top]
+    );
+  }
+
+  // The water ledger closes: what came in is what went out plus what is
+  // held, to float rounding over the run.
+  let water = sim.water_balance();
+  assert!(
+    water.residual().abs() < 1e-3 * (water.endowed + water.drunk as f64).max(1.0),
+    "{name}: the water ledger is off by {}: {water:?}",
+    water.residual()
+  );
+  for o in 0..pop.max_organisms {
+    assert!(
+      pop.organisms.water[o] >= 0.0 && pop.organisms.transpired[o] >= 0.0,
+      "{name}: organism {o} holds negative water"
+    );
+  }
 
   // A limb's length and the particles it holds are the same fact: the map
   // holds `ceil(grown)` of them, and a limb never outgrows the record it is
@@ -216,6 +246,8 @@ fn a_population_turns_over_on_its_own() {
 
     let counters = sim.counters();
     assert!(counters.births > 0, "{name}: nothing was ever born");
+    assert!(counters.drinks > 0, "{name}: no root ever drank");
+    assert!(counters.transpired > 0, "{name}: no leaf ever transpired");
     let pop = sim.population();
     let alive = (0..pop.max_organisms)
       .filter(|o| pop.organisms.alive[*o] == 1)
@@ -251,14 +283,16 @@ fn a_population_turns_over_on_its_own() {
   assert!(ran_any, "no runtime was available at all");
 }
 
-/// Energy is the only thing that kills a plant, so a world with no light and
-/// no water in reach empties out — and empties cleanly.
+/// Energy is the only thing that kills a plant, so a world with no light
+/// empties out — and empties cleanly, giving its water back.
 #[test]
 fn starvation_frees_every_slot_it_took() {
   let _guard = serialised();
   let params = SimParams {
     light_top: 0.0,
-    water_gain: 0.0,
+    // Little enough to starve on inside the run, and under the threshold,
+    // so no founder seeds on its way out.
+    seed_energy: 0.5,
     ..params()
   };
   let sim = run(RuntimeKind::Cpu, params, 600);
@@ -268,7 +302,7 @@ fn starvation_frees_every_slot_it_took() {
   let alive = (0..pop.max_organisms)
     .filter(|o| pop.organisms.alive[*o] == 1)
     .count();
-  assert_eq!(alive, 0, "something survived with no light and no water");
+  assert_eq!(alive, 0, "something survived with no light");
   assert_eq!(sim.counters().deaths, FOUNDERS as u64);
   assert_eq!(
     sim.read_particles().count_of(ParticleKind::Body),
@@ -281,9 +315,21 @@ fn starvation_frees_every_slot_it_took() {
     deposited > 0.0,
     "the dead bodies left nothing in the soil at all"
   );
-  // The body range is empty again, so the per-particle kernels stop being
-  // launched over it.
-  assert_eq!(sim.bodies().high_water, 0);
+  // Every dead plant gave its pool and its tissue back as liquid, less the
+  // fraction of a particle each death drops.
+  let water = sim.water_balance();
+  assert!(sim.counters().returned > 0, "the dead gave no water back");
+  assert_eq!(water.pools + water.tissue + water.pending, 0.0);
+  assert!(water.leaked < FOUNDERS as f64, "{water:?}");
+  // The body range holds no body any more, so the live prefix reaches only
+  // as far as the returned water does: nothing above it is occupied.
+  let particles = sim.read_particles();
+  let live = sim.geometry().fluid_particles.max(sim.bodies().high_water);
+  assert!(
+    particles.state[live..]
+      .iter()
+      .all(|k| *k == ParticleKind::Free)
+  );
 }
 
 #[test]

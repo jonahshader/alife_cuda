@@ -64,6 +64,44 @@ pub fn limb_volume(segment_length: f32, target_thickness: f32, target: f32, grow
   grown * segment_length * thickness * thickness
 }
 
+/// The volume of one `(organism, limb)` as it stands: [`limb_volume`] at the
+/// limb's `grown`, zero for an absent record.
+pub fn limb_volume_of(
+  pop: &Population,
+  bodies: &BodyState,
+  segment_length: f32,
+  organism: usize,
+  limb: usize,
+) -> f32 {
+  let record = pop.limb_index(organism, limb);
+  if !pop.limbs.part_type[record].is_present() {
+    return 0.0;
+  }
+  let mp = bodies.cfg.max_particles_per_limb as usize;
+  let target = (pop.limbs.length[record] as usize).min(mp) as f32;
+  limb_volume(
+    segment_length,
+    pop.limbs.target_thickness[record],
+    target,
+    bodies.grown[bodies.cfg.limb_index(organism, limb)],
+  )
+}
+
+/// The volume of every limb an organism has grown: what upkeep is charged
+/// on, what its water pool holds `water_capacity_per_volume` particles per
+/// unit of, and what holds `water_per_volume` particles per unit as tissue
+/// (`docs/organism.md`, *Water*).
+pub fn organism_volume(
+  pop: &Population,
+  bodies: &BodyState,
+  segment_length: f32,
+  organism: usize,
+) -> f32 {
+  (0..pop.max_limbs)
+    .map(|limb| limb_volume_of(pop, bodies, segment_length, organism, limb))
+    .sum()
+}
+
 /// The length a volume buys: [`limb_volume`] inverted.
 ///
 /// Zero when the limb has no volume to buy with — no length to grow into, or
@@ -166,6 +204,18 @@ pub struct BodyState {
   /// ([`crate::kernels::LiveParticles`]). It only ever grows: a slot freed by
   /// a death leaves the mark where it was.
   pub high_water: usize,
+  /// One past the highest slot above the fluid range that may hold a fluid
+  /// particle the life tick placed — water an organism gave back as liquid
+  /// or transpired as vapor (`docs/organism.md`, *Water*) — or 0.
+  ///
+  /// Such a particle is in no organism's map, so [`Self::recompute_high_water`]
+  /// cannot see it and the live prefix would stop covering it; this is the
+  /// mark that keeps it covered. It grows as fluid is placed and is tightened
+  /// by every particle claim, which reads the whole free list anyway and so
+  /// knows where the highest occupied slot is. A root can drink such a
+  /// particle without the host hearing of it, so the mark may sit above the
+  /// last fluid particle — an over-estimate only launches a few `Free` slots.
+  pub fluid_high_water: usize,
   pub limb_particles: Vec<u32>,
   /// Each organism's anchor: the soil cell its root germinated in.
   pub anchors: Vec<Vec2>,
@@ -212,6 +262,7 @@ impl BodyState {
     Self {
       cfg,
       high_water: 0,
+      fluid_high_water: 0,
       limb_particles,
       anchors,
       seed_particles,
@@ -285,7 +336,8 @@ impl BodyState {
       .count()
   }
 
-  /// One past the highest claimed particle slot, recomputed from the map.
+  /// One past the highest claimed particle slot, recomputed from the map
+  /// and [`Self::fluid_high_water`].
   ///
   /// [`Self::high_water`] only grows as slots are claimed; after deaths the
   /// top of the range can be empty again, and the per-particle kernels should
@@ -297,7 +349,9 @@ impl BodyState {
       .chain(self.seed_particles.iter())
       .filter(|id| **id != NO_PARTICLE)
       .max();
-    self.high_water = highest.map_or(0, |id| *id as usize + 1);
+    self.high_water = highest
+      .map_or(0, |id| *id as usize + 1)
+      .max(self.fluid_high_water);
   }
 
   /// The particle holding `(organism, limb, index)`, or [`NO_PARTICLE`].
@@ -468,7 +522,7 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
   if requests.is_empty() {
     return 0;
   }
-  let access = sim.body_access();
+  let mut access = sim.body_access();
   let cfg = access.bodies.cfg;
 
   let mut batch: Vec<GrowBatchEntry> = Vec::new();
@@ -492,10 +546,12 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
       count: count as u32,
     });
     for i in 0..count {
-      placement.organism.push(request.organism as u32);
-      placement.limb.push(request.limb as u32);
-      placement.index_in_limb.push((first_index + i) as u32);
-      placement.part_type.push(part_type);
+      placement.push_body(
+        request.organism as u32,
+        request.limb as u32,
+        (first_index + i) as u32,
+        part_type,
+      );
     }
     touched.push((request.organism, request.limb));
     total += count;
@@ -507,7 +563,7 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
   // Fewer free slots than the batch wants: drop whole limbs off the end
   // rather than growing a half limb. Deterministic, because the request
   // order is.
-  let mut ids = claim_particles(&access, total);
+  let mut ids = claim_particles(&mut access, total);
   if ids.len() < total {
     while batch
       .last()
@@ -520,10 +576,7 @@ pub fn grow_limbs<R: Runtime>(sim: &mut crate::sim::Sim<R>, requests: &[GrowRequ
       return 0;
     }
     ids.truncate(total);
-    placement.organism.truncate(total);
-    placement.limb.truncate(total);
-    placement.index_in_limb.truncate(total);
-    placement.part_type.truncate(total);
+    placement.truncate(total);
   }
   placement.ids = ids.clone();
 
@@ -606,14 +659,30 @@ fn growable<R: Runtime>(
 /// The first `n` claimable particle slots, ascending, or as many as there are.
 ///
 /// The scan is the spec's allocator: an atomic claim would hand ids out in
-/// arrival order and the run would stop being reproducible.
-pub fn claim_particles<R: Runtime>(access: &SimBodies<'_, R>, n: usize) -> Vec<u32> {
+/// arrival order and the run would stop being reproducible. It is over every
+/// slot, the fluid range included: a liquid particle a root drank is a `Free`
+/// slot like any other (`docs/organism.md`, *Water*), and the lowest free
+/// slot is the first one handed out.
+///
+/// The free list comes back whole, so this is also where
+/// [`BodyState::fluid_high_water`] learns how high the occupied slots
+/// actually reach.
+pub fn claim_particles<R: Runtime>(access: &mut SimBodies<'_, R>, n: usize) -> Vec<u32> {
   let total = access.geom.num_particles;
   let occupancy = access.client.empty(total * size_of::<u32>());
   crate::kernels::spawn::launch_mark_occupancy(access.client, access.sph, &occupancy, access.cfg);
   let scan = SlotScan::alloc(access.client, total);
   claim_free_slots(access.client, &occupancy, &scan);
   let mut free = read_free_slots(access.client, &scan);
+  // The free list is ascending, so its trailing run of consecutive ids ending
+  // at the last slot is exactly the empty top of the buffer.
+  let empty_top = free
+    .iter()
+    .rev()
+    .zip((0..total).rev())
+    .take_while(|(id, slot)| **id as usize == *slot)
+    .count();
+  access.bodies.fluid_high_water = access.bodies.fluid_high_water.min(total - empty_top);
   free.truncate(n);
   free
 }
@@ -677,6 +746,9 @@ pub fn spawn_founders<R: Runtime>(sim: &mut crate::sim::Sim<R>, count: usize) ->
   // stems, then their leaves.
   let slots: Vec<usize> = (0..count).collect();
   grow_bodies(sim, &slots);
+  // A founder's body is grown whole rather than out of a pool, and it starts
+  // with that pool full (`docs/organism.md`, *Water*).
+  sim.endow_water(&slots, true);
   count
 }
 

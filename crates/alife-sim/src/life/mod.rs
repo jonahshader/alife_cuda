@@ -1,31 +1,36 @@
-//! Energy and the life cycle: what an organism gains, what it spends, and
-//! what happens when it runs out.
+//! Energy, water and the life cycle: what an organism gains, what it spends,
+//! and what happens when it runs out.
 //!
-//! From `docs/organism.md`'s *World coupling and life cycle*. One tick every
-//! `life_interval` steps ([`crate::sim::Sim::life_tick`]), after the brain,
-//! in this order:
+//! From `docs/organism.md`'s *World coupling and life cycle* and *Water*. One
+//! tick every `life_interval` steps ([`crate::sim::Sim::life_tick`]), after
+//! the brain, in this order:
 //!
 //! 1. rebuild the light grid ([`light`]);
-//! 2. credit and charge every organism ([`energy`]);
-//! 3. one packed readback ([`pack`]) — energies, seed positions and speeds,
-//!    body tops, and per limb the worst its base joint was bent over the
-//!    interval and the brain's growth logit;
-//! 4. decide, on the host: who dies, who germinates, how much every limb
-//!    grows, who seeds;
-//! 5. free the dead, place the seeds, run the growth and mutation kernels.
+//! 2. let the roots drink ([`drink`]): the host uploads who is thirsty, and
+//!    liquid particles by a thirsty root leave the fluid;
+//! 3. credit and charge every organism ([`energy`]): the drinks go into the
+//!    pool, light income spends from it;
+//! 4. one packed readback ([`pack`]) — energies, pools, transpired water and
+//!    drinks, seed positions and speeds, body tops, and per limb the worst its
+//!    base joint was bent over the interval and the brain's growth logit;
+//! 5. decide, on the host: who dies, who germinates, how much every limb
+//!    grows and what water that locks up, who seeds, how much water each
+//!    death and break gives back and how much vapor each plant transpires;
+//! 6. free the dead, place the returned water, the vapor and the seeds, run
+//!    the growth and mutation kernels.
 //!
-//! **What crosses the bus, per tick.** One `read` of
-//! `max_organisms x (6 + 2 * max_limbs)` floats — 38 KB at the defaults — plus
-//! the free-slot scan's two reads when something is claimed, the same reads a
-//! `read_free_slots` costs anywhere, and one `download_limbs` (150 KB) when
-//! something was born. Nothing else is read back, and nothing is read back at
-//! all on a tick where no organism is alive, because `Sim::step` skips the
-//! whole tick then.
+//! **What crosses the bus, per tick.** One upload of the thirst flags
+//! (`max_organisms` words) and one `read` of `max_organisms x (9 + 2 *
+//! max_limbs)` floats — 41 KB at the defaults — plus the free-slot scan's two
+//! reads when something is claimed, the same reads a `read_free_slots` costs
+//! anywhere, and one `download_limbs` (150 KB) when something was born.
+//! Nothing else is read back, and nothing is read back at all on a tick where
+//! no organism is alive, because `Sim::step` skips the whole tick then.
 //!
 //! **Why the host decides.** Every decision here is a short serial walk over
 //! `max_organisms` slots in slot order, which is deterministic by
-//! construction; the work that is actually per-particle — light, energy,
-//! layout, placement, freeing, mutation — is a kernel. Moving the decisions
+//! construction; the work that is actually per-particle — light, drinking,
+//! energy, layout, placement, freeing, mutation — is a kernel. Moving the decisions
 //! to the device would buy a readback and cost the one place where the whole
 //! life cycle can be read top to bottom.
 
@@ -39,17 +44,79 @@ use crate::genome::population::{STAGE_PLANT, STAGE_SEED};
 use crate::genome::slots::free_slots_ref;
 use crate::kernels::soil_sample::solid_fraction_at_pos_ref;
 use crate::kernels::spawn::{Placement, launch_free, launch_place};
+use crate::particles::ParticleKind;
 use crate::sim::{Sim, run_timed};
 
+pub mod drink;
 pub mod energy;
 pub mod light;
 pub mod pack;
+
+/// The two terms of the water ledger the rest of the sim cannot reconstruct
+/// (`docs/organism.md`, *Water*): water that entered the world from nowhere
+/// and water that left it for nowhere, in particles, since this `Sim` was
+/// created.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WaterLedger {
+  /// Founders' pools and tissue, a loaded population's, and the first root
+  /// segment of every seed that germinates — the initial conditions and the
+  /// one piece of body that is not grown from the pool.
+  pub endowed: f64,
+  /// The fraction of a particle each death or break drops when its water is
+  /// floored to whole particles, plus any returned particle that found no
+  /// free slot.
+  pub leaked: f64,
+}
+
+/// The whole water ledger at one moment: what came in, what went out, and
+/// what is held. [`Self::residual`] is zero up to float rounding.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WaterBalance {
+  pub endowed: f64,
+  /// Liquid particles the roots drank.
+  pub drunk: u64,
+  /// Vapor particles emitted at leaves.
+  pub transpired: u64,
+  /// Liquid particles given back by deaths and breaks.
+  pub returned: u64,
+  pub leaked: f64,
+  /// Sum of the organisms' pools.
+  pub pools: f64,
+  /// Sum of `water_per_volume x volume` over every grown limb.
+  pub tissue: f64,
+  /// Sum of the transpired-but-not-yet-emitted accumulators.
+  pub pending: f64,
+}
+
+impl WaterBalance {
+  /// In minus out minus held: what the ledger cannot account for.
+  pub fn residual(&self) -> f64 {
+    self.endowed + self.drunk as f64
+      - self.transpired as f64
+      - self.returned as f64
+      - self.leaked
+      - self.pools
+      - self.tissue
+      - self.pending
+  }
+}
 
 /// What the host decided this tick, before any of it is applied.
 #[derive(Debug, Default)]
 struct Decisions {
   /// Plants whose energy ran out: they die and become organic matter.
   dying: Vec<usize>,
+  /// What each dying plant gives back as liquid, parallel to `dying`: its
+  /// pool, its untranspired accumulator and the water in its tissue.
+  dying_water: Vec<f32>,
+  /// The tissue water of the limbs breaking off, per organism, in slot
+  /// order: `(organism, water)`. An organism whose breaking limbs had not
+  /// grown is not in it.
+  shed_water: Vec<(usize, f32)>,
+  /// Vapor each plant transpires this tick: `(organism, particles, where)`.
+  emitting: Vec<(usize, u32, Vec2)>,
+  /// Liquid particles drunk this tick, every organism together.
+  drinks: u64,
   /// Seeds that ran out of time: their particle and slot go back, and
   /// neither counts as a death, because emitting one never counted as a
   /// birth.
@@ -74,6 +141,7 @@ impl<R: Runtime> Sim<R> {
   /// One life-cycle tick, every `life_interval` steps.
   pub fn life_tick(&mut self) {
     self.rebuild_light();
+    self.drink();
     self.charge_energy();
 
     let packed = self.read_life_pack();
@@ -101,7 +169,64 @@ impl<R: Runtime> Sim<R> {
     });
   }
 
-  /// Credit every organism's gain and charge its upkeep for the interval.
+  /// Which organisms may drink this tick: a plant whose pool is below its
+  /// capacity, `water_capacity_per_volume` times its volume. A drink is a
+  /// whole particle, so a pool may end a tick above its capacity by less than
+  /// one; it just does not drink again until it is back under.
+  fn thirsty_flags(&self) -> Vec<u32> {
+    let p = &self.params;
+    (0..self.pop.max_organisms)
+      .map(|o| {
+        let organisms = &self.pop.organisms;
+        if organisms.alive[o] == 0 || organisms.stage[o] != STAGE_PLANT {
+          return 0;
+        }
+        let volume = bodies::organism_volume(&self.pop, &self.bodies, p.limb_segment_length, o);
+        u32::from(organisms.water[o] < p.water_capacity_per_volume * volume)
+      })
+      .collect()
+  }
+
+  /// Let every liquid particle by a thirsty root decide whether it is drunk.
+  fn drink(&mut self) {
+    let thirsty = self.thirsty_flags();
+    let thirsty = self
+      .client
+      .create_from_slice(bytemuck::cast_slice(&thirsty));
+    let live = self.live_particles();
+    let (step, seed) = (self.step_count, self.seed);
+    let max_organisms = self.pop.max_organisms;
+    let Self {
+      client,
+      sph,
+      grid,
+      drinks,
+      params_buf,
+      cfg,
+      timings,
+      timing,
+      ..
+    } = self;
+    let (cfg, timing) = (*cfg, *timing);
+    run_timed(client, timing, timings, "drink_particles", &mut || {
+      drink::launch(
+        client,
+        sph,
+        grid,
+        &thirsty,
+        drinks,
+        max_organisms,
+        params_buf,
+        step,
+        seed,
+        cfg,
+        live,
+      );
+    });
+  }
+
+  /// Credit every organism's drinks and light income and charge its upkeep
+  /// for the interval.
   fn charge_energy(&mut self) {
     let Self {
       client,
@@ -109,6 +234,7 @@ impl<R: Runtime> Sim<R> {
       bodies,
       pop,
       light,
+      drinks,
       params_buf,
       body_cfg,
       cfg,
@@ -118,7 +244,9 @@ impl<R: Runtime> Sim<R> {
     } = self;
     let (body_cfg, cfg, timing) = (*body_cfg, *cfg, *timing);
     run_timed(client, timing, timings, "organism_energy", &mut || {
-      energy::launch(client, sph, bodies, pop, light, params_buf, body_cfg, cfg);
+      energy::launch(
+        client, sph, bodies, pop, light, drinks, params_buf, body_cfg, cfg,
+      );
     });
   }
 
@@ -130,9 +258,55 @@ impl<R: Runtime> Sim<R> {
       &self.bodies,
       &self.pop,
       &self.brain,
+      &self.drinks,
       &self.life_pack,
       num_particles,
     )
+  }
+
+  /// Fill these organisms' pools to capacity when `fill`, and enter what
+  /// they now hold — pool, tissue and accumulator — in the ledger as water
+  /// that came from nowhere. For founders and a loaded population, whose
+  /// bodies are grown whole as an initial condition rather than out of a
+  /// pool. Uploads the organism SoA.
+  pub fn endow_water(&mut self, organisms: &[usize], fill: bool) {
+    let p = self.params;
+    for &o in organisms {
+      let volume = bodies::organism_volume(&self.pop, &self.bodies, p.limb_segment_length, o);
+      if fill {
+        self.pop.organisms.water[o] = p.water_capacity_per_volume * volume;
+        self.pop.organisms.transpired[o] = 0.0;
+      }
+      self.water_ledger.endowed += (self.pop.organisms.water[o]
+        + self.pop.organisms.transpired[o]
+        + p.water_per_volume * volume) as f64;
+    }
+    self.pop.upload_organisms(&self.client);
+  }
+
+  /// The water ledger as it stands, from the host mirrors — which are the
+  /// truth between ticks, because every tick ends by uploading them.
+  pub fn water_balance(&self) -> WaterBalance {
+    let p = &self.params;
+    let organisms = &self.pop.organisms;
+    let mut balance = WaterBalance {
+      endowed: self.water_ledger.endowed,
+      drunk: self.counters.drinks,
+      transpired: self.counters.transpired,
+      returned: self.counters.returned,
+      leaked: self.water_ledger.leaked,
+      ..WaterBalance::default()
+    };
+    for o in 0..self.pop.max_organisms {
+      if organisms.alive[o] == 0 {
+        continue;
+      }
+      balance.pools += organisms.water[o] as f64;
+      balance.pending += organisms.transpired[o] as f64;
+      let volume = bodies::organism_volume(&self.pop, &self.bodies, p.limb_segment_length, o);
+      balance.tissue += (p.water_per_volume * volume) as f64;
+    }
+    balance
   }
 
   /// Read the packed buffer and work out what happens, touching nothing.
@@ -162,11 +336,16 @@ impl<R: Runtime> Sim<R> {
         continue;
       }
       let base = o * width;
-      // The energy kernel wrote this on the device; the host mirror is what
+      out.drinks += packed[base + pack::LIFE_DRINKS] as u64;
+      // The energy kernel wrote these on the device; the host mirror is what
       // the metrics sampler reads, so it is refreshed here rather than by a
       // download of its own.
       let mut energy = packed[base + pack::LIFE_ENERGY];
+      let mut water = packed[base + pack::LIFE_WATER];
+      let mut transpired = packed[base + pack::LIFE_TRANSPIRED];
       self.pop.organisms.energy[o] = energy;
+      self.pop.organisms.water[o] = water;
+      self.pop.organisms.transpired[o] = transpired;
 
       if self.pop.organisms.stage[o] == STAGE_SEED {
         if step.saturating_sub(self.pop.organisms.birth_step[o]) >= p.seed_lifetime as u32 {
@@ -192,16 +371,30 @@ impl<R: Runtime> Sim<R> {
       }
 
       // A plant. Energy below zero is death, and a dead plant neither grows
-      // nor seeds.
+      // nor seeds; every drop it holds goes back to the fluid.
       if energy < 0.0 {
+        let volume = bodies::organism_volume(&self.pop, &self.bodies, p.limb_segment_length, o);
         out.dying.push(o);
+        out
+          .dying_water
+          .push(water + transpired + p.water_per_volume * volume);
         continue;
       }
 
       // What broke over the interval, before anything is spent growing it:
       // a limb that is about to be shed does not grow this tick, and next
-      // tick it starts again from nothing.
+      // tick it starts again from nothing. Its tissue water goes back to the
+      // fluid where it fell.
       let broken = broken_limbs(&self.pop, &self.bodies, &p, o, &packed[base..]);
+      let shed: f32 = broken
+        .iter()
+        .map(|limb| {
+          bodies::limb_volume_of(&self.pop, &self.bodies, p.limb_segment_length, o, *limb)
+        })
+        .sum();
+      if shed > 0.0 {
+        out.shed_water.push((o, p.water_per_volume * shed));
+      }
       out.breaking.extend(broken.iter().map(|limb| (o, *limb)));
 
       // Charged before the batch: `grow_limbs` drops a limb off the end of
@@ -209,31 +402,45 @@ impl<R: Runtime> Sim<R> {
       // that was dropped. The capacity is
       // `max_organisms x max_limbs x max_particles_per_limb`, so it is only
       // short when every slot already holds a full body — at which point an
-      // over-charged tick is the least of it.
-      energy -= allocate_growth(
+      // over-charged tick is the least of it. The volume grown locks
+      // `water_per_volume` of the pool into the body, and the allocation
+      // never spends more than the pool can lock.
+      let charged = allocate_growth(
         &self.pop,
         &self.bodies,
         &p,
         o,
         energy,
+        water,
         &broken,
         &packed[base..],
         &mut out.lengthened,
         &mut grew,
       );
+      energy -= charged;
+      water = (water - charged * p.volume_per_energy * p.water_per_volume).max(0.0);
 
+      let top = Vec2::new(
+        packed[base + pack::LIFE_TOP_X],
+        packed[base + pack::LIFE_TOP_Y],
+      );
       if energy >= p.seed_threshold
         && let Some(child) = free_slots.pop()
       {
-        let child = child as usize;
-        let at = Vec2::new(
-          packed[base + pack::LIFE_TOP_X],
-          packed[base + pack::LIFE_TOP_Y],
-        );
-        out.seeds.push((o, child, at));
+        out.seeds.push((o, child as usize, top));
         energy -= p.seed_cost;
       }
+
+      // Transpiration leaves at the top of the plant, a whole particle at a
+      // time; the fraction waits for the next tick.
+      let whole = transpired.floor();
+      if whole >= 1.0 {
+        out.emitting.push((o, whole as u32, top));
+        transpired -= whole;
+      }
       self.pop.organisms.energy[o] = energy;
+      self.pop.organisms.water[o] = water;
+      self.pop.organisms.transpired[o] = transpired;
     }
 
     // Germination is a root one segment long: the seedling stands on its
@@ -264,30 +471,55 @@ impl<R: Runtime> Sim<R> {
 
     // --- Deaths, and limbs that broke off: both leave their particles in the
     // soil where they stood. One batch, so a tick pays for one `launch_free`
-    // and one pass over the deposits. ---
+    // and one pass over the deposits. Each giver's water comes back where
+    // its particles stood, so the ids are kept in one run per giver. ---
     let mut death_ids: Vec<u32> = Vec::new();
-    for o in &decisions.dying {
+    let mut givers: Vec<(std::ops::Range<usize>, f32, Vec2)> = Vec::new();
+    for (o, water) in decisions.dying.iter().zip(&decisions.dying_water) {
+      let start = death_ids.len();
       death_ids.extend(self.bodies.organism_particles(*o));
+      givers.push((start..death_ids.len(), *water, self.bodies.anchors[*o]));
     }
     // Counted by what shed particles: a marked descendant that had not
     // grown yet is not a break, it just may not grow this tick.
     let mut shed = 0u64;
-    for (o, limb) in &decisions.breaking {
+    for (k, (o, limb)) in decisions.breaking.iter().enumerate() {
       let ids = self.bodies.limb_particles_of(*o, *limb);
       if !ids.is_empty() {
         shed += 1;
       }
+      // One run per organism: `breaking` is in slot order, so an organism's
+      // limbs are consecutive and its run opens at the first of them.
+      if k == 0 || decisions.breaking[k - 1].0 != *o {
+        let water = decisions
+          .shed_water
+          .iter()
+          .find(|(giver, _)| giver == o)
+          .map_or(0.0, |(_, water)| *water);
+        givers.push((
+          death_ids.len()..death_ids.len(),
+          water,
+          self.bodies.anchors[*o],
+        ));
+      }
       death_ids.extend(ids);
+      if let Some(run) = givers.last_mut() {
+        run.0.end = death_ids.len();
+      }
     }
+    let mut returns: Vec<Vec2> = Vec::new();
     if !death_ids.is_empty() {
       let where_they_stood = launch_free(&self.client, &self.sph, &death_ids);
       let world = self.geom.cfg();
       let cell_size = self.geom.soil_cell_size;
       // Summed on the host, in slot order, because a float add per soil cell
       // on the device would depend on the order the units arrived in.
-      for at in where_they_stood {
-        let cell = light::soil_cell_index_ref(at, cell_size, &world);
+      for at in &where_they_stood {
+        let cell = light::soil_cell_index_ref(*at, cell_size, &world);
         self.soil.cells.organic_matter[cell] += p.organic_matter_per_particle;
+      }
+      for (run, water, anchor) in givers {
+        returns.extend(self.returned_water(&where_they_stood[run], water, anchor));
       }
     }
     for o in &decisions.dying {
@@ -327,23 +559,79 @@ impl<R: Runtime> Sim<R> {
       self.bodies.anchors[*o] = *at;
       self.pop.organisms.stage[*o] = STAGE_PLANT;
       self.pop.organisms.energy[*o] = p.seed_energy;
+      // A seed carries no water, but the root segment it germinates with is
+      // tissue all the same: the one piece of a grown body not paid for out
+      // of a pool, so the ledger counts it as coming from nowhere.
+      if let Some(limb) = root_limb(&self.pop, *o) {
+        let record = self.pop.limb_index(*o, limb);
+        let full = (self.pop.limbs.length[record] as usize)
+          .min(self.body_cfg.max_particles_per_limb as usize) as f32;
+        let volume = bodies::limb_volume(
+          p.limb_segment_length,
+          self.pop.limbs.target_thickness[record],
+          full,
+          full.min(1.0),
+        );
+        self.water_ledger.endowed += (p.water_per_volume * volume) as f64;
+      }
       // A seed becomes an organism here, not when it was emitted: until it
       // lands it is a package in flight, with no body and no budget.
       self.record_births(1);
     }
 
-    // --- Seed particles are claimed before any seed becomes a birth ---
+    // --- One claim for every particle this tick places: the water deaths
+    // and breaks give back, then the vapor plants transpire, then the seeds.
     // `claim_particles` hands back as many slots as are free, which can be
-    // fewer than asked once the world is near its particle capacity. A seed
-    // with no particle is not a birth: the trailing seeds are dropped here,
-    // their parents refunded, and nothing below sees them.
+    // fewer than asked once the world is near its particle capacity, and the
+    // order says who goes without: returned water that finds no slot is
+    // leaked, vapor waits in its plant's accumulator, and a seed with no
+    // particle is not a birth — the trailing seeds are dropped here, their
+    // parents refunded, and nothing below sees them. ---
     let mut seeds = decisions.seeds;
-    let ids = if seeds.is_empty() {
+    let emitted: usize = decisions.emitting.iter().map(|(_, n, _)| *n as usize).sum();
+    let wanted = returns.len() + emitted + seeds.len();
+    let ids = if wanted == 0 {
       Vec::new()
     } else {
-      let access = self.body_access();
-      bodies::claim_particles(&access, seeds.len())
+      let mut access = self.body_access();
+      bodies::claim_particles(&mut access, wanted)
     };
+    let mut ids = ids.into_iter();
+    let mut placement = Placement::default();
+    let mut returned = 0u64;
+    for at in &returns {
+      match ids.next() {
+        Some(id) => {
+          placement.push_fluid(id, ParticleKind::Liquid, *at);
+          returned += 1;
+        }
+        None => self.water_ledger.leaked += 1.0,
+      }
+    }
+    let mut transpired = 0u64;
+    for (o, count, at) in &decisions.emitting {
+      for _ in 0..*count {
+        match ids.next() {
+          Some(id) => {
+            placement.push_fluid(id, ParticleKind::Vapor, *at);
+            transpired += 1;
+          }
+          None => self.pop.organisms.transpired[*o] += 1.0,
+        }
+      }
+    }
+    // A fluid particle above the fluid range is in no organism's map, so the
+    // live prefix has to be told about it.
+    let fluid_range = self.geom.fluid_particles;
+    for id in &placement.ids {
+      if *id as usize >= fluid_range {
+        self.bodies.fluid_high_water = self.bodies.fluid_high_water.max(*id as usize + 1);
+      }
+    }
+    self.counters.drinks += decisions.drinks;
+    self.counters.returned += returned;
+    self.counters.transpired += transpired;
+    let ids: Vec<u32> = ids.collect();
     for (parent, _, _) in seeds.drain(ids.len()..) {
       self.pop.organisms.energy[parent] += p.seed_cost;
     }
@@ -365,33 +653,30 @@ impl<R: Runtime> Sim<R> {
       organisms.lineage_id[*child] = organisms.lineage_id[*parent];
       organisms.generation[*child] = organisms.generation[*parent] + 1;
       organisms.energy[*child] = 0.0;
+      organisms.water[*child] = 0.0;
+      organisms.transpired[*child] = 0.0;
     }
 
-    // The organisms SoA is host-mastered except for `energy`, which was just
-    // refreshed from the packed read, so this is the whole of it going up.
+    // The organisms SoA is host-mastered except for `energy`, `water` and
+    // `transpired`, which were just refreshed from the packed read, so this
+    // is the whole of it going up.
     // The brain tensor is *not*: the mutation kernel below writes rows the
     // host master does not have, and a full upload would undo them.
     self.pop.upload_organisms(&self.client);
 
-    // --- The seed particles themselves ---
+    // --- The particles themselves: water first, then the seeds ---
+    for ((_, child, at), id) in seeds.iter().zip(&ids) {
+      placement.ids.push(*id);
+      placement.positions.push(at.x);
+      placement.positions.push(at.y);
+      // A seed is not in any limb, so `limb` and `index_in_limb` are read
+      // by nothing; the constraint pass and the sensors both go through the
+      // limb map, which has no entry for it.
+      placement.push_body(*child as u32, 0, 0, crate::genome::PartType::Seed as u32);
+      self.bodies.seed_particles[*child] = *id;
+    }
+    launch_place(&self.client, &self.sph, &placement, None);
     if !seeds.is_empty() {
-      let mut placement = Placement::default();
-      for ((_, child, at), id) in seeds.iter().zip(&ids) {
-        placement.ids.push(*id);
-        placement.positions.push(at.x);
-        placement.positions.push(at.y);
-        placement.organism.push(*child as u32);
-        // A seed is not in any limb, so `limb` and `index_in_limb` are read
-        // by nothing; the constraint pass and the sensors both go through the
-        // limb map, which has no entry for it.
-        placement.limb.push(0);
-        placement.index_in_limb.push(0);
-        placement
-          .part_type
-          .push(crate::genome::PartType::Seed as u32);
-        self.bodies.seed_particles[*child] = *id;
-      }
-      launch_place(&self.client, &self.sph, &placement, None);
       self.bodies.upload(&self.client);
     }
 
@@ -433,14 +718,45 @@ impl<R: Runtime> Sim<R> {
     self.bodies.recompute_high_water();
   }
 
-  /// Give an organism slot back: nothing alive, no body, no anchor.
+  /// Give an organism slot back: nothing alive, no body, no anchor, no
+  /// water.
   fn clear_slot(&mut self, organism: usize) {
     self.bodies.release(organism);
     self.bodies.anchors[organism] = Vec2::ZERO;
     let organisms = &mut self.pop.organisms;
     organisms.alive[organism] = 0;
     organisms.energy[organism] = 0.0;
+    organisms.water[organism] = 0.0;
+    organisms.transpired[organism] = 0.0;
     organisms.stage[organism] = STAGE_SEED;
+  }
+
+  /// Where the water one death or break gives back goes: `floor(water)`
+  /// liquid particles, one at each position its particles stood at, and any
+  /// surplus beside `anchor`. The fraction below one particle is dropped and
+  /// counted in the ledger — the ledger's one leak (`docs/organism.md`,
+  /// *Water*).
+  ///
+  /// The surplus is spread along a row through the anchor, a quarter of a
+  /// smoothing radius apart: two liquid particles placed on one point would
+  /// feel identical forces for ever, since the pressure gradient between
+  /// coincident particles is zero, and never come apart.
+  fn returned_water(&mut self, stood: &[Vec2], water: f32, anchor: Vec2) -> Vec<Vec2> {
+    let whole = water.max(0.0).floor();
+    self.water_ledger.leaked += (water.max(0.0) - whole) as f64;
+    let n = whole as usize;
+    let mut out: Vec<Vec2> = stood.iter().copied().take(n).collect();
+    let surplus = n - out.len();
+    let spacing = 0.25 * self.params.smoothing_radius;
+    let bounds = self.geom.bounds;
+    for k in 0..surplus {
+      let x = anchor.x + (k as f32 - 0.5 * (surplus as f32 - 1.0)) * spacing;
+      out.push(Vec2::new(
+        x.rem_euclid(bounds.x),
+        anchor.y.clamp(0.0, bounds.y),
+      ));
+    }
+    out
   }
 }
 
@@ -451,13 +767,20 @@ impl<R: Runtime> Sim<R> {
 /// short of its record's length, and — unless it is the root — less far along
 /// than its parent; that one rule is the whole of parents-before-children,
 /// and it needs no ordering because every limb's progress is read as it stood
-/// at the start of the tick. The organism spends `energy - seed_cost`, capped
-/// at what its growing limbs can absorb between them, so growth never starves
-/// reproduction, and the split is a softmax over the limbs' growth biases
-/// plus the brain's growth logits — a bias slows a limb relative to its
-/// siblings rather than deleting it, and the logit is the brain saying the
-/// same thing about this tick. A share above a limb's own `growth_rate` is
-/// capped there and redistributed once over the limbs that were not capped.
+/// at the start of the tick. The organism spends its energy, capped at what
+/// its growing limbs can absorb between them and at what its water pool can
+/// lock into tissue (`water_per_volume` particles per unit of volume, so a
+/// dry plant does not grow), and the split is a softmax over the limbs'
+/// growth biases plus the brain's growth logits — a bias slows a limb
+/// relative to its siblings rather than deleting it, and the logit is the
+/// brain saying the same thing about this tick. A share above a limb's own
+/// `growth_rate` is capped there and redistributed once over the limbs that
+/// were not capped.
+///
+/// There is no reserve held back for reproduction: a seedling germinates
+/// with no more than a seed costs, and a reserve of `seed_cost` would keep
+/// it from ever growing the leaf it lives on (`docs/organism.md`,
+/// decisions, 2026-10-11).
 ///
 /// A share buys **volume** at `volume_per_energy`, and the limb's new length
 /// is solved from the volume it now has (`bodies::grown_from_volume`): a
@@ -482,6 +805,7 @@ fn allocate_growth(
   params: &crate::SimParams,
   organism: usize,
   energy: f32,
+  water: f32,
   broken: &[usize],
   packed: &[f32],
   lengthened: &mut Vec<(usize, f32)>,
@@ -525,7 +849,14 @@ fn allocate_growth(
 
   let rate = |limb: usize| pop.limbs.growth_rate[pop.limb_index(organism, limb)].max(0.0);
   let capacity: f32 = growing.iter().map(|limb| rate(*limb)).sum();
-  let spend = (energy - params.seed_cost).clamp(0.0, capacity);
+  // Turgor: the energy whose volume the pool can still lock up.
+  let locks = params.volume_per_energy * params.water_per_volume;
+  let turgor = if locks > 0.0 {
+    water / locks
+  } else {
+    f32::INFINITY
+  };
+  let spend = energy.min(turgor).clamp(0.0, capacity);
   if spend <= 0.0 {
     return 0.0;
   }
@@ -730,7 +1061,6 @@ mod tests {
       max_organisms: 2,
       max_limbs: 4,
       max_particles_per_limb: 4,
-      seed_cost: 1.0,
       // One unit of energy buys one unit of volume, and every limb is a unit
       // thick over half-metre segments, so a limb's volume is
       // `grown^2 / length` and the arithmetic below is readable.
@@ -771,8 +1101,11 @@ mod tests {
     (pop, bodies)
   }
 
+  /// Water enough that the pool never caps the growth a test is about.
+  const WET: f32 = 1e9;
+
   /// Everything one call decides, as `(spend, lengths, requests)`, with no
-  /// bend and no growth logit in the packed entry.
+  /// bend and no growth logit in the packed entry and water to spare.
   fn allocate(
     pop: &Population,
     bodies: &BodyState,
@@ -803,6 +1136,7 @@ mod tests {
       params,
       0,
       energy,
+      WET,
       &[],
       packed,
       &mut lengths,
@@ -913,6 +1247,7 @@ mod tests {
       &params,
       0,
       99.0,
+      WET,
       &[1],
       &vec![0.0; pack::stride(bodies.cfg)],
       &mut lengths,
@@ -926,29 +1261,68 @@ mod tests {
     assert!((spend - params.growth_rate).abs() < 1e-6, "{spend}");
   }
 
-  /// Growth is funded by what is left over `seed_cost` and capped by what the
-  /// growing limbs can absorb, so it can neither starve reproduction nor run
-  /// away.
+  /// Growth is funded by whatever energy there is and capped by what the
+  /// growing limbs can absorb, so it cannot run away; nothing is held back
+  /// for reproduction.
   #[test]
-  fn the_spend_sits_between_the_seed_reserve_and_the_limbs_rates() {
+  fn the_spend_sits_between_zero_and_the_limbs_rates() {
     let params = params();
     let (pop, mut bodies) = seedling(&params);
     bodies.grown[0] = 1.0; // the root, half its length
 
-    // Below the reserve: nothing grows at all.
-    assert_eq!(allocate(&pop, &bodies, &params, 0.9).0, 0.0);
-    assert!(allocate(&pop, &bodies, &params, 1.0).1.is_empty());
+    // No energy, or a debt: nothing grows at all.
+    assert_eq!(allocate(&pop, &bodies, &params, -0.5).0, 0.0);
+    assert!(allocate(&pop, &bodies, &params, 0.0).1.is_empty());
 
-    // Just above it: the whole surplus is spent. The root and the stem are
-    // growing (the stem is behind the root), the leaf is not (it is level
-    // with the stem).
-    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 1.05);
+    // A little: all of it is spent. The root and the stem are growing (the
+    // stem is behind the root), the leaf is not (it is level with the stem).
+    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 0.05);
     assert!((spend - 0.05).abs() < 1e-6, "{spend}");
     assert_eq!(lengths.len(), 2);
 
-    // Far above it: capped at the two growing limbs' rates.
+    // A lot: capped at the two growing limbs' rates.
     let (spend, _, _) = allocate(&pop, &bodies, &params, 99.0);
     assert!((spend - 2.0 * params.growth_rate).abs() < 1e-6, "{spend}");
+  }
+
+  /// Turgor: the volume a tick grows locks `water_per_volume` of the pool
+  /// into tissue, so the spend stops where the pool would run dry, and a dry
+  /// plant does not grow at all.
+  #[test]
+  fn a_dry_plant_does_not_grow_and_a_damp_one_grows_what_its_pool_locks() {
+    let params = SimParams {
+      water_per_volume: 10.0,
+      ..params()
+    };
+    let (pop, mut bodies) = seedling(&params);
+    bodies.grown[0] = 1.0;
+    let grow = |water: f32| {
+      let (mut lengths, mut requests) = (Vec::new(), Vec::new());
+      let spend = allocate_growth(
+        &pop,
+        &bodies,
+        &params,
+        0,
+        99.0,
+        water,
+        &[],
+        &vec![0.0; pack::stride(bodies.cfg)],
+        &mut lengths,
+        &mut requests,
+      );
+      (spend, lengths)
+    };
+
+    let (spend, lengths) = grow(0.0);
+    assert_eq!(spend, 0.0);
+    assert!(lengths.is_empty(), "a dry plant grew: {lengths:?}");
+
+    // 0.5 particles of water lock 0.05 of volume, which one unit of energy
+    // per unit of volume makes 0.05 of energy — under the limbs' 0.2.
+    let (spend, _) = grow(0.5);
+    assert!((spend - 0.05).abs() < 1e-6, "{spend}");
+    let locked = spend * params.volume_per_energy * params.water_per_volume;
+    assert!(locked <= 0.5 + 1e-6, "the pool went negative: {locked}");
   }
 
   /// The split is a softmax over the biases, and a limb that cannot take its
@@ -966,7 +1340,7 @@ mod tests {
     pop.limbs.growth_bias[0] = 3.0;
     pop.limbs.growth_rate[1] = 1.0;
 
-    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 1.5);
+    let (spend, lengths, _) = allocate(&pop, &bodies, &params, 0.5);
     assert!((spend - 0.5).abs() < 1e-6, "{spend}");
     // A share buys volume, so that is where the split shows: the root took
     // its cap and the stem the rest.
@@ -995,7 +1369,7 @@ mod tests {
       volume(&pop, &params, limb, to) - volume(&pop, &params, limb, from)
     };
 
-    let (flat_spend, flat, _) = allocate(&pop, &bodies, &params, 1.1);
+    let (flat_spend, flat, _) = allocate(&pop, &bodies, &params, 0.1);
     let (root_flat, stem_flat) = (volume_of(&flat, 0, 1.5), volume_of(&flat, 1, 0.0));
     assert!(
       (root_flat - stem_flat).abs() < 1e-6,
@@ -1004,7 +1378,7 @@ mod tests {
 
     let mut packed = vec![0.0f32; width];
     packed[pack::logit_slot(bodies.cfg, 1)] = 2.0;
-    let (spend, biased, _) = allocate_with(&pop, &bodies, &params, 1.1, &packed);
+    let (spend, biased, _) = allocate_with(&pop, &bodies, &params, 0.1, &packed);
     let (root, stem) = (volume_of(&biased, 0, 1.5), volume_of(&biased, 1, 0.0));
     assert!(
       stem > stem_flat,
@@ -1024,7 +1398,7 @@ mod tests {
     for limb in 0..pop.max_limbs {
       flat_logits[pack::logit_slot(bodies.cfg, limb)] = -3.0;
     }
-    let (same_spend, same, _) = allocate_with(&pop, &bodies, &params, 1.1, &flat_logits);
+    let (same_spend, same, _) = allocate_with(&pop, &bodies, &params, 0.1, &flat_logits);
     assert_eq!(same, flat);
     assert_eq!(same_spend, flat_spend);
   }
@@ -1041,7 +1415,7 @@ mod tests {
     bodies.grown[0] = 0.5;
     pop.limbs.growth_bias[1] = 5.0;
 
-    let (charged, lengths, _) = allocate(&pop, &bodies, &params, 2.0);
+    let (charged, lengths, _) = allocate(&pop, &bodies, &params, 1.0);
     let stem = lengths.iter().find(|(r, _)| *r == 1).unwrap().1;
     // The root's progress is 0.25, so the stem stops at a quarter of its own
     // three segments.
@@ -1077,7 +1451,7 @@ mod tests {
 
     // A 0.05 share of volume, which is not a whole segment's worth: still
     // inside the first one, so nothing is owed.
-    let (_, lengths, requests) = allocate(&pop, &bodies, &params, 1.05);
+    let (_, lengths, requests) = allocate(&pop, &bodies, &params, 0.05);
     assert_eq!(lengths.len(), 1);
     let grown = lengths[0].1;
     assert!((0.5..1.0).contains(&grown), "{grown}");
@@ -1087,7 +1461,7 @@ mod tests {
 
     // Past 1: the second particle is owed.
     bodies.grown[0] = 0.95;
-    let (_, _, requests) = allocate(&pop, &bodies, &params, 1.1);
+    let (_, _, requests) = allocate(&pop, &bodies, &params, 0.1);
     assert_eq!(
       requests,
       vec![GrowRequest {

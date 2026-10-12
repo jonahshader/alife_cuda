@@ -5,9 +5,11 @@
 //! Rather than pulling the heads buffer (`max_organisms x max_limbs x
 //! HEAD_DIM` floats) and several particle fields back, one unit per organism
 //! packs what the decisions actually read into `[max_organisms x (LIFE_FIXED
-//! + 2 * max_limbs)]` floats — 38 KB at the defaults, one `read`:
+//! + 2 * max_limbs)]` floats — 41 KB at the defaults, one `read`:
 //!
-//! - the organism's energy, which the energy kernel just wrote;
+//! - the organism's energy, water pool and transpired-but-not-emitted water,
+//!   which the energy kernel just wrote, and how many particles its roots
+//!   drank this tick;
 //! - its seed particle's position and speed, for germination;
 //! - the top of its body, where a seed is emitted from;
 //! - per limb, the worst its base joint has been bent since the last tick,
@@ -20,7 +22,9 @@
 //!
 //! The per-limb bend maximum is *reset* here, for every slot alive or not:
 //! this is the one reader of it, and the interval it covers is the one that
-//! just ended. The logit is only read; the brain rewrites it every step. A
+//! just ended. The drink count is reset the same way and for the same reason:
+//! the energy kernel has already added it to the pool, and the host counts it
+//! from here. The logit is only read; the brain rewrites it every step. A
 //! free slot packs as zeros, and so reads as "no energy, no seed, no bend, no
 //! logit", which is what the host does nothing about.
 
@@ -42,7 +46,12 @@ pub const LIFE_SEED_Y: usize = 2;
 pub const LIFE_SEED_SPEED: usize = 3;
 pub const LIFE_TOP_X: usize = 4;
 pub const LIFE_TOP_Y: usize = 5;
-pub const LIFE_FIXED: usize = 6;
+pub const LIFE_WATER: usize = 6;
+pub const LIFE_TRANSPIRED: usize = 7;
+/// Particles drunk this tick, as a float: exact, since a tick's drinks are
+/// far below 2^24.
+pub const LIFE_DRINKS: usize = 8;
+pub const LIFE_FIXED: usize = 9;
 
 /// `x` of an organism that holds no seed particle. Outside the world, as
 /// [`crate::particles::PARKED_POS`] is, so it cannot be mistaken for a place.
@@ -77,6 +86,9 @@ pub fn pack_life(
   map: &[u32],
   alive: &[u32],
   energy: &[f32],
+  water: &[f32],
+  transpired: &[f32],
+  drinks: &mut [u32],
   seed_particles: &[u32],
   anchors: &[f32],
   heads: &[f32],
@@ -108,11 +120,15 @@ pub fn pack_life(
     out[base + LIFE_FIXED + (ml + l) as usize] =
       heads[slot * comptime!(HEAD_DIM) + comptime!(HEAD_GROWTH)];
   }
+  out[base + LIFE_DRINKS] = drinks[o as usize] as f32;
+  drinks[o as usize] = 0u32;
   if alive[o as usize] == 0u32 {
     terminate!();
   }
 
   out[base + LIFE_ENERGY] = energy[o as usize];
+  out[base + LIFE_WATER] = water[o as usize];
+  out[base + LIFE_TRANSPIRED] = transpired[o as usize];
 
   let seed = seed_particles[o as usize];
   if seed == NO_PARTICLE {
@@ -171,14 +187,16 @@ impl LifePack {
 
 /// Pack and read back. One `read`, and the only one the decision pass takes.
 ///
-/// Resets the per-limb bend maxima on the device as it goes, so the interval
-/// the next tick reads starts here.
+/// Resets the per-limb bend maxima and the per-organism drink counts on the
+/// device as it goes, so the interval the next tick reads starts here.
+#[allow(clippy::too_many_arguments)]
 pub fn read<R: Runtime>(
   client: &ComputeClient<R>,
   sph: &SphDevice,
   bodies: &BodyState,
   pop: &Population,
   brain: &BrainState,
+  drinks: &Handle,
   pack: &LifePack,
   num_particles: usize,
 ) -> Vec<f32> {
@@ -193,6 +211,12 @@ pub fn read<R: Runtime>(
     whole(&bodies.device.limb_particles, body.particle_map_len()),
     whole(&pop.device.organisms.alive, body.max_organisms as usize),
     whole(&pop.device.organisms.energy, body.max_organisms as usize),
+    whole(&pop.device.organisms.water, body.max_organisms as usize),
+    whole(
+      &pop.device.organisms.transpired,
+      body.max_organisms as usize,
+    ),
+    whole(drinks, body.max_organisms as usize),
     whole(&bodies.device.seed_particles, body.max_organisms as usize),
     whole(&bodies.device.anchors, body.max_organisms as usize * 2),
     whole(&brain.device.heads, brain.cfg.heads_len()),
@@ -203,13 +227,15 @@ pub fn read<R: Runtime>(
   crate::genome::population::read_f32(client, &pack.buffer, pack.len)
 }
 
-/// Plain-Rust twin of [`pack_life`], resetting `bend_max` as the kernel does.
+/// Plain-Rust twin of [`pack_life`], resetting `bend_max` and `drinks` as the
+/// kernel does.
 pub fn pack_life_ref(
   particles: &crate::particles::SphHost,
   pop: &Population,
   bodies: &BodyState,
   heads: &[f32],
   bend_max: &mut [f32],
+  drinks: &mut [u32],
 ) -> Vec<f32> {
   let body = bodies.cfg;
   let ml = body.max_limbs as usize;
@@ -222,10 +248,13 @@ pub fn pack_life_ref(
       out[base + bend_slot(l)] = std::mem::take(&mut bend_max[o * ml + l]);
       out[base + logit_slot(body, l)] = heads[(o * ml + l) * HEAD_DIM + HEAD_GROWTH];
     }
+    out[base + LIFE_DRINKS] = std::mem::take(&mut drinks[o]) as f32;
     if pop.organisms.alive[o] == 0 {
       continue;
     }
     out[base + LIFE_ENERGY] = pop.organisms.energy[o];
+    out[base + LIFE_WATER] = pop.organisms.water[o];
+    out[base + LIFE_TRANSPIRED] = pop.organisms.transpired[o];
 
     let seed = bodies.seed_particles[o];
     if seed == NO_PARTICLE {
@@ -283,10 +312,17 @@ mod tests {
     h.brain.read_heads(&h.client)
   }
 
+  /// A drink counter for the fixture's two slots, uploaded.
+  fn drinks(h: &OrganismHarness, counts: &[u32]) -> Handle {
+    h.client.create_from_slice(bytemuck::cast_slice(counts))
+  }
+
   #[test]
   fn matches_reference() {
     let mut h = OrganismHarness::new();
     h.pop.organisms.energy[0] = 1.75;
+    h.pop.organisms.water[0] = 4.5;
+    h.pop.organisms.transpired[0] = 0.25;
     // Give the organism a seed particle of its own, so both branches run.
     let seed = (h.geom.num_particles - 1) as u32;
     h.bodies.seed_particles[0] = seed;
@@ -300,21 +336,38 @@ mod tests {
     let heads = run_brain(&h);
 
     let pack = LifePack::new(&h.client, h.body_cfg);
+    let mut counts = vec![3u32, 0];
+    let drunk = drinks(&h, &counts);
     let actual = read(
       &h.client,
       &h.sph,
       &h.bodies,
       &h.pop,
       &h.brain,
+      &drunk,
       &pack,
       h.geom.num_particles,
     );
-    let expected = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, &mut bend);
+    let expected = pack_life_ref(
+      &h.particles,
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut bend,
+      &mut counts,
+    );
     assert_eq!(actual.len(), expected.len());
     assert_close(&actual, &expected, 1e-6, "life pack");
 
     let width = stride(h.body_cfg);
     assert_eq!(actual[LIFE_ENERGY], 1.75);
+    assert_eq!(actual[LIFE_WATER], 4.5);
+    assert_eq!(actual[LIFE_TRANSPIRED], 0.25);
+    assert_eq!(actual[LIFE_DRINKS], 3.0);
+    // Read once, gone: the count is the tick's, and the host has it now.
+    let left: Vec<u32> = crate::soa::download_field(&h.client, &drunk, 2);
+    assert_eq!(left, vec![0, 0]);
+    assert_eq!(counts, vec![0, 0]);
     assert_eq!(actual[LIFE_SEED_X], 1.5);
     assert!((actual[LIFE_SEED_SPEED] - 0.5).abs() < 1e-6);
     // The free slot packs as zeros — no energy, no seed — but its bend slots
@@ -333,12 +386,14 @@ mod tests {
     let heads = run_brain(&h);
 
     let pack = LifePack::new(&h.client, h.body_cfg);
+    let drunk = drinks(&h, &[0, 0]);
     let first = read(
       &h.client,
       &h.sph,
       &h.bodies,
       &h.pop,
       &h.brain,
+      &drunk,
       &pack,
       h.geom.num_particles,
     );
@@ -354,6 +409,7 @@ mod tests {
       &h.bodies,
       &h.pop,
       &h.brain,
+      &drunk,
       &pack,
       h.geom.num_particles,
     );
@@ -367,7 +423,14 @@ mod tests {
 
     // And the host twin resets its own copy the same way.
     let mut host = bend.clone();
-    let packed = pack_life_ref(&h.particles, &h.pop, &h.bodies, &heads, &mut host);
+    let packed = pack_life_ref(
+      &h.particles,
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut host,
+      &mut [0, 0],
+    );
     assert_eq!(&packed[bend_slot(0)..bend_slot(ml)], &bend[..ml]);
     assert!(host.iter().all(|v| *v == 0.0));
   }
@@ -382,12 +445,14 @@ mod tests {
     let heads = run_brain(&h);
 
     let pack = LifePack::new(&h.client, h.body_cfg);
+    let drunk = drinks(&h, &[0, 0]);
     let packed = read(
       &h.client,
       &h.sph,
       &h.bodies,
       &h.pop,
       &h.brain,
+      &drunk,
       &pack,
       h.geom.num_particles,
     );
@@ -415,6 +480,7 @@ mod tests {
       &h.bodies,
       &h.pop,
       &h.brain,
+      &drunk,
       &pack,
       h.geom.num_particles,
     );

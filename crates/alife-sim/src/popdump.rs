@@ -11,7 +11,7 @@
 //!
 //! ```text
 //!   char[8]  magic "ALIFEPOP"
-//!   uint32   version (4)
+//!   uint32   version (5)
 //!   uint32   organism slots (max_organisms)
 //!   uint32   limb records per organism (max_limbs)
 //!   uint32   brain parameters per organism
@@ -21,7 +21,7 @@
 //!   then one contiguous array per field, in SoA declaration order:
 //!   the organism SoA over `max_organisms` entries — alive, parent_id,
 //!     birth_step, lineage_id (uint32), energy (float), generation, stage
-//!     (uint32);
+//!     (uint32), water, transpired (float);
 //!   the limb SoA over `max_organisms * max_limbs` records — part_type,
 //!     length, parent, child_slot (uint8), grow_angle (float), identity
 //!     (IDENTITY_DIM floats), growth_bias, growth_rate, target_thickness
@@ -32,8 +32,11 @@
 //! ```
 //!
 //! As with `dump.rs`, the field order is the SoA declaration order, so adding
-//! a field there extends this format. The older versions are the same file
-//! without the limb SoA's trailing float arrays, and they still load, because
+//! a field there extends this format. Versions 1 to 4 are the same file
+//! without the organism SoA's water pool and accumulator, and come back with
+//! the pool full and nothing waiting to transpire, the way a founder starts
+//! (`docs/organism.md`, *Water*). The limb SoA's older versions are the same
+//! file without its trailing float arrays, and they still load, because
 //! the arrays before them are a prefix of the current ones: version 1 stops
 //! before `growth_bias` and comes back with a founder's growth genes (bias 0,
 //! rate `--growth-rate`), version 2 stops before `target_thickness` and comes
@@ -48,8 +51,8 @@
 //! byte of it is used.
 //!
 //! **What a load restores, and what it does not.** The genomes, the lineage
-//! fields, the energies, the latent state and the anchors come back exactly as
-//! they were written; the bodies are re-grown from the genomes at those
+//! fields, the energies, the water pools, the latent state and the anchors
+//! come back exactly as they were written; the bodies are re-grown from the genomes at those
 //! anchors through the ordinary growth path, so a limb sits where growth would
 //! put it rather than where the fluid had pushed it. Seeds in flight are
 //! dropped: a seed is a particle in mid-air, which is world state, and the
@@ -71,7 +74,16 @@ use crate::genome::{LimbHost, OrganismHost, Population};
 use crate::sim::Sim;
 
 pub const MAGIC: &[u8; 8] = b"ALIFEPOP";
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
+
+/// Organism SoA fields a file of version `v` carries: everything before
+/// version 5 stopped before `water` and `transpired`.
+fn organism_fields(version: u32) -> usize {
+  match version {
+    0..=4 => OrganismHost::FIELD_COUNT - 2,
+    _ => OrganismHost::FIELD_COUNT,
+  }
+}
 
 /// Limb SoA fields a file of version `v` carries: version 1 stopped before
 /// `growth_bias`, version 2 before `target_thickness`.
@@ -242,7 +254,7 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
   let expected = (|| {
     let records = o.checked_mul(max_limbs as u64)?;
     HEADER_BYTES
-      .checked_add(o.checked_mul(OrganismHost::RAW_BYTES as u64)?)?
+      .checked_add(o.checked_mul(OrganismHost::raw_bytes_prefix(organism_fields(version)) as u64)?)?
       .checked_add(records.checked_mul(LimbHost::raw_bytes_prefix(limb_fields(version)) as u64)?)?
       .checked_add(o.checked_mul(param_count as u64)?.checked_mul(4)?)?
       .checked_add(o.checked_mul(latent_len as u64)?.checked_mul(4)?)?
@@ -260,7 +272,8 @@ pub fn read<P: AsRef<Path>>(path: P) -> Result<PopSnapshot, PopDumpError> {
   }
   let records = max_organisms * max_limbs;
 
-  let organisms = OrganismHost::read_fields(&mut input, max_organisms)?;
+  let organisms =
+    OrganismHost::read_fields_prefix(&mut input, max_organisms, organism_fields(version))?;
   let limbs = LimbHost::read_fields_prefix(&mut input, records, limb_fields(version))?;
   let brain = read_f32(&mut input, max_organisms * param_count)?;
   let latents = read_f32(&mut input, max_organisms * latent_len)?;
@@ -376,6 +389,8 @@ pub fn restore<R: Runtime>(
       }
       access.pop.organisms.alive[o] = 0;
       access.pop.organisms.energy[o] = 0.0;
+      access.pop.organisms.water[o] = 0.0;
+      access.pop.organisms.transpired[o] = 0.0;
       access.pop.organisms.stage[o] = STAGE_SEED;
       access.bodies.anchors[o] = Vec2::ZERO;
       access.bodies.release(o);
@@ -386,6 +401,10 @@ pub fn restore<R: Runtime>(
   }
 
   bodies::grow_bodies(sim, &plants);
+  // The bodies were grown whole rather than out of a pool, so what they hold
+  // enters the ledger as an initial condition, like a founder's; a file from
+  // before the pool existed fills it as a founder's is filled.
+  sim.endow_water(&plants, snapshot.version < 5);
   Ok(plants.len())
 }
 
@@ -477,7 +496,7 @@ mod tests {
     let mut target = world();
     assert_eq!(restore(&mut target, &snapshot).unwrap(), 3);
 
-    // Genomes, lineage and energy, bit for bit.
+    // Genomes, lineage, energy and water, bit for bit.
     assert_eq!(target.population().limbs, source.population().limbs);
     assert_eq!(target.population().organisms, source.population().organisms);
     assert_eq!(target.population().brain, source.population().brain);
@@ -569,6 +588,12 @@ mod tests {
     let mut bytes = std::fs::read(&path).unwrap();
     bytes[8..12].copy_from_slice(&version.to_le_bytes());
 
+    // Last of all, because every offset below is computed against the
+    // current organism block: the arrays the older version did not have are
+    // the tail of that block.
+    let organism_tail =
+      slots * (organisms / slots - OrganismHost::raw_bytes_prefix(organism_fields(version)));
+
     // The brain block first, while the limb block is still whole: every
     // version below 4 held a `d_token x n_types` sprout head where this build
     // holds the growth head, so the row is that much longer and the header's
@@ -611,6 +636,8 @@ mod tests {
     let dropped = LimbHost::FIELD_COUNT - limb_fields(version);
     let start = head + kept * records * 4;
     bytes.drain(start..start + dropped * records * 4);
+    let organisms_end = HEADER_BYTES as usize + organisms;
+    bytes.drain(organisms_end - organism_tail..organisms_end);
     std::fs::write(&path, &bytes).unwrap();
 
     let snapshot = read(&path).unwrap();
@@ -718,8 +745,17 @@ mod tests {
     assert_ne!(snapshot.param_count, shape.param_count());
 
     let expected = source.population().brain.clone();
+    assert!(
+      snapshot.organisms.water.iter().all(|w| *w == 0.0),
+      "a version-3 file has no pools"
+    );
     let mut target = world();
     assert_eq!(restore(&mut target, &snapshot).unwrap(), 2);
+    // It comes back with them full, which is where the founders it was
+    // written from started: the same bodies, regrown, hold the same water.
+    let pools = &target.population().organisms.water;
+    assert!(pools[0] > 0.0);
+    assert_eq!(pools, &source.population().organisms.water);
 
     let brain = &target.population().brain;
     assert_eq!(brain.len(), expected.len());

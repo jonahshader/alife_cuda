@@ -77,9 +77,9 @@ Consequences:
   the discretization, not the genome, since a limb is already a type and a
   length either way.
 
-Part types at the first milestone: **root** (pinned in soil, draws water
-from the cell's saturation), **stem** (structure), **leaf** (gains energy
-from light), **seed** (a reproduction particle). Later types are additions,
+Part types at the first milestone: **root** (pinned in soil, drinks the
+liquid particles around it), **stem** (structure), **leaf** (gains energy
+from light, paid for in water), **seed** (a reproduction particle). Later types are additions,
 not new systems: an **actuated limb** whose base joint takes its target angle
 from the brain outright, rather than the bounded nudge every limb's joint
 already takes (*Growth*), a **digger** that decrements soil density in its
@@ -142,16 +142,17 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   soil cell still reads the light arriving at that cell. The sensors read
   the same grid, so between rebuilds a limb's light reading is up to
   `life_interval` steps stale.
-- **Energy.** One unit per organism, serial over its particles. Leaves earn
-  `light_gain` times the light in their cell; roots earn `water_gain` times
-  `max(0, water − 1)`, where `water` is the brain sensor's own quantity
-  (`density / target_density`, which reads exactly 1 in air because of the
-  soil's solid-density offset, so the `− 1` is the wetness). Upkeep is
-  `upkeep_per_volume` times the volume of the organism's limbs, so what a
-  body costs is how much of it there is rather than how many particles it
-  is discretized into (*Growth*). Energy below zero is death: every particle
-  goes back to the free pool and leaves `organic_matter_per_particle` in
-  the soil cell it was standing in.
+- **Energy and water.** One unit per organism, serial over its particles.
+  Leaves earn `light_gain` times the light in their cell, but only as far
+  as the organism's water pool pays for it, at `water_per_energy` particles
+  per unit of energy; roots earn nothing — they drink, and the pool is
+  what they drink into (*Water*, below). Upkeep is `upkeep_per_volume`
+  times the volume of the organism's limbs, so what a body costs is how
+  much of it there is rather than how many particles it is discretized
+  into (*Growth*). Energy below zero is death: every particle goes back to
+  the free pool and leaves `organic_matter_per_particle` in the soil cell
+  it was standing in, and every drop the plant held goes back to the fluid
+  as liquid.
 - **Growth.** Continuous, every limb at once, the organism's growth spend
   split across its growing limbs by a softmax over per-limb biases and
   spent on volume; a child never outgrows its parent in progress. The whole
@@ -162,10 +163,73 @@ The whole cycle runs on one cadence: every `life_interval` steps (default
   dispersal is free. A seed that comes to rest (speed below
   `germinate_speed`) in soil or on the floor germinates — its particle is
   released, its root grows from where it landed, it starts on
-  `seed_energy`, and only then does it count as a birth. One that drifts
-  for `seed_lifetime` steps without landing dies unremarked.
+  `seed_energy` and an empty pool, and only then does it count as a birth.
+  One that drifts for `seed_lifetime` steps without landing dies
+  unremarked. A seed costs its parent `seed_cost` (3.0) and germinates
+  with `seed_energy` (3.0), so it carries exactly what it cost; reproduction
+  is triggered by `seed_threshold` (5.0) alone, with nothing held back from
+  growth for it.
 - **Selection.** None explicit. Energy, shading, water, space, and other
   organisms are the fitness function; the simulation is the evaluator.
+
+### Water
+
+Water is a ledger. Every particle of it is in exactly one place — the fluid
+(liquid or vapor), an organism's pool, an organism's tissue, or an
+organism's transpiration accumulator — and it moves between them only here:
+
+- **Drinking** (`life::drink`, on the life tick, before the energy kernel).
+  One unit per liquid particle finds the nearest `Root` body particle within
+  `smoothing_radius`, the lowest particle id breaking a tie, so exactly one
+  organism is ever in the running. If that organism is *thirsty* — its pool
+  below capacity, a per-organism flag the host uploads every tick — a
+  Threefry draw keyed by the particle id, the step and stream word 3 (the
+  evaporation and vapor kernels use 1 and 2) drinks the particle with
+  probability `drink_rate` (0.05 per tick): its slot becomes `Free`, exactly
+  as a freed body slot is, and the organism's `u32` drink count goes up by
+  one with an integer atomic. The free-slot scan covers the fluid range, so
+  a drunk slot is the first thing the next claim hands out.
+- **The pool**, `water` in the organism SoA, in particles, holds up to
+  `water_capacity_per_volume` (3000) times the organism's volume — about 5.2
+  particles for a grown founder. A drink is whole and the capacity a float,
+  so a root starts a drink only while the pool is below capacity, and the
+  pool may sit above it by less than one particle. It is mastered like
+  `energy`: the energy kernel credits the tick's drinks and spends light
+  income from it, the packed readback carries it to the host, the decision
+  walk charges growth to it and uploads it.
+- **Light income spends it.** A tick's light income is capped at
+  `water / water_per_energy` (1.0 particle per unit of energy, the
+  water-use-efficiency knob), and what is earned moves `earned ×
+  water_per_energy` from the pool into the organism's `transpired`
+  accumulator. A plant with an empty pool earns nothing however bright its
+  leaves are.
+- **Transpiration** leaves at the leaf. Every tick, in slot order, each
+  whole particle in a plant's accumulator becomes a `Vapor` particle at its
+  top — the highest stem or leaf particle, the point a seed leaves from —
+  rising at `(0, 0.5)` as freshly evaporated water does; with no free slot
+  it waits in the accumulator. From there the fluid's own
+  evaporation/condensation cycle carries it, and it comes down as liquid
+  somewhere else.
+- **Tissue.** Growing `ΔV` of volume locks `water_per_volume × ΔV` (1000 per
+  unit of volume, so a whole founder body is 1.7 particles) of the pool into
+  the body, and the tick's growth spend is capped so the pool cannot go
+  negative: a dry plant does not grow (*Growth*).
+- **Return.** A death gives back the pool, the accumulator and the tissue
+  (`water_per_volume` times the body's volume); a break gives back the
+  tissue of the limbs that came off. `floor` of that comes back as liquid at
+  rest, one particle at each position the shed particles stood at and any
+  surplus in a row through the anchor, a quarter of a smoothing radius
+  apart; the fraction below one particle is dropped. That is the ledger's
+  only leak, less than a particle per death or break.
+- **Sources.** A founder starts with its grown body's tissue and a full
+  pool; a `--load-pop` population with its tissue and the pool its file
+  carries (full, for a file written before the pool existed); a germinating
+  seed's first root segment comes with its tissue water. A seed itself
+  carries none. Those, and drinks, are the only ways in.
+
+A headless run prints the whole ledger at exit — endowed plus drunk against
+transpired, returned, leaked, pools, tissue and pending — and it closes to
+float rounding.
 
 ## Growth
 
@@ -217,8 +281,12 @@ built; the two together are the model below.
   `f < f_parent`. A child's increment is clamped so it ends the tick at
   `f ≤ f_parent`. This is the whole parent-before-child rule; there is no
   ordering.
-- *Spend per tick:* `spend = clamp(energy − seed_cost, 0, Σ growth_rate
-  over growing limbs)`. Shares are `spend × softmax(growth_bias + logit)`
+- *Spend per tick:* `spend = clamp(min(energy, water / (volume_per_energy ×
+  water_per_volume)), 0, Σ growth_rate over growing limbs)` — all the
+  energy there is, capped by what the growing limbs can absorb and by what
+  the water pool can lock into the new tissue (*Water*); nothing is held
+  back for reproduction. The volume grown takes `water_per_volume` per unit
+  of it out of the pool. Shares are `spend × softmax(growth_bias + logit)`
   over the growing limbs, `logit` being the brain's growth head for that
   limb, as it stood at the tick's own step; a share above the
   limb's `growth_rate` is capped and the excess redistributed once, by the
@@ -231,8 +299,8 @@ built; the two together are the model below.
   in place of a per-particle charge, so a tall thin plant is cheaper than a
   tall thick one and a half-grown limb costs a quarter of what it will. A
   seed in flight is in no limb, has no volume, and costs nothing beyond
-  `seed_cost` at emission. Gain stays per particle: what a leaf catches and
-  what a root drinks are sampled at particles.
+  `seed_cost` at emission. Income stays per particle: what a leaf catches
+  is sampled at its particles, and what a root drinks is found from its.
 - *Particles* are claimed when `ceil(grown)` rises, placed at the
   predecessor plus the rest offset along the limb's direction, by the
   existing growth kernel over a list of `(organism, limb, first index,
@@ -327,8 +395,11 @@ Species are greedy clusters: each organism joins the first cluster whose
 representative it is within `species_threshold` (default 0.25) of by
 `species_distance`, else starts one. Phylogenetic depth is the `generation`
 field of the organism SoA: a founder is 0 and a child is its parent's plus
-one. Sampling only reads, so a run with `--metrics` steps the same world as
-one without.
+one. The water ledger (*Water*) rides beside the fluid counts it moves
+between: `water_mean` is the mean pool over germinated plants, and
+`drinks`, `transpired` and `returned` are cumulative particle counts, read
+against `fluid_liquid` and `fluid_vapor`. Sampling only reads, so a run with
+`--metrics` steps the same world as one without.
 
 ### The first experiment: soil specialization
 
@@ -435,7 +506,12 @@ limb's consecutive segments in line (`bend_stiffness`), or a limb is a rope;
 and the world bounds, x wrapping and y clamping. Velocity is recomputed from
 the projected displacement, position-based-dynamics style. Slot allocation
 is deterministic: births claim `Free` particle slots and free organism slots
-in order via a prefix scan over the free flags, never via atomics.
+in order via a prefix scan over the free flags, never via atomics. The
+particle scan covers every slot, the fluid range included, because a
+liquid particle a root drank is a `Free` slot like any other (*Water*); a
+fluid particle the life tick places above the fluid range is in no
+organism's map, so `BodyState::fluid_high_water` keeps the live prefix
+covering it.
 
 A limb's chain, for both the distance and the angle constraints, is its
 parent's last particle followed by its own: the base joint sits on the
@@ -472,7 +548,8 @@ geometry the brain will read — beside the population tensors.
   shadow is the brain chunk's concern.
 - Lineage: `parent_id`, `birth_step`, `lineage_id` (root ancestor),
   `generation` (hops from the founder; mutation never touches it), plus
-  the runtime `alive` flag, `energy`, `stage`, and the latent state
+  the runtime `alive` flag, `energy`, `stage`, `water` and `transpired`
+  (the pool and the accumulator of *Water*), and the latent state
   `[max_organisms × n_latents × d_latent]`, which is state, not genome.
   `alive` means the slot is occupied — it is what the slot allocator scans
   — and `stage` says by what: 0 a seed in flight, 1 a germinated plant. A
@@ -551,19 +628,23 @@ actuator output it nudges a base joint by is the one the *previous* step's
 forward pass wrote, and zeros before the first — a step of latency, like the
 sensors' own.
 
-**The life tick's shape.** Light and energy are kernels; growth, placement,
-freeing and mutation are kernels; the *decisions* between them are a serial
-walk over the organism slots on the host, in slot order, and therefore
-deterministic. It costs one `read` per tick of a packed
-`[max_organisms × (6 + 2 × max_limbs)]` float buffer — energies, seed
-positions and speeds, body tops, then two per-limb slices: the worst each
+**The life tick's shape.** Light, drinking and energy are kernels; growth,
+placement, freeing and mutation are kernels; the *decisions* between them
+are a serial walk over the organism slots on the host, in slot order, and
+therefore deterministic. It costs an upload of the thirst flags and one
+`read` per tick of a packed `[max_organisms × (9 + 2 × max_limbs)]` float
+buffer — energies, water pools, transpired water and the tick's drinks
+(reset by the pack kernel that reads them), seed positions and speeds,
+body tops, then two per-limb slices: the worst each
 base joint was bent over the interval, accumulated by the constraint pass and
 reset by the pack kernel that reads it, and the brain's growth logit, copied
 out of the heads buffer and not reset, because the brain rewrites it every
 step — plus the free-slot scan's reads when
 something is claimed and one limb-record download when something was born.
-The organism SoA is host-mastered except `energy`, which the energy kernel
-writes; the brain tensor and the limb records are device-mastered for a
+The organism SoA is host-mastered except `energy`, `water` and
+`transpired`, which the energy kernel writes and the walk adjusts; the
+returned water, the transpired vapor and the seeds are claimed in one scan
+and placed in one launch. The brain tensor and the limb records are device-mastered for a
 newborn, because that is where the mutation kernels wrote them, so a birth
 never uploads the whole population. The growth decision is part of that
 walk: per organism it reads the limbs' progress, splits the tick's spend
@@ -886,3 +967,36 @@ uploads them.
   the nudged target. Milestone 2's actuated limb is the place to turn the
   gain back on, built on the torque joint of the entry above with a cost
   per radian; `--actuator-gain 0.3` reproduces the old behaviour.
+- 2026-10-11 — **Water is a ledger, and it is what makes the population
+  density-dependent.** Roots read water from the fluid and never removed
+  it, so nothing a plant did used anything up: measured at `--founders 20
+  --max-organisms 1024`, 15000 steps, eight seeds, two went extinct by step
+  3400 and six filled the cap between steps 3100 and 9700, nothing in
+  between, root fraction 0.59–0.94 at the cap and mean energy climbing
+  without bound — a root-only plant on a wet spot reproduced forever without
+  a leaf. The choices (*Water*): **roots drink whole particles, and the
+  liquid particle decides** — each one picks its single nearest root, so no
+  two units ever contend for a slot, nothing needs a float atomic or a slot
+  grab, and the SPH kernels are untouched; **the credit is an integer
+  count**, exact in any arrival order (the 2026-09-19 entry on integer
+  atomics), turned into a float pool by the one unit that owns the
+  organism. **Transpired water leaves at the leaf, as vapor, as the leaf
+  earns** — not at the root and not the moment it is drunk — because
+  transpiration tracks carbon gain rather than work, and water a plant
+  holds without spending it is its turgor, which is what lets it grow
+  (tissue water) and what it gives back when it dies. **Roots no longer
+  earn energy**: wetness paid for upkeep was the loophole the root-only
+  plants lived in, and with a pool the root's whole value is the water a
+  leaf needs. **The growth reserve is gone**: growth spent `energy −
+  seed_cost`, the C++ trees' "growth never starves reproduction", and a
+  seedling germinates with no more than a seed costs (0.5 against 1.0 at
+  the old defaults), so it could never grow the leaf it now has to have; reproduction is triggered by
+  `seed_threshold` alone, and a seed costs exactly what it carries (3.0).
+  **A death floors its water to whole particles** and drops the fraction:
+  the ledger's one leak, under a particle per death or break, against the
+  alternative of a fractional particle or a per-cell float sum. What the
+  shipped constants do with it is in `perf.md`: every seed extinct by step
+  600, because a founder-shaped body's one leaf earns 0.012 a step against
+  0.0174 of upkeep — the root term was carrying it — and `water_per_energy`
+  from 0.25 to 4 does not move that, so the next knob is the energy scale
+  (`light_gain`, `upkeep_per_volume`), not the water.

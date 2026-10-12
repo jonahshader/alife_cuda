@@ -186,6 +186,11 @@ impl AnySim {
     dispatch!(self, sim => sim.counters())
   }
 
+  /// The water ledger as it stands; see [`crate::life::WaterBalance`].
+  pub fn water_balance(&self) -> crate::life::WaterBalance {
+    dispatch!(self, sim => sim.water_balance())
+  }
+
   pub fn population(&self) -> &crate::genome::Population {
     dispatch!(self, sim => sim.population())
   }
