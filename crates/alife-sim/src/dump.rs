@@ -158,7 +158,7 @@ mod tests {
 
   #[test]
   fn raw_bytes_matches_the_cpp_layout() {
-    // 4 float2 + 3 float + 2 uint8 + 1 float, as `src/main.cu` documents
+    // 4 float2 + 3 float + 2 uint8 + 1 float, as the C++ `src/main.cu` documented (tag `cpp-reference`)
     assert_eq!(LEGACY_RAW_BYTES, 50);
     // plus the version-2 tail: one uint32 and three uint8
     assert_eq!(SphHost::RAW_BYTES, 50 + 4 + 3);

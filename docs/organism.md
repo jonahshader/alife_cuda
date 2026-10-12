@@ -352,8 +352,7 @@ soil alone drives a split, and the controls must separate causes:
 gaps, but the soil stops at `--column-top` of the world height and everything
 above is air. Mode 1 fills the columns to the top of the world and is
 therefore uninhabitable (decisions, 2026-09-19); it is also frozen rather
-than fixed — the C++ parity references were generated from it, and
-`perf.md`'s measurements were taken on it. How far above the pool the columns end decides whether anything lives
+than fixed — `perf.md`'s measurements were taken on it. How far above the pool the columns end decides whether anything lives
 on them at all — see the `--column-top` decision entry.
 
 **The controls**, both mode 2 only; the validator rejects them on any other
@@ -691,7 +690,8 @@ uploads them.
   --terrain-mode 1 --iterations 500`, 114 of 384 body particles sit exactly
   at `y = bounds.y` and the worst segment is 73% short of its rest length;
   the same run on the noise terrain is 0.08%. Terrain mode 2 is the answer,
-  above; mode 1 keeps this property and was only for the parity references.
+  above; mode 1 keeps this property and is kept for the `perf.md`
+  baselines measured on it.
 - 2026-09-19 — **The brain's latents need a normalization the slice table
   does not have.** One tick makes three residual adds onto the latent stream
   — the input cross-attention, the self-attention and the MLP — and the

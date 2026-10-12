@@ -2,8 +2,9 @@
 //!
 //! The tests run on the CPU runtime because it needs no GPU and the kernel
 //! source is the same on all of them; what they check is the kernel against
-//! its plain-Rust twin, not one backend against another. Backend agreement is
-//! the parity test's job (`tests/parity.rs`).
+//! its plain-Rust twin, not one backend against another. No test compares
+//! backends with each other; `tests/reproducibility.rs` checks each one only
+//! against itself.
 
 use cubecl::prelude::*;
 use cubecl_cpu::{CpuDevice, CpuRuntime};

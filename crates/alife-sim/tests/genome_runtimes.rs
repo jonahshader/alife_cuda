@@ -21,7 +21,7 @@ use alife_sim::runtime::{RuntimeKind, available};
 
 /// Bringing two CubeCL backends up at once from two test threads segfaults
 /// inside the runtimes, so the tests in this file take turns — the same rule
-/// `tests/parity.rs` follows.
+/// `tests/reproducibility.rs` follows.
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
 fn serialised() -> MutexGuard<'static, ()> {

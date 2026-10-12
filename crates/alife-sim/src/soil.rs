@@ -42,9 +42,10 @@ pub enum TerrainMode {
   /// Noise heightmap with a softmax blend of sand/silt/clay.
   Noise,
   /// Capillary tube test: a shared water pool under separate soil columns,
-  /// each filled to the very top of the world. Frozen: the C++ parity
-  /// references were generated from it and measurements in `docs/perf.md`
-  /// were taken on it, so a new terrain need is a new mode.
+  /// each filled to the very top of the world. Frozen: the
+  /// measurements in `docs/perf.md` were taken on it (and the deleted C++
+  /// parity references were generated from it), so a new terrain need is a
+  /// new mode.
   CapillaryTest,
   /// The same layout with air above the columns, so a plant anchored on a
   /// column's surface has somewhere to grow: the soil-specialization
