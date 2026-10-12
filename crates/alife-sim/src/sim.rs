@@ -145,7 +145,7 @@ impl<R: Runtime> Sim<R> {
     let life_pack = LifePack::new(&client, body_cfg);
     let params_buf = upload_params(&client, &params, &geom);
 
-    Self {
+    let sim = Self {
       client,
       params,
       geom,
@@ -171,7 +171,21 @@ impl<R: Runtime> Sim<R> {
       timings: KernelTimings::default(),
       timing: TimingChoice::Off,
       density_grid: None,
-    }
+    };
+    // The grid's buffers start uninitialised, and `attract` and
+    // `density_grid` read the grid outside the step — a window paused right
+    // after Reset asks for the overlay before any step has built it. Every
+    // step rebuilds it first, so building it here changes no step's output.
+    kernels::grid::build(
+      &sim.client,
+      &sim.sph,
+      &sim.grid,
+      &sim.params_buf,
+      sim.cfg,
+      sim.live_particles(),
+      &mut |_, f| f(),
+    );
+    sim
   }
 
   /// Turn per-kernel timing on. Measuring serialises the launches, which is
@@ -358,6 +372,10 @@ impl<R: Runtime> Sim<R> {
   /// while a button is held, where the C++ screen applied it, against the
   /// grid that step built (`kernels::attract`).
   pub fn attract(&mut self, pos: Vec2, strength: f32, radius: f32) {
+    // The kernel is one thread walking every cell in reach, so an unbounded
+    // radius is an unbounded launch; past half the world's width the disc
+    // would also pull a particle through two of its images.
+    let radius = radius.min(0.5 * self.geom.bounds.x);
     let Self {
       client,
       sph,
