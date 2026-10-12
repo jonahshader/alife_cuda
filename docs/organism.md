@@ -274,9 +274,11 @@ counts in the `breaks` column of the metrics time series.
 to `growth_bias` before the softmax — the sprout head's "when" role, now
 continuous; it rides in the packed life buffer's second per-limb slice. The
 actuator head's first output `a` is wired too: the base-joint target is
-`grow_angle + actuator_gain × tanh(a)` (default 0.3 rad), the brain nudging
+`grow_angle + actuator_gain × tanh(a)`, the brain nudging
 the genome's rest angle within a band `tanh` keeps it inside, so no head
-value can bend a joint far enough to break the limb. Both are the wire
+value can bend a joint far enough to break the limb. The gain's default is
+0 — the actuator is off until it has a rate limit and a cost (decisions,
+2026-10-11); `--actuator-gain 0.3` is what it was. Both are the wire
 phototropism needs: a token carries its limb's light, and a brain that
 raises the logit or bends the joint toward the brighter side grows toward
 the sun with no new mechanism. The second actuator output stays reserved.
@@ -866,3 +868,21 @@ uploads them.
   stiff projected target angle (`project_constraints`); a torque joint is
   the alternative when a limb must push against the world with a bounded
   force.
+- 2026-10-11 — **The actuator is off by default (`actuator_gain` 0) until
+  it is a torque with a rate limit and a cost.** The untrained recurrent
+  brain emits a new head value every step, so a joint target can jump by
+  up to `2 × actuator_gain` in one 1/600 s step for free, and the
+  position-based velocity rule turns the projection's displacement into
+  inertia that the fluid coupling then carries. Measured on the noise
+  terrain, `--founders 20 --max-organisms 1024 --seed 3`, a dump at step
+  11000 on CUDA: body-particle speeds at gain 0.3 are p90 0.38, p99 87 and
+  max 630 m/s against a liquid p99 of 0.38; at gain 0 they are p90 0.23,
+  p99 0.83 and max 0.2 m/s for limb particles (the run's 4.6 is a seed in
+  flight), and the run sheds 489 limbs against 2491. The fastest bodies are
+  founder-shaped at ordinary thicknesses, every one with a second root-typed
+  limb — a base joint the brain nudges, standing in soil where only the
+  projection acts on it, and exempt from breaking, so nothing ever ends it.
+  Breaking cannot punish any of this, because the bend is measured against
+  the nudged target. Milestone 2's actuated limb is the place to turn the
+  gain back on, built on the torque joint of the entry above with a cost
+  per radian; `--actuator-gain 0.3` reproduces the old behaviour.

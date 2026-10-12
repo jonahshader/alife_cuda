@@ -165,7 +165,11 @@ Left open by the brain chunk:
 - **Milestone 2, mobile creatures.** Actuated limb type (base joint takes a
   target angle from the brain), mouth, contact and proximity sensors.
   Locomotion is evolved, not given; the thrust-part escape hatch is built
-  only after a run shows the stall.
+  only after a run shows the stall. The actuator is **off by default**
+  until then (`organism.md`, decisions, 2026-10-11): the instantaneous
+  target nudge drives body particles to hundreds of m/s, so the actuated
+  limb needs a rate limit and an energy cost per radian — the torque joint
+  the C++ trees had is the reference.
 - **Milestone 3, soil as actionable state.** Digger part type writing soil
   density through the same channel as erosion and deposition.
 - **Adaptive mutation distribution** (lineage momentum or species-level ES,

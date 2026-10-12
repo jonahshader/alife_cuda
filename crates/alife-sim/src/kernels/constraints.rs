@@ -1192,6 +1192,17 @@ mod tests {
     let unnudged = settled_joint_angle(&mut h, stem);
 
     let mut nudged = OrganismHarness::new();
+    // The default gain is 0 (the actuator is off until it has a rate limit
+    // and a cost; `docs/organism.md`, decisions, 2026-10-11), so the test
+    // turns it on itself.
+    nudged.params.actuator_gain = 0.3;
+    nudged.params_buf =
+      nudged
+        .client
+        .create_from_slice(bytemuck::cast_slice(&crate::kernels::pack_params(
+          &nudged.params,
+          &nudged.geom,
+        )));
     let ml = nudged.body_cfg.max_limbs as usize;
     let mut out = vec![0.0f32; nudged.brain.cfg.heads_len()];
     // Saturating, so the nudge is the whole of the gain and the test does not

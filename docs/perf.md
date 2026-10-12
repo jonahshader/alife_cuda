@@ -672,7 +672,7 @@ one — but it is the number to watch if `--actuator-gain` is ever tuned. The
 same command at three gains, one seed each, so read the spread rather than
 the ordering:
 
-| `--actuator-gain` | 0 (logit only) | 0.1 | 0.3 (default) |
+| `--actuator-gain` | 0 (logit only; the default since 2026-10-11) | 0.1 | 0.3 (the default then) |
 |---|---:|---:|---:|
 | limbs broken | 125 | 167 | 238 |
 | plants with an anchor | 148 | 150 | 140 |
