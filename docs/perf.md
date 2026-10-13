@@ -8,15 +8,19 @@ command is not a baseline.
 
 ```
 cargo build --release -j16
-./target/release/alife --headless --seed 42 --runtime cuda --iterations 201
+./target/release/alife --headless --timing --seed 42 --runtime cuda --iterations 201
 ```
 
 prints per-kernel timings in milliseconds on exit; the first step is a
 warm-up and is not counted, because every kernel is JIT-compiled on its
 first launch. Each launch is synchronised, so the run is serialised, and
 only wgpu reports device time — CUDA and CPU report wall time around the
-sync, with a ~11 µs floor per launch. For like-for-like CUDA numbers or
-launch overlap use Nsight:
+sync, with a ~11 µs floor per launch. **That serialisation is 39% of the
+wall time**: 20000 steps at the defaults, seed 1, CUDA, took 39.4 s with
+`--timing` and 24.0 s without (2026-10-13), 1.97 against 1.20 ms a step
+with 1.30 ms of summed kernel time, so the flag is off unless a run is
+about the timing, and every number in this file was taken with it on. For
+like-for-like CUDA numbers or launch overlap use Nsight:
 
 ```
 nsys profile -o /tmp/hl --stats=false --force-overwrite=true \

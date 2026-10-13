@@ -37,6 +37,12 @@ struct Cli {
   #[arg(long, default_value_t = 0)]
   iterations: u32,
 
+  /// Time every kernel launch and print the per-kernel table at exit. Each
+  /// launch is synchronised to be timed, which serialises the step and costs
+  /// about 40% of the run (`docs/perf.md`), so it is off unless asked for.
+  #[arg(long)]
+  timing: bool,
+
   /// Write the particle state to a binary file at the end of a headless run
   #[arg(long, value_name = "PATH")]
   dump: Option<PathBuf>,
@@ -272,7 +278,7 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
     // Every kernel is JIT-compiled on its first launch — a few hundred
     // milliseconds on CUDA — so the first step is a warm-up and timing
     // starts after it.
-    if step == 1 {
+    if step == 1 && cli.timing {
       sim.sync();
       sim.enable_timing();
     }
@@ -327,7 +333,9 @@ fn run_headless(mut sim: AnySim, cli: &Cli) -> Result<()> {
     );
   }
 
-  print!("{}", sim.timings().report());
+  if cli.timing {
+    print!("{}", sim.timings().report());
+  }
   if let Some(sampler) = &metrics {
     print!("{}", sampler.summary());
   }

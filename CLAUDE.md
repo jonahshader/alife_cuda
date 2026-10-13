@@ -91,8 +91,10 @@ ignore.
   is not offered and the default falls through to wgpu — check `Runtime:`
   on the first line of a headless run.
 - **Headless is the agent's default surface**: `./target/release/alife
-  --headless --iterations N` steps the sim without a window and prints
-  per-kernel timings on exit. `--runtime cpu|cuda|wgpu` picks the backend
+  --headless --iterations N` steps the sim without a window; `--timing`
+  adds per-kernel timings on exit, at the cost of a sync per launch that
+  slows the run by about 40%, so leave it off for runs whose result is the
+  simulation rather than the timing. `--runtime cpu|cuda|wgpu` picks the backend
   (default: CUDA if available, else wgpu, else CPU); `--dump <path>` writes
   the particle SoA and `--load <path>` resumes from one — version 2 of the
   format, and it still reads the C++ binary's version 1
