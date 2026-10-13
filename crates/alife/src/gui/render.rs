@@ -596,7 +596,11 @@ impl CallbackTrait for SimCallback {
       &self.soil.sand_density,
       &self.soil.silt_density,
       &self.soil.clay_density,
-      &self.sph.pos,
+      // The settled position, not `pos`: that one is a `dt_predict` ahead
+      // along the velocity, which for a body particle is the solver's
+      // residual rather than motion — a pinned root carries several m/s of it
+      // and was drawn centimetres off its anchor, jumping every frame.
+      &self.sph.ppos,
       &self.sph.state,
       &self.sph.evap_prob,
       &self.sph.part_type,
