@@ -345,7 +345,14 @@ A root hanging off a limb that broke still comes away with it — what broke
 is the joint above it.
 
 The error is what the constraint pass measures at each base joint before
-every sweep pulls it back; its maximum per limb over the interval rides in
+every sweep pulls it back, against the parent's *axis*: its last whole
+segment, or, for a parent with none of its own yet, its own parent's axis
+turned by its grow angle, walking up to the root if need be
+(`kernels::constraints::limb_axis`). The segment a parent is still growing
+into is millimetres long when it has just been claimed, and its direction is
+the fluid's jostling rather than the limb's; and a joint left unmeasured
+while its parent's first segment grows drifts, and reads the whole drift the
+moment measuring resumes (decisions, 2026-10-12). The maximum per limb over the interval rides in
 the packed life buffer, one float per limb, written by the one unit that
 owns the organism and so needing no atomic. The pack kernel that reads it
 resets it, so each tick sees its own interval, and the decision is the
@@ -1043,3 +1050,30 @@ uploads them.
   --seed 1` on CUDA cost 1.639 ms a step at 256 slots and 1.651 at 1024,
   because the per-particle kernels run over the claimed prefix and the
   per-organism passes are launch-bound either way (`perf.md`).
+- 2026-10-12 — **A limb's axis is its last whole segment, and a limb with
+  none points where its joint aims it.** Nine in ten breaks were a
+  measurement artefact, and it is why every run grew grass. A child's base
+  joint was measured against its parent's last segment, which while the
+  parent grows is the segment it is growing into: millimetres long when
+  just claimed, with a direction that is the fluid's jostling. Of 177
+  breaks logged over 6000 steps at seed 1, 130 had the parent's last
+  segment under a tenth grown and 109 read a bend over 3 rad; one had a
+  fully grown parent and a real fold; 135 were leaves. So a seedling shed
+  its leaf each time its stem claimed a particle, and a limb added by
+  mutation was shed the same way — at `structural_rate` 0.5 a run broke
+  2526 limbs in 15000 steps against 498 at the default. Reading only whole
+  segments cut that to 222, and the remainder was the rule's own doing: a
+  stem at 0.955 of its first segment has no whole segment, its leaf's
+  joint went unmeasured and unprojected, drifted 1.5 rad, and was swung
+  back in one sweep when the stem claimed its next particle. Hence the
+  walk: a limb with no whole segment takes its parent's axis turned by its
+  grow angle, which is where its own joint is aiming it anyway, so no
+  joint is ever free. Breaks over 15000 steps at seed 1: 498 before, 49
+  after, and across seeds 1–4 a run with breaking on now matches one with
+  `--break-angle 100` on plants, births, height and leaf count, so what is
+  left is real folds. The bodies are still short (height 0.12–0.26 m, root
+  fraction 0.54–0.79 at step 15000) — that is the economy and four
+  generations, not the measurement. Ruled out on the way, by probes that
+  did not move the breaks per birth: SPH pressure (near-pressure ×0.1,
+  pressure ×0.25), the solver (1 or 16 iterations, stiffness 0.1–1.0),
+  gravity, and young limbs' own thinness (`break_thickness_ref` 0.002).

@@ -14,7 +14,7 @@
 //!   ([`segment_fraction`]), which is 1 for every segment but a growing
 //!   limb's last;
 //! - **base-joint angle** — a limb's first segment points along its parent's
-//!   last segment rotated by [`joint_target_angle`]: the limb record's
+//!   last *whole* segment ([`limb_axis`]) rotated by [`joint_target_angle`]: the limb record's
 //!   `grow_angle`, plus the brain's actuator nudge (the root limb measures
 //!   against the world frame, 0 at +x, counter-clockwise). How far
 //!   off it was before the sweep pulled it back is kept per `(organism,
@@ -285,54 +285,94 @@ pub fn base_particle(
   out
 }
 
-/// The direction a child limb's base joint is measured against: the limb's
-/// last segment, or — for a limb too short to have one — the direction it
-/// itself came off its parent at. A one-particle root falls back to its own
-/// grow angle in the world frame, which is exactly what the pin and the base
-/// joint would have given it.
+/// The direction a child limb's base joint is measured against, and the one
+/// `layout_limbs` lays a new child out along: the limb's last *whole*
+/// segment. A limb with no whole segment of its own points where its joint
+/// is aiming it — its parent's axis rotated by its grow angle — walking up
+/// the tree until a limb with a whole segment is found; a root with none
+/// gives its grow angle in the world frame, which is exactly what the pin
+/// and the base joint would have given it.
+///
+/// The segment a limb is still growing into is left out. It is millimetres
+/// long when it has just been claimed, and the direction of a segment that
+/// short is wherever the fluid last jostled its end particle to, not where
+/// the limb points; a child measured against it read a bend near a half
+/// turn and broke (`docs/organism.md`, decisions, 2026-10-12). The bend
+/// constraint keeps the growing segment in line with the whole one behind
+/// it anyway, so nothing is lost by not reading it. The walk is what keeps
+/// a child's joint held while its parent's first segment is still growing:
+/// left unmeasured, it drifted, and the first measurement once the parent
+/// had a whole segment was the whole drift at once.
+///
+/// The walk turns by the genome's `grow_angle`, not the brain's nudged
+/// target, as the root's fallback always has: this is a direction for a
+/// child to be measured against and laid out along, and `layout_limbs` has
+/// no heads to read.
 #[cube]
 pub fn limb_axis(
   ppos: &mut [f32],
   limbs: &LimbArgs,
   map: &[u32],
+  grown: &[f32],
   base: u32,
   pbase: u32,
   l: u32,
   bounds_x: f32,
   #[comptime] cfg: BodyCfg,
 ) -> Dir {
-  let n = limb_len(map, pbase, l, cfg);
+  let ml = comptime!(cfg.max_limbs);
+  let mut cur = l;
+  // What the walk has turned by so far. Rotations of the plane compose by
+  // adding, whichever order they are met in.
+  let mut turned = 0.0f32;
+  let mut done = false;
   let mut out = Dir {
     x: 0.0f32,
     y: 0.0f32,
   };
-  if n >= 2u32 {
-    let a = particle_at(map, pbase, l, n - 2u32, cfg);
-    let b = particle_at(map, pbase, l, n - 1u32, cfg);
-    if a != NO_PARTICLE && b != NO_PARTICLE {
-      let d = seg_dir(ppos, a as usize, b as usize, bounds_x);
-      out.x = d.x;
-      out.y = d.y;
-    }
-  } else if n == 1u32 {
-    let anchor = base_particle(limbs, map, base, pbase, l, cfg);
-    let first = particle_at(map, pbase, l, 0u32, cfg);
-    if anchor != NO_PARTICLE && first != NO_PARTICLE {
-      let d = seg_dir(ppos, anchor as usize, first as usize, bounds_x);
-      out.x = d.x;
-      out.y = d.y;
-    } else if anchor == NO_PARTICLE {
-      // The root limb: its grow angle is read in the world frame, and the
-      // genome's, not the brain's nudged target — a root of one particle has
-      // no base joint to project, so this axis is not "where the joint put
-      // it" but a direction invented for a child to measure against, and
-      // `layout_limbs` lays that child out along the same one.
-      let g = limbs.grow_angle[(base + l) as usize];
-      out.x = f32::cos(g);
-      out.y = f32::sin(g);
+  for _ in 0..ml {
+    if !done {
+      let n = limb_len(map, pbase, cur, cfg);
+      // Every segment but a growing last one.
+      let mut whole = n;
+      if n > 0u32 && segment_fraction(grown[(base + cur) as usize], n - 1u32) < 1.0f32 {
+        whole = n - 1u32;
+      }
+      let parent = limbs.parent[(base + cur) as usize];
+      if whole >= 2u32 {
+        let a = particle_at(map, pbase, cur, whole - 2u32, cfg);
+        let b = particle_at(map, pbase, cur, whole - 1u32, cfg);
+        if a != NO_PARTICLE && b != NO_PARTICLE {
+          let d = seg_dir(ppos, a as usize, b as usize, bounds_x);
+          out.x = d.x;
+          out.y = d.y;
+        }
+        done = true;
+      } else if parent == cur || parent >= ml {
+        // The root limb: its grow angle is read in the world frame — a root
+        // of one particle has no base joint to project, so this axis is not
+        // "where the joint put it" but a direction invented for a child to
+        // measure against.
+        let g = limbs.grow_angle[(base + cur) as usize];
+        out.x = f32::cos(g);
+        out.y = f32::sin(g);
+        done = true;
+      } else if whole == 1u32 {
+        let anchor = base_particle(limbs, map, base, pbase, cur, cfg);
+        let first = particle_at(map, pbase, cur, 0u32, cfg);
+        if anchor != NO_PARTICLE && first != NO_PARTICLE {
+          let d = seg_dir(ppos, anchor as usize, first as usize, bounds_x);
+          out.x = d.x;
+          out.y = d.y;
+        }
+        done = true;
+      } else {
+        turned += limbs.grow_angle[(base + cur) as usize];
+        cur = parent;
+      }
     }
   }
-  out
+  rotate(out, turned)
 }
 
 /// Project one organism's limbs. One unit per organism slot; a free slot and
@@ -436,7 +476,7 @@ pub fn project_constraints(
         if anchor != NO_PARTICLE {
           // Against the parent limb's last segment.
           let parent = limbs.parent[(base + l) as usize];
-          let axis = limb_axis(ppos, limbs, map, base, pbase, parent, bounds_x, cfg);
+          let axis = limb_axis(ppos, limbs, map, grown, base, pbase, parent, bounds_x, cfg);
           if first != NO_PARTICLE {
             let target = rotate(axis, g);
             let err = angle_error(
@@ -792,8 +832,7 @@ pub fn limb_axis_ref(
   bounds_x: f32,
 ) -> Vec2 {
   let cfg = bodies.cfg;
-  let record = organism * cfg.max_limbs as usize + limb;
-  let n = bodies.limb_len(organism, limb);
+  let ml = cfg.max_limbs as usize;
   let at = |l: usize, i: usize| {
     let id = bodies.particle(organism, l, i);
     (id != NO_PARTICLE).then_some(id as usize)
@@ -810,31 +849,42 @@ pub fn limb_axis_ref(
     }
   };
 
-  if n >= 2 {
-    return match (at(limb, n - 2), at(limb, n - 1)) {
-      (Some(a), Some(b)) => dir(a, b),
-      _ => Vec2::ZERO,
+  let mut cur = limb;
+  let mut turned = 0.0f32;
+  for _ in 0..ml {
+    let record = organism * ml + cur;
+    let n = bodies.limb_len(organism, cur);
+    // Every segment but a growing last one.
+    let grown = bodies.grown[cfg.limb_index(organism, cur)];
+    let whole = if n > 0 && segment_fraction_ref(grown, n - 1) < 1.0 {
+      n - 1
+    } else {
+      n
     };
+    let parent = pop.limbs.parent[record] as usize;
+    let axis = if whole >= 2 {
+      match (at(cur, whole - 2), at(cur, whole - 1)) {
+        (Some(a), Some(b)) => dir(a, b),
+        _ => Vec2::ZERO,
+      }
+    } else if parent == cur || parent >= ml {
+      let g = pop.limbs.grow_angle[record];
+      Vec2::new(g.cos(), g.sin())
+    } else if whole == 1 {
+      let pn = bodies.limb_len(organism, parent);
+      match (pn.checked_sub(1).and_then(|i| at(parent, i)), at(cur, 0)) {
+        (Some(a), Some(b)) => dir(a, b),
+        _ => Vec2::ZERO,
+      }
+    } else {
+      // No segment of its own: where its joint aims it.
+      turned += pop.limbs.grow_angle[record];
+      cur = parent;
+      continue;
+    };
+    return rotate_ref(axis, turned);
   }
-  if n == 0 {
-    return Vec2::ZERO;
-  }
-
-  // One particle: the limb's own base segment says which way it points, and
-  // for the root — which has none — its grow angle in the world frame does.
-  let parent = pop.limbs.parent[record] as usize;
-  if parent == limb {
-    let g = pop.limbs.grow_angle[record];
-    return Vec2::new(g.cos(), g.sin());
-  }
-  let pn = bodies.limb_len(organism, parent);
-  if pn == 0 {
-    return Vec2::ZERO;
-  }
-  match (at(parent, pn - 1), at(limb, 0)) {
-    (Some(a), Some(b)) => dir(a, b),
-    _ => Vec2::ZERO,
-  }
+  Vec2::ZERO
 }
 
 /// Host twin of [`joint_target_angle`], over the flat `(organism, limb)`
@@ -1104,6 +1154,163 @@ mod tests {
     assert!(
       (len / expected - 1.0).abs() < 0.05,
       "the growing segment is {len} against {expected}"
+    );
+  }
+
+  /// A limb with no whole segment of its own points where its joint aims
+  /// it: its parent's axis turned by its grow angle. The leaf on such a stem
+  /// is still held — measured and projected — rather than left to drift
+  /// until the stem's first segment is whole.
+  #[test]
+  fn a_limb_with_no_whole_segment_points_where_its_joint_aims_it() {
+    let mut h = OrganismHarness::new();
+    let (root, stem, leaf) = (0, 1, 2);
+    // The stem six tenths of the way into its first segment, so it has one
+    // particle and no whole segment; the leaf on it is its full length.
+    h.bodies.grown[h.body_cfg.limb_index(0, stem)] = 0.6;
+    let slice = h.body_cfg.limb_slice(0, stem);
+    h.bodies.limb_particles[slice.start + 1] = NO_PARTICLE;
+    h.bodies.limb_particles[slice.start + 2] = NO_PARTICLE;
+    h.bodies.upload(&h.client);
+    for _ in 0..60 {
+      h.particles = run_kernel(&h);
+      h.sph = SphDevice::upload(&h.client, &h.particles);
+    }
+
+    let bounds_x = h.geom.bounds.x;
+    let root_axis = super::limb_axis_ref(&h.particles.ppos, &h.pop, &h.bodies, 0, root, bounds_x);
+    let stem_axis = super::limb_axis_ref(&h.particles.ppos, &h.pop, &h.bodies, 0, stem, bounds_x);
+    let stem_angle = h.pop.limbs.grow_angle[h.pop.limb_index(0, stem)];
+    let expected = super::rotate_ref(root_axis, stem_angle);
+    assert!(
+      (stem_axis - expected).length() < 1e-5,
+      "the stem's axis {stem_axis:?} is not its root's {root_axis:?} turned by {stem_angle}"
+    );
+
+    // The leaf settled along that axis turned by its own angle: the joint
+    // was projected, not left alone.
+    let from = h.bodies.particle(0, stem, 0) as usize;
+    let to = h.bodies.particle(0, leaf, 0) as usize;
+    let seg = (h.particles.ppos[to] - h.particles.ppos[from]).normalize();
+    let leaf_angle = h.pop.limbs.grow_angle[h.pop.limb_index(0, leaf)];
+    let aimed = super::rotate_ref(stem_axis, leaf_angle);
+    assert!(
+      (seg - aimed).length() < 0.05,
+      "the leaf lies along {seg:?} against the {aimed:?} its joint aims at"
+    );
+
+    // And the kernel agrees with the reference on that state.
+    let heads = heads(&h);
+    let actual = run_kernel(&h);
+    let mut expected = h.particles.clone();
+    let mut bend = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut expected,
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut bend,
+      &h.params,
+      &h.geom,
+    );
+    assert_close_vec2(&actual.ppos, &expected.ppos, 1e-6, "ppos after projection");
+  }
+
+  /// A limb's axis is its last whole segment. The one it is growing into is
+  /// too short to have a direction of its own, so a child measured against
+  /// it would read whatever the fluid left the tip at — here a tip knocked
+  /// a full segment length sideways, carrying the leaf on it along so the
+  /// leaf still lies parallel to the stem and must read no bend.
+  #[test]
+  fn a_growing_last_segment_is_not_the_axis_a_child_is_measured_against() {
+    let mut h = OrganismHarness::new();
+    let (stem, leaf) = (1, 2);
+    assert_eq!(h.pop.limbs.parent[h.pop.limb_index(0, leaf)] as usize, stem);
+    // The stem a twentieth of the way into its third segment: its tip is
+    // there, 7.5 mm from the particle before it.
+    h.bodies.grown[h.body_cfg.limb_index(0, stem)] = 2.05;
+    h.bodies.upload(&h.client);
+    for _ in 0..60 {
+      h.particles = run_kernel(&h);
+      h.sph = SphDevice::upload(&h.client, &h.particles);
+    }
+    // One sweep for the compared step, so the maximum is the error measured
+    // before any projection moved the knocked tip back and dragged the leaf
+    // round with it.
+    h.params.constraint_iterations = 1;
+    h.params_buf = h
+      .client
+      .create_from_slice(bytemuck::cast_slice(&crate::kernels::pack_params(
+        &h.params, &h.geom,
+      )));
+
+    let a = h.bodies.particle(0, stem, 0) as usize;
+    let b = h.bodies.particle(0, stem, 1) as usize;
+    let tip = h.bodies.particle(0, stem, 2) as usize;
+    let along = (h.particles.ppos[b] - h.particles.ppos[a]).normalize();
+    // What the settled leaf reads before anything is knocked: the harness
+    // never comes fully to rest, so the yardstick is this, not zero.
+    let heads = heads(&h);
+    let mut before = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut h.particles.clone(),
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut before,
+      &h.params,
+      &h.geom,
+    );
+    let knock = along.perp() * h.params.limb_segment_length;
+    let leaf0 = h.bodies.particle(0, leaf, 0) as usize;
+    let moved = h.particles.ppos[b] + knock - h.particles.ppos[tip];
+    for id in [tip, leaf0] {
+      h.particles.ppos[id] += moved;
+      h.particles.pos[id] += moved;
+    }
+    h.sph = SphDevice::upload(&h.client, &h.particles);
+    // The device maxima carry the settling launches' worst; the compared
+    // step starts from zero on both sides, as a life tick's reset leaves it.
+    h.bodies.device.bend_max =
+      h.client
+        .create_from_slice(bytemuck::cast_slice(&vec![0.0f32; h.body_cfg.limb_count()]));
+
+    let axis = super::limb_axis_ref(
+      &h.particles.ppos,
+      &h.pop,
+      &h.bodies,
+      0,
+      stem,
+      h.geom.bounds.x,
+    );
+    assert!(
+      (axis - along).length() < 1e-5,
+      "the stem's axis {axis:?} is not its whole segment {along:?}"
+    );
+
+    // Kernel and reference agree on the state, and the leaf — still parallel
+    // to the settled stem — reads what it read before the knock, not the
+    // right angle the tip was knocked to.
+    let actual = run_kernel(&h);
+    let mut expected = h.particles.clone();
+    let mut bend = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut expected,
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut bend,
+      &h.params,
+      &h.geom,
+    );
+    assert_close(&read_bend_max(&h), &bend, 1e-6, "bend maxima");
+    assert_close_vec2(&actual.ppos, &expected.ppos, 1e-6, "ppos after projection");
+    let leaf = h.body_cfg.limb_index(0, leaf);
+    assert!(
+      (bend[leaf] - before[leaf]).abs() < 0.1,
+      "the leaf read the knocked tip as a bend of {} rad against {} before it",
+      bend[leaf],
+      before[leaf]
     );
   }
 

@@ -134,7 +134,7 @@ pub fn layout_limbs(
     let prev = particle_at(map, pbase, l, first_index - 1u32, cfg);
     base_x = ppos[2 * prev as usize];
     base_y = ppos[2 * prev as usize + 1];
-    let mut axis = limb_axis(ppos, limbs, map, base, pbase, l, bounds_x, cfg);
+    let mut axis = limb_axis(ppos, limbs, map, grown, base, pbase, l, bounds_x, cfg);
     if axis.x == 0.0f32 && axis.y == 0.0f32 {
       axis.x = 1.0f32;
       axis.y = 0.0f32;
@@ -146,9 +146,9 @@ pub fn layout_limbs(
     let last = particle_at(map, pbase, parent, n - 1u32, cfg);
     base_x = ppos[2 * last as usize];
     base_y = ppos[2 * last as usize + 1];
-    let mut axis = limb_axis(ppos, limbs, map, base, pbase, parent, bounds_x, cfg);
-    // A parent with no direction of its own — coincident particles — grows
-    // its child along +x rather than nowhere.
+    let mut axis = limb_axis(ppos, limbs, map, grown, base, pbase, parent, bounds_x, cfg);
+    // A parent with no direction of its own — coincident particles, or no
+    // whole segment yet — grows its child along +x rather than nowhere.
     if axis.x == 0.0f32 && axis.y == 0.0f32 {
       axis.x = 1.0f32;
       axis.y = 0.0f32;

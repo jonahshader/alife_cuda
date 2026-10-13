@@ -67,11 +67,23 @@ Left open by the life-cycle chunk:
   things the table shows and nobody has looked at: two thirds of `alive`
   is seeds in flight, which hold organism slots for up to `seed_lifetime`
   steps; the water-limited bodies are short and root-heavy (root fraction
-  0.6–0.85, height 0.1–0.2 m), which is right for a water-limited plant but
+  0.5–0.8, height 0.1–0.26 m), which is right for a water-limited plant but
   is also the shape the old loophole produced, so it is not yet evidence of
-  adaptation; and up to half the fluid is in the air as vapor at once, so
-  the condensation cycle's return rate is part of the carrying capacity and
-  has not been tuned as one. The window is where to look first.
+  adaptation — and with the break artefact gone (`organism.md`, decisions,
+  2026-10-12) it is no longer breaking either; and up to half the fluid is
+  in the air as vapor at once, so the condensation cycle's return rate is
+  part of the carrying capacity and has not been tuned as one. The window
+  is where to look first.
+- **A generation takes about 9000 steps, and a population of 200 drifts
+  to one lineage in 115000.** At the defaults, seed 1 reaches a mean
+  generation of 4.9 at step 15000 and 16 at step 150000, with the 20
+  founder lineages down to 5 by 15000 and 1 by 115000; the shape at the
+  end of a four-minute run is founders being sorted, not bodies evolving.
+  The generation time is the energy balance (threshold 5 at +0.0076 a
+  step with a full pool) plus the seed's flight, and the collapse is drift
+  at this population size. Neither has been tuned; `--life-interval 5`
+  did not shorten the generation (mean 3.6 at 15000 against 4.9), so the
+  lever is not the tick rate.
 - **The `stage` field is not in the dump**, because the population tensors
   are not: `--load` resumes the fluid and reserves body capacity on top
   (`crates/alife-sim/README.md`). A run cannot be checkpointed and resumed
