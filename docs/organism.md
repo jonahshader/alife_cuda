@@ -1104,3 +1104,21 @@ uploads them.
   roots, whose 5–12 m/s is the solver's residual and never moved them;
   it only showed because the window drew `pos`, a `dt_predict` ahead
   along it, which is why the window now draws `ppos`.
+- 2026-10-12 — **The angle constraints' stiffness is 0.9, because under
+  0.8 a long chain never settles.** With drag and the cap in, a
+  300k-step run at seed 1 still had 48 of its 77 bodies of eleven or more
+  particles oscillating at the cap and breaks rising to 0.4 per plant per
+  thousand steps. Probed by loading that run's saved population and
+  stepping 2000 steps with one thing changed: near-pressure off, pressure
+  ×0.09, 16 sweeps, drag ×10, gravity off and viscosity off each left
+  135–205 of 230 large bodies at the cap and 5821 breaks at the defaults;
+  joint stiffness 1 alone 163, bend stiffness 1 alone 141, and both at
+  0.6, 0.7, 0.8, 0.9, 1.0 gave 125, 100, 0, 0, 0 fast bodies and 1638,
+  147, 155, 108, 123 breaks. The under-relaxed angle projections — 0.5
+  and 0.3 per sweep, four sweeps — are a Gauss-Seidel limit cycle on a
+  chain of ten or more particles, not a physical compliance: every other
+  knob leaves it alone, and the founders' three short limbs never showed
+  it. 0.9 is the stable value with the fewest breaks. A limb that is
+  meant to bend in flow by a set amount needs compliance that does not
+  depend on the sweep count, which is XPBD's Lagrange multiplier, not a
+  stiffness under 0.8.

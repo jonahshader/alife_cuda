@@ -217,10 +217,10 @@ sim_params! {
         "Rest length between consecutive body particles (at most one grid cell)";
     constraint_iterations: i32 = 4, "organism.constraint_iterations", "constraint-iterations",
         "Gauss-Seidel sweeps the body constraint pass runs per step";
-    joint_stiffness: f32 = 0.5, "organism.joint_stiffness", "joint-stiffness",
-        "Stiffness of a limb's base-joint angle constraint, in [0, 1]";
-    bend_stiffness: f32 = 0.3, "organism.bend_stiffness", "bend-stiffness",
-        "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
+    joint_stiffness: f32 = 0.9, "organism.joint_stiffness", "joint-stiffness",
+        "Stiffness of a limb's base-joint angle constraint, in [0, 1]; below 0.8 long chains oscillate";
+    bend_stiffness: f32 = 0.9, "organism.bend_stiffness", "bend-stiffness",
+        "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]; below 0.8 long chains oscillate";
     actuator_gain: f32 = 0.0, "organism.actuator_gain", "actuator-gain",
         "Radians the brain's actuator output can move a base joint's target angle by (0 = off)";
     body_drag: f32 = 1.0, "organism.body_drag", "body-drag",
