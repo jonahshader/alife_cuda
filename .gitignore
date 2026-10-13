@@ -6,3 +6,6 @@ target
 
 # experiment output (scripts/soil_experiment.sh)
 runs
+
+# the window's "Dump particles" button writes here
+dump.bin
