@@ -72,6 +72,11 @@ Consequences:
   this cost, which is why profiling SPH is on the critical path again.
 - A limb's orientation is the direction from its parent's last particle to
   its own; no separate rotation state.
+- Body particles carry quadratic drag (`body_drag`, applied implicitly) and
+  a speed cap (`body_speed_max`) in the constraint pass's velocity update:
+  the only damping a body has in air, and the solver's stability guarantee
+  (decisions, 2026-10-12). Seeds in flight are not in any limb and get
+  neither.
 - Segment (capsule) collision is the upgrade if evolved bodies keep wanting
   long thin limbs or chunky collisions block fine manipulation. It changes
   the discretization, not the genome, since a limb is already a type and a
@@ -1077,3 +1082,25 @@ uploads them.
   did not move the breaks per birth: SPH pressure (near-pressure ×0.1,
   pressure ×0.25), the solver (1 or 16 iterations, stiffness 0.1–1.0),
   gravity, and young limbs' own thinness (`break_thickness_ref` 0.002).
+- 2026-10-12 — **Body particles have quadratic drag and a speed cap,
+  because the position-based solver had no damping and ran away.** A
+  337k-step window run (defaults, random seed) dumped with 792 organisms
+  at one every 4 cm had 19 with a particle over 5 m/s, the worst a
+  six-particle leaf whose speed climbed along the chain to 1424 m/s at
+  the tip with segments stretched to 1.6 m against 0.15, and the actuator
+  was off. The same shape stood still a few metres away; neither wetness
+  (the world was dry: 2445 liquid against 34312 vapor and 11261 drunk)
+  nor nearness to other bodies separated the fast from the quiet. What
+  distinguishes a runaway is only being stretched: past what four
+  half-step corrections pull back, each step's correction adds more
+  velocity than it removes, and viscosity acts only against liquid
+  neighbours. Drag is quadratic because every limb is past Reynolds a
+  thousand whenever it moves, and implicit (`v / (1 + k v dt)`) so no
+  speed overshoots to a sign flip; at the default 1/m a limb swaying at
+  0.1 m/s loses a hundred-thousandth of its speed a step and one at 100
+  m/s a sixth. Drag alone balances a runaway's injection at a few hundred
+  m/s, so the cap (5 m/s) is the guarantee and drag is the physics that
+  keeps bodies away from it. Seven of the 19 were pinned single-particle
+  roots, whose 5–12 m/s is the solver's residual and never moved them;
+  it only showed because the window drew `pos`, a `dt_predict` ahead
+  along it, which is why the window now draws `ppos`.

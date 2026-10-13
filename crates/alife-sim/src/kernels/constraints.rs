@@ -47,8 +47,9 @@ use cubecl_runtime::server::Handle;
 use glam::Vec2;
 
 use super::{
-  Cfg, P_ACTUATOR_GAIN, P_BEND_STIFFNESS, P_BOUNDS_X, P_BOUNDS_Y, P_CONSTRAINT_ITERS, P_DT,
-  P_DT_PREDICT, P_JOINT_STIFFNESS, P_LIMB_SEGMENT_LENGTH, cube_count, whole,
+  Cfg, P_ACTUATOR_GAIN, P_BEND_STIFFNESS, P_BODY_DRAG, P_BODY_SPEED_MAX, P_BOUNDS_X, P_BOUNDS_Y,
+  P_CONSTRAINT_ITERS, P_DT, P_DT_PREDICT, P_JOINT_STIFFNESS, P_LIMB_SEGMENT_LENGTH, cube_count,
+  whole,
 };
 use crate::bodies::{BodyCfg, BodyState, NO_PARTICLE};
 use crate::brain::{BrainState, HEAD_ACTUATOR, HEAD_DIM};
@@ -413,6 +414,8 @@ pub fn project_constraints(
   let bounds_x = params[P_BOUNDS_X as usize];
   let bounds_y = params[P_BOUNDS_Y as usize];
   let gain = params[P_ACTUATOR_GAIN as usize];
+  let drag = params[P_BODY_DRAG as usize];
+  let speed_max = params[P_BODY_SPEED_MAX as usize];
   let dt = params[P_DT as usize];
   let dt_predict = params[P_DT_PREDICT as usize];
   let iterations = params[P_CONSTRAINT_ITERS as usize] as u32;
@@ -599,8 +602,19 @@ pub fn project_constraints(
         let mut px = ppos[2 * id];
         let mut py = ppos[2 * id + 1];
 
-        let vx = vel[2 * id] + wrap_delta(px - ppos_prev[2 * id], bounds_x) / dt;
-        let vy = vel[2 * id + 1] + (py - ppos_prev[2 * id + 1]) / dt;
+        let mut vx = vel[2 * id] + wrap_delta(px - ppos_prev[2 * id], bounds_x) / dt;
+        let mut vy = vel[2 * id + 1] + (py - ppos_prev[2 * id + 1]) / dt;
+        // Quadratic drag, implicit so no speed overshoots to a sign flip,
+        // then the cap: the solver's only damping and its stability
+        // guarantee (`docs/organism.md`, decisions, 2026-10-12).
+        let speed = f32::sqrt(vx * vx + vy * vy);
+        let mut scale = 1.0f32 / (1.0f32 + drag * speed * dt);
+        let damped = speed * scale;
+        if damped > speed_max {
+          scale *= speed_max / damped;
+        }
+        vx *= scale;
+        vy *= scale;
         vel[2 * id] = vx;
         vel[2 * id + 1] = vy;
 
@@ -806,6 +820,13 @@ pub fn project_constraints_ref(
       let mut v = particles.vel[id];
       v.x += wrap_delta_ref(p.x - old.x, bounds.x) / params.dt;
       v.y += (p.y - old.y) / params.dt;
+      let speed = (v.x * v.x + v.y * v.y).sqrt();
+      let mut scale = 1.0 / (1.0 + params.body_drag * speed * params.dt);
+      let damped = speed * scale;
+      if damped > params.body_speed_max {
+        scale *= params.body_speed_max / damped;
+      }
+      v *= scale;
       particles.vel[id] = v;
 
       let mut pred = p + v * params.dt_predict;
@@ -1214,6 +1235,82 @@ mod tests {
       &h.geom,
     );
     assert_close_vec2(&actual.ppos, &expected.ppos, 1e-6, "ppos after projection");
+  }
+
+  /// Drag and the cap. A tip sent off at a hundred metres per second comes
+  /// out of the pass under `body_speed_max`, kernel and reference alike;
+  /// without the cap, drag alone would leave it at most a sixth slower.
+  #[test]
+  fn a_body_particle_is_capped_at_body_speed_max() {
+    let mut h = OrganismHarness::new();
+    let tip = h.bodies.particle(0, 2, 0) as usize;
+    h.particles.vel[tip] = glam::Vec2::new(100.0, 0.0);
+    h.sph = SphDevice::upload(&h.client, &h.particles);
+    let heads = heads(&h);
+    let actual = run_kernel(&h);
+    let mut expected = h.particles.clone();
+    let mut bend = vec![0.0f32; h.body_cfg.limb_count()];
+    super::project_constraints_ref(
+      &mut expected,
+      &h.pop,
+      &h.bodies,
+      &heads,
+      &mut bend,
+      &h.params,
+      &h.geom,
+    );
+    assert_close_vec2(&actual.vel, &expected.vel, 1e-5, "vel after projection");
+    let cap = h.params.body_speed_max;
+    assert!(cap > 0.0);
+    for id in body_ids(&h) {
+      let speed = actual.vel[id].length();
+      assert!(
+        speed <= cap * (1.0 + 1e-5),
+        "particle {id} left the pass at {speed} m/s against a cap of {cap}"
+      );
+    }
+    let kicked = actual.vel[tip].length();
+    assert!(
+      (kicked - cap).abs() < 1e-3,
+      "the kicked tip came out at {kicked} m/s rather than at the cap {cap}"
+    );
+  }
+
+  /// Drag on its own is quadratic and implicit: a particle at `v` is left
+  /// at `v / (1 + drag v dt)`, so a slow one is barely touched and a fast
+  /// one loses a large fraction in a step.
+  #[test]
+  fn drag_is_quadratic_and_implicit() {
+    let mut h = OrganismHarness::new();
+    h.params.body_speed_max = 1e9;
+    h.params.body_drag = 1.0;
+    h.params.constraint_iterations = 0;
+    h.params_buf = h
+      .client
+      .create_from_slice(bytemuck::cast_slice(&crate::kernels::pack_params(
+        &h.params, &h.geom,
+      )));
+    // Still, so the only thing the pass does to the velocity is drag.
+    for id in body_ids(&h) {
+      h.particles.vel[id] = glam::Vec2::ZERO;
+    }
+    let (slow, fast) = (
+      h.bodies.particle(0, 2, 0) as usize,
+      h.bodies.particle(0, 1, 2) as usize,
+    );
+    h.particles.vel[slow] = glam::Vec2::new(0.1, 0.0);
+    h.particles.vel[fast] = glam::Vec2::new(100.0, 0.0);
+    h.sph = SphDevice::upload(&h.client, &h.particles);
+    let actual = run_kernel(&h);
+    let dt = h.params.dt;
+    for (id, v) in [(slow, 0.1f32), (fast, 100.0f32)] {
+      let expected = v / (1.0 + v * dt);
+      let got = actual.vel[id].x;
+      assert!(
+        (got - expected).abs() < 1e-4 * v,
+        "a particle at {v} m/s came out at {got}, expected {expected}"
+      );
+    }
   }
 
   /// A limb's axis is its last whole segment. The one it is growing into is

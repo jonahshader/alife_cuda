@@ -223,6 +223,10 @@ sim_params! {
         "Stiffness of the constraint keeping a limb's segments aligned, in [0, 1]";
     actuator_gain: f32 = 0.0, "organism.actuator_gain", "actuator-gain",
         "Radians the brain's actuator output can move a base joint's target angle by (0 = off)";
+    body_drag: f32 = 1.0, "organism.body_drag", "body-drag",
+        "Quadratic drag on body particles, per metre: a particle at v m/s loses v^2 times this per second (0 = none)";
+    body_speed_max: f32 = 5.0, "organism.body_speed_max", "body-speed-max",
+        "Speed a body particle is capped at after the constraint pass, m/s";
     species_threshold: f32 = 0.25, "organism.species_threshold", "species-threshold",
         "Genome distance under which the metrics count two organisms as one species";
     life_interval: i32 = 10, "life.interval", "life-interval",
@@ -468,6 +472,7 @@ impl SimParams {
       ("growth-rate", self.growth_rate),
       ("break-angle", self.break_angle),
       ("actuator-gain", self.actuator_gain),
+      ("body-drag", self.body_drag),
       ("seed-cost", self.seed_cost),
       ("seed-energy", self.seed_energy),
       ("germinate-speed", self.germinate_speed),
@@ -496,6 +501,7 @@ impl SimParams {
       ("volume-per-energy", self.volume_per_energy),
       ("break-thickness-ref", self.break_thickness_ref),
       ("water-per-energy", self.water_per_energy),
+      ("body-speed-max", self.body_speed_max),
     ] {
       if value <= 0.0 || !value.is_finite() {
         return Err(format!(

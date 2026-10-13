@@ -120,6 +120,8 @@ kernel_params! {
     "" P_ACTUATOR_GAIN = |p, _g| p.actuator_gain;
     "" P_DRINK_RATE = |p, _g| p.drink_rate;
     "" P_WATER_PER_ENERGY = |p, _g| p.water_per_energy;
+    "" P_BODY_DRAG = |p, _g| p.body_drag;
+    "" P_BODY_SPEED_MAX = |p, _g| p.body_speed_max;
 }
 
 /// The particle SoA as kernel arguments. Field order matches `SphHost`.
